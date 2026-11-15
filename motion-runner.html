@@ -1,0 +1,108 @@
+<!doctype html>
+<html lang="en">
+<head><meta charset="utf-8"><title>Motion Studio</title><link rel="stylesheet" href="src/motion/motion-runner.css"></head>
+<body>
+  <main class="motion-runner-summary" aria-live="polite">
+    <img src="icons/video-gen.svg" alt="" width="40" height="40">
+    <h1>Motion Studio</h1>
+    <p id="motionRunnerState" data-i18n="motionEditor.text023">Preparing…</p>
+  </main>
+  <script src="src/core/EventBus.js"></script>
+  <script src="src/core/ApiBaseConfig.js"></script>
+  <script src="src/core/AuthManager.js"></script>
+  <script src="src/core/RequestSigner.js"></script>
+  <script src="src/core/I18n.js"></script>
+  <script src="src/core/ProviderConfigManager.js"></script>
+  <script src="src/core/ModelRegistry.js"></script>
+  <script src="src/core/providers/AIProviderAdapter.js"></script>
+  <script src="src/core/providers/FlowAdapter.js"></script>
+  <script src="src/core/providers/ProviderRegistry.js"></script>
+  <script src="src/core/AlbumStore.js"></script>
+  <script src="src/core/ImageStore.js"></script>
+  <script src="src/shared/ImagePickerModal.js"></script>
+  <script src="src/core/flow/FlowDriverRegistry.js"></script>
+  <script src="src/core/FlowUuidGateway.js"></script>
+  <script src="src/core/MessageBridge.js"></script>
+  <script src="src/core/VoiceRegistry.js"></script>
+  <script src="src/shared/VoiceSelectModal.js"></script>
+  <script src="src/core/VoicePicker.js"></script>
+  <script src="src/core/errors/ConfigRequiredError.js"></script>
+  <script src="src/core/SystemConfig.js"></script>
+  <script src="src/core/ExecutionConfig.js"></script>
+  <script src="src/core/FeatureGate.js"></script>
+  <script src="src/core/ChatGPTSession.js"></script>
+  <script src="src/core/GeminiSession.js"></script>
+  <script src="src/settings/StorageSettings.js"></script>
+  <script src="src/core/BridgeClient.js"></script>
+  <script src="src/core/providers/FlowApiAdapter.js"></script>
+  <script src="src/core/flow-api/FlowApiDriverError.js"></script>
+  <script src="src/core/flow-api/FlowApiV1Driver.js"></script>
+  <script src="src/core/flow-api/FlowApiV2CheckpointStore.js"></script>
+  <script src="src/core/flow-api/FlowApiV2Driver.js"></script>
+  <script src="src/core/flow-api/FlowApiDriverResolver.js"></script>
+  <script src="src/core/flow-api/FlowApiDownloadRetry.js"></script>
+  <script src="src/core/flow-api/FlowApiFacade.js"></script>
+  <script src="src/core/flow-api/FlowApiSessionCoordinator.js"></script>
+  <script src="src/core/MotionArtifactStore.js"></script>
+  <script src="src/motion/MotionResolutionPolicy.js"></script>
+  <script src="src/motion/MotionFlowUpload.js"></script>
+  <script src="src/motion/MotionFlowDownload.js"></script>
+  <script src="src/motion/MotionMergeTask.js"></script>
+  <script src="src/core/VideoWmClient.js"></script>
+  <script src="src/shared/CustomDialog.js"></script>
+  <script src="src/core/ValidationRules.js"></script>
+  <script src="src/core/ExecutionGate.js"></script>
+  <script src="src/core/errors/QuotaErrorHandler.js"></script>
+  <script src="src/core/WatermarkClient.js"></script>
+  <script src="src/shared/DownloadHelper.js"></script>
+  <script src="src/core/flow-api/FlowApiTelemetry.js"></script>
+  <script src="src/core/ExecutionLock.js"></script>
+  <script src="src/core/QueueItem.js"></script>
+  <script src="src/core/Job.js"></script>
+  <script src="src/core/MentionParser.js"></script>
+  <script src="src/core/FlowV2CorrelationProtocol.js"></script>
+  <script src="src/core/FlowV2CorrelationBroker.js"></script>
+
+<script src="src/core/PendingUploadStore.js"></script><script src="src/motion/MotionLocalReferences.js"></script><script src="src/core/MediaRegistry.js"></script><script src="src/core/FileUploader.js"></script>
+<script src="src/core/EditorExecutor.js"></script>
+  <script src="src/core/TileMonitor.js"></script>
+  <script src="src/core/FlowWebRecovery.js"></script>
+  <script src="src/core/RefImageAssignment.js"></script>
+  <script src="src/core/PromptQueue.js"></script>
+  <script src="src/motion/MotionCharacterReferences.js"></script>
+<script src="src/motion/MotionPromptComposer.js"></script>
+  <script src="src/motion/MotionTranscriptContract.js"></script>
+  <script src="src/motion/MotionFullAudioTranscript.js"></script><script src="src/motion/MotionSplitPolicy.js"></script><script src="src/motion/MotionAudioRegenerator.js"></script><script src="src/motion/MotionOriginalAudio.js"></script>
+  <script src="src/motion/MotionTranscriptCommit.js"></script>
+  <script src="src/core/VideoFrameExtractor.js"></script><script src="src/motion/MotionContinuity.js"></script><script src="src/motion/MotionFlowQueueRequest.js"></script>
+  <script src="src/shared/ProviderBrandIcons.js"></script>
+  <script src="src/history/GenerationHistory.js"></script>
+  <script src="src/motion/MotionRunJournal.js"></script>
+  <script src="src/motion/MotionFrameResultActions.js"></script>
+  <script src="src/core/MotionRunnerRecovery.js"></script>
+  <script src="src/motion/MotionSilentTranscript.js"></script>
+  <script src="src/motion/MotionSequentialTranscript.js"></script>
+  <script src="src/motion/MotionTranscriptOutbox.js"></script>
+  <script src="src/motion/MotionTranscriptReservation.js"></script>
+  <script src="src/motion/MotionTranscriptWorkerAttempt.js"></script>
+  <script src="src/motion/MotionTranscriptWorkerDriver.js"></script>
+  <script src="src/motion/MotionProjectUpload.js"></script>
+  <script src="src/motion/MotionProjectFlow.js"></script>
+  <script src="src/motion/MotionProjectPersist.js"></script>
+  <script src="src/motion/MotionProjectFramePipeline.js"></script>
+  <script src="src/motion/MotionProjectFinalize.js"></script>
+  <script src="src/motion/MotionParallelPreparation.js"></script>
+  <script src="src/motion/MotionProjectRunner.js"></script>
+  <script src="src/motion/MotionSplitWorkerTask.js"></script>
+  <script src="src/motion/MotionProjectSplit.js"></script>
+  <script src="src/motion/MotionProjectExecution.js"></script>
+  <script src="src/motion/MotionProjectLifecycle.js"></script>
+  <script src="src/motion/MotionProjectMonitor.js"></script>
+  <script src="src/motion/MotionProjectRecovery.js"></script>
+  <script src="src/motion/MotionBatchSnapshot.js"></script>
+  <script src="src/motion/MotionBatchCoordinator.js"></script>
+  <script src="src/motion/MotionRunnerRuntime.js"></script>
+  <script src="src/motion/MotionTranscriptBatchRunner.js"></script>
+  <script src="src/motion/MotionRunnerHost.js"></script>
+</body>
+</html>
