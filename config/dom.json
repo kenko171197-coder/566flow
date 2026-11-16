@@ -153,6 +153,66 @@
               "flow-add-menu img"
             ]
           },
+          "settings_panel_candidates": {
+            "selectors": [
+              ".cdk-overlay-pane"
+            ]
+          },
+          "settings_panel_marker": {
+            "selectors": [
+              "mat-button-toggle"
+            ]
+          },
+          "settings_panel_root": {
+            "selectors": [
+              ".cdk-overlay-pane"
+            ]
+          },
+          "mode_tab_image": {
+            "selectors": [
+              "mat-button-toggle button[role=\"radio\"]"
+            ],
+            "icon_text": "image"
+          },
+          "mode_tab_video": {
+            "selectors": [
+              "mat-button-toggle button[role=\"radio\"]"
+            ],
+            "icon_text": "videocam"
+          },
+          "video_mode_frames": {
+            "selectors": [
+              "mat-button-toggle button[role=\"radio\"]"
+            ],
+            "icon_text": "crop_free"
+          },
+          "video_mode_ingredients": {
+            "selectors": [
+              "mat-button-toggle button[role=\"radio\"]"
+            ],
+            "icon_text": "chrome_extension"
+          },
+          "ratio_button": {
+            "selectors": [
+              "mat-button-toggle button[role=\"radio\"]"
+            ],
+            "ratio_icons": {
+              "16:9": "crop_16_9",
+              "9:16": "crop_9_16",
+              "1:1": "crop_square"
+            }
+          },
+          "quantity_button": {
+            "selectors": [
+              "mat-button-toggle button[role=\"radio\"]"
+            ],
+            "text_format": "x{value}"
+          },
+          "tab_button_generic": {
+            "selectors": [
+              "mat-button-toggle button[role=\"radio\"]"
+            ]
+          },
           "signed_out_indicator": {
             "selectors": [
               "a[href*=\"accounts.google.com/ServiceLogin\"]",
@@ -324,22 +384,7 @@
               "[data-566flow-unmapped]"
             ]
           },
-          "settings_panel_candidates": {
-            "selectors": [
-              "[data-566flow-unmapped]"
-            ]
-          },
-          "settings_panel_marker": {
-            "selectors": [
-              "[data-566flow-unmapped]"
-            ]
-          },
           "show_tile_details_setting": {
-            "selectors": [
-              "[data-566flow-unmapped]"
-            ]
-          },
-          "tab_button_generic": {
             "selectors": [
               "[data-566flow-unmapped]"
             ]
@@ -360,16 +405,6 @@
             ]
           },
           "video_duration_tab": {
-            "selectors": [
-              "[data-566flow-unmapped]"
-            ]
-          },
-          "video_mode_frames": {
-            "selectors": [
-              "[data-566flow-unmapped]"
-            ]
-          },
-          "video_mode_ingredients": {
             "selectors": [
               "[data-566flow-unmapped]"
             ]

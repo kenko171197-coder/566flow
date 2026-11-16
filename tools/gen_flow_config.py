@@ -46,6 +46,18 @@ flow_selectors = {
   "ingredient_image_chip": s('flow-add-menu [class*="image"]', '[data-ingredient-kind="image"]'),
   "ingredient_video_chip": s('flow-add-menu [class*="video"]', '[data-ingredient-kind="video"]'),
   "ingredient_chip_thumbnail": s('flow-add-menu img'),
+  # settings panel + its radio controls (verified live 2026-11-16)
+  "settings_panel_candidates": s('.cdk-overlay-pane'),
+  "settings_panel_marker": s('mat-button-toggle'),
+  "settings_panel_root": s('.cdk-overlay-pane'),
+  "mode_tab_image": s('mat-button-toggle button[role="radio"]', icon_text="image"),
+  "mode_tab_video": s('mat-button-toggle button[role="radio"]', icon_text="videocam"),
+  "video_mode_frames": s('mat-button-toggle button[role="radio"]', icon_text="crop_free"),
+  "video_mode_ingredients": s('mat-button-toggle button[role="radio"]', icon_text="chrome_extension"),
+  "ratio_button": s('mat-button-toggle button[role="radio"]',
+                    ratio_icons={"16:9": "crop_16_9", "9:16": "crop_9_16", "1:1": "crop_square"}),
+  "quantity_button": s('mat-button-toggle button[role="radio"]', text_format="x{value}"),
+  "tab_button_generic": s('mat-button-toggle button[role="radio"]'),
   # page state
   "signed_out_indicator": s('a[href*="accounts.google.com/ServiceLogin"]', 'a[href*="accounts.google.com/signin"]'),
   "project_card": s('a[href*="/project/"]'),
