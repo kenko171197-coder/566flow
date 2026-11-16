@@ -1,1 +1,2596 @@
-var __defProp=Object.defineProperty;var __defNormalProp=(obj,key,value)=>key in obj?__defProp(obj,key,{enumerable:true,configurable:true,writable:true,value}):obj[key]=value;var __publicField=(obj,key,value)=>__defNormalProp(obj,typeof key!=="symbol"?key+"":key,value);class MotionRunJournal{static _key({userId,toolProjectId}){if(!Number.isSafeInteger(Number(userId))||Number(userId)<1||!/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(String(toolProjectId||""))){throw new Error("MOTION_RUN_SCOPE_INVALID")}return`${Number(userId)}\0${toolProjectId}`}static async _db(){if(!this._dbPromise)this._dbPromise=new Promise((resolve,reject)=>{const request=indexedDB.open(this.DB_NAME,3);request.onupgradeneeded=()=>{const runs=!request.result.objectStoreNames.contains("runs")?request.result.createObjectStore("runs",{keyPath:"key"}):request.transaction.objectStore("runs");if(!runs.indexNames.contains("user"))runs.createIndex("user","userId");if(!request.result.objectStoreNames.contains("outbox")){const store=request.result.createObjectStore("outbox",{keyPath:"eventId"});store.createIndex("scope","scope")}const outbox=request.transaction.objectStore("outbox");if(!outbox.indexNames.contains("user"))outbox.createIndex("user","userId")};request.onsuccess=()=>{const db=request.result;db.onversionchange=()=>{db.close();this._dbPromise=null};resolve(db)};request.onerror=()=>reject(request.error||new Error("MOTION_RUN_DB_FAILED"));request.onblocked=()=>reject(new Error("MOTION_RUN_DB_BLOCKED"))}).catch(error=>{this._dbPromise=null;throw error});return this._dbPromise}static async _readWrite(key,change,requireEmptyOutbox=false){const db=await this._db();return new Promise((resolve,reject)=>{const tx=db.transaction(["runs","outbox"],"readwrite");const store=tx.objectStore("runs");let result;let failure;tx.oncomplete=()=>resolve(result);tx.onabort=()=>reject(failure||tx.error||new Error("MOTION_RUN_TRANSACTION_FAILED"));const filterOutbox=typeof requireEmptyOutbox==="function";const request=store.get(key),count=requireEmptyOutbox?tx.objectStore("outbox").index("scope")[filterOutbox?"getAll":"count"](key):null;let ready=0;const apply=()=>{if(++ready<(count?2:1))return;try{if(filterOutbox?count.result.some(requireEmptyOutbox):count?.result)throw new Error("MOTION_OUTBOX_PENDING");const update=change(request.result||null,tx.objectStore("outbox"),filterOutbox?count.result:[]);result=update.result;if(update.record)store.put(update.record)}catch(error){failure=error;tx.abort()}};request.onsuccess=apply;if(count)count.onsuccess=apply})}static _queueTranscript(record,outbox,operationId,operation,state,extra={}){if(operation.fullAudioFrames)return operation.fullAudioFrames.map(member=>this._queueTranscript(record,outbox,operationId,{...member,retryCount:operation.retryCount,fullAudioMember:true},state,extra));record.outboxSequence=(record.outboxSequence||0)+1;const event={eventId:`${record.key}\0${record.runId}\0${operationId}\0${state}${operation.fullAudioMember?`\0${operation.frameId}`:""}`,scope:record.key,sequence:record.outboxSequence,userId:record.userId,toolProjectId:record.toolProjectId,flowProjectId:record.flowProjectId,projectRunId:record.runId,sourceRevision:record.sourceRevision,attemptId:operationId,frameId:operation.frameId,frameRunId:operation.frameRunId,inputRevision:operation.inputRevision,retryCount:operation.retryCount,state,...record.transcriptSettings&&{transcriptSettings:record.transcriptSettings},...extra};outbox.add(event);return event}static async create(input){const key=this._key(input);if(!/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(String(input.runId||""))||!/^[A-Za-z0-9_-]{1,120}$/.test(String(input.flowProjectId||""))||!Number.isSafeInteger(input.sourceRevision)||input.sourceRevision<1||!Number.isSafeInteger(input.profileRevision)||input.profileRevision<1||input.profileKey!==void 0&&!/^[a-z0-9_]{1,64}$/.test(input.profileKey)||input.profilePromptVariant!==void 0&&!["legacy","timeline"].includes(input.profilePromptVariant)||input.preparationSnapshot!==void 0&&(input.preparationSnapshot?.version!==1||input.preparationSnapshot.userId!==Number(input.userId)||input.preparationSnapshot.executionMode!==input.executionMode||!/^[0-9a-f]{64}$/.test(input.preparationSnapshot.configFingerprint)||input.preparationSnapshot.settingsFingerprint!==input.settingsSnapshot||JSON.stringify(input.preparationSnapshot.flowTarget)!==JSON.stringify(input.flowTarget))||input.parentBatchId!==void 0&&!/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(input.parentBatchId)||input.flowTarget!==void 0&&(!Number.isInteger(input.flowTarget?.tabId)||input.flowTarget.tabId<0||input.flowTarget.projectId!==input.flowProjectId||typeof input.flowTarget.driverKey!=="string"||!input.flowTarget.driverKey||typeof input.flowTarget.origin!=="string"||!/^https?:\/\//.test(input.flowTarget.origin)||!["web","api"].includes(input.flowTarget.mode))||!Number.isSafeInteger(input.transcriptMaxRetries)||input.transcriptMaxRetries<0||typeof input.retryEnabled!=="boolean"||input.autoDownloadFinal!==void 0&&typeof input.autoDownloadFinal!=="boolean"||input.settingsSnapshot!==void 0&&!/^[0-9a-f]{64}$/.test(String(input.settingsSnapshot))||input.downloadResolution!==void 0&&!/^[A-Za-z0-9]{1,20}$/.test(String(input.downloadResolution))||input.downloadRatio!==void 0&&!/^[0-9]{1,2}:[0-9]{1,2}$/.test(String(input.downloadRatio))||input.transcriptionProvider!==void 0&&!["chatgpt","gemini"].includes(input.transcriptionProvider)||input.transcriptSettings!==void 0&&(!input.transcriptSettings||input.transcriptSettings.transcription_provider!==input.transcriptionProvider||typeof input.transcriptSettings.translate_enabled!=="boolean"||!(input.transcriptSettings.target_language===null||typeof input.transcriptSettings.target_language==="string")||(input.transcriptSettings.target_language?.length||0)>80)||input.taskKind!==void 0&&(input.taskKind!=="transcript_batch"||!Array.isArray(input.transcriptFrameIds)||!input.transcriptFrameIds.length||input.transcriptFrameIds.length>500||new Set(input.transcriptFrameIds).size!==input.transcriptFrameIds.length||input.transcriptFrameIds.some(id=>!/^[A-Za-z0-9_-]{1,80}$/.test(id)))||input.replaceDrained===true&&input.taskKind!=="transcript_batch"||!["sequential","parallel"].includes(input.executionMode))throw new Error("MOTION_RUN_INVALID");return this._readWrite(key,current=>{if(current&&current.state!=="completed"&&!(input.replaceDrained===true&&(!current.ownerId||current.leaseUntil<=Date.now())&&!Object.keys(current.operations||{}).length&&!Object.values(current.reservations||{}).some(item=>item.token||item.pendingAttemptId||item.pendingSettlement)))throw new Error("MOTION_RUN_EXISTS");const record={key,userId:Number(input.userId),toolProjectId:input.toolProjectId,flowProjectId:input.flowProjectId,runId:input.runId,sourceRevision:input.sourceRevision,profileRevision:input.profileRevision,executionMode:input.executionMode,fullAudioTranscription:input.fullAudioTranscription===true,useOriginalAudio:input.useOriginalAudio===true,continuityEnabled:input.continuityEnabled===true,...input.taskKind&&{taskKind:input.taskKind,transcriptFrameIds:[...input.transcriptFrameIds]},...input.profileKey&&{profileKey:input.profileKey},...input.profilePromptVariant&&{profilePromptVariant:input.profilePromptVariant},...input.preparationSnapshot&&{preparationSnapshot:input.preparationSnapshot},...input.parentBatchId&&{parentBatchId:input.parentBatchId},...input.flowTarget&&{flowTarget:{tabId:input.flowTarget.tabId,projectId:input.flowTarget.projectId,driverKey:input.flowTarget.driverKey,origin:input.flowTarget.origin,mode:input.flowTarget.mode}},...input.transcriptionProvider&&{transcriptionProvider:input.transcriptionProvider},...input.autoDownloadFinal!==void 0&&{autoDownloadFinal:input.autoDownloadFinal},...input.settingsSnapshot!==void 0&&{settingsSnapshot:input.settingsSnapshot},...input.downloadResolution!==void 0&&{downloadResolution:input.downloadResolution},...input.downloadRatio!==void 0&&{downloadRatio:input.downloadRatio},...input.transcriptSettings&&{transcriptSettings:{transcription_provider:input.transcriptSettings.transcription_provider,translate_enabled:input.transcriptSettings.translate_enabled,target_language:input.transcriptSettings.target_language||null}},transcriptMaxRetries:input.transcriptMaxRetries,retryEnabled:input.retryEnabled,state:"paused",epoch:0,ownerId:null,leaseUntil:0,operations:{},failedOperations:{},stopOrigin:null,...current&&{previousRun:{runId:current.runId,sourceRevision:current.sourceRevision,state:current.state,rerunId:current.rerunId||null,finalArtifactId:current.finalArtifactId||null}}};return{record,result:record}},input.replaceDrained===true)}static async get(scope){const key=this._key(scope);const db=await this._db();return new Promise((resolve,reject)=>{const request=db.transaction("runs","readonly").objectStore("runs").get(key);request.onsuccess=()=>resolve(request.result||null);request.onerror=()=>reject(request.error||new Error("MOTION_RUN_READ_FAILED"))})}static _assertSourceRunDrained(record){if(record&&(record.ownerId&&record.leaseUntil>Date.now()||Object.keys(record.operations||{}).length||Object.values(record.reservations||{}).some(item=>item.token||item.pendingAttemptId||item.pendingSettlement)))throw new Error("MOTION_RUN_DRAIN_REQUIRED")}static async assertSourceResettable(scope){return this._readWrite(this._key(scope),record=>{this._assertSourceRunDrained(record);return{result:true}},true)}static async acknowledgeSourceChange(scope,project){const data=project?.data_json,revision=data?.source_revision;const frames=Object.values(data?.frames||{});const uuid=value=>/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(String(value||""));const reset=uuid(data?.reset_id)&&!data?.source&&!frames.length;const replacement=!!data?.source?.artifact_id&&frames.length>0&&frames.every(frame=>uuid(frame?.run_id)&&Number.isSafeInteger(frame.input_revision)&&frame.input_revision>0);if(project?.tool_project_id!==scope.toolProjectId||!project.flow_project_id||!Number.isSafeInteger(revision)||revision<1||!reset&&!replacement)throw new Error("MOTION_SOURCE_CHANGE_UNVERIFIED");const retired=await this._readWrite(this._key(scope),record=>{if(!record||record.state==="completed")return{result:null};if(record.flowProjectId!==project.flow_project_id)throw new Error("MOTION_FLOW_PROJECT_MISMATCH");if(revision<=record.sourceRevision)return{result:null};this._assertSourceRunDrained(record);record.state="completed";record.ownerId=null;record.leaseUntil=0;record.sourceChange={sourceRevision:revision,reason:reset?"project_reset":"source_replaced",...reset&&{resetId:data.reset_id}};return{record,result:{runId:record.runId,previousSourceRevision:record.sourceRevision,...record.sourceChange}}},true);if(retired)console.info("[MotionSourceChange]",JSON.stringify({stage:"run_retired",toolProjectId:scope.toolProjectId,...retired}));return retired}static async acknowledgeRerun(scope,project){const key=this._key(scope),operation=project?.data_json?.rerun_operation;if(project?.tool_project_id!==scope.toolProjectId||!operation?.rerun_id||operation.source_revision!==project.data_json.source_revision)throw new Error("MOTION_RERUN_UNVERIFIED");const db=await this._db();return new Promise((resolve,reject)=>{const tx=db.transaction(["runs","outbox"],"readwrite"),store=tx.objectStore("runs");const read=store.get(key),count=tx.objectStore("outbox").index("scope").count(key);let ready=0,failure;tx.oncomplete=()=>resolve(true);tx.onabort=()=>reject(failure||tx.error||new Error("MOTION_RUN_TRANSACTION_FAILED"));const apply=()=>{if(++ready!==2)return;try{const record=read.result;if(!record||record.state==="completed"||record.runId!==operation.previous_project_run_id)return;if(record.flowProjectId!==project.flow_project_id||record.sourceRevision!==operation.source_revision||record.ownerId&&record.leaseUntil>Date.now()||count.result||Object.keys(record.operations||{}).length||Object.values(record.reservations||{}).some(item=>item.token||item.pendingAttemptId||item.pendingSettlement))throw new Error("MOTION_RUN_DRAIN_REQUIRED");record.state="completed";record.ownerId=null;record.leaseUntil=0;record.rerunId=operation.rerun_id;store.put(record)}catch(error){failure=error;tx.abort()}};read.onsuccess=apply;count.onsuccess=apply})}static async retireTranscriptRun({owner,project,newRunId,settledReservationIds=[]}){const key=this._key(owner),receipt=project?.data_json?.transcript_reset;if(project?.tool_project_id!==owner.toolProjectId||receipt?.rerun_id!==newRunId||receipt.previous_project_run_id!==owner.runId||receipt.source_revision!==project.data_json.source_revision)throw new Error("MOTION_RERUN_UNVERIFIED");const db=await this._db();return new Promise((resolve,reject)=>{const tx=db.transaction(["runs","outbox"],"readwrite"),store=tx.objectStore("runs");let failure;tx.oncomplete=()=>resolve(true);tx.onabort=()=>reject(failure||tx.error||new Error("MOTION_RUN_TRANSACTION_FAILED"));const read=store.get(key);read.onsuccess=()=>{try{const record=read.result;this._owned(record,owner);if(record.flowProjectId!==project.flow_project_id||Object.keys(record.operations||{}).length||Object.values(record.reservations||{}).some(item=>item.token&&!settledReservationIds.includes(item.reservationId)))throw new Error("MOTION_RUN_DRAIN_REQUIRED");record.state="completed";record.ownerId=null;record.leaseUntil=0;record.reservations={};record.transcriptRestartId=newRunId;store.put(record);const cursor=tx.objectStore("outbox").index("scope").openKeyCursor(key);cursor.onsuccess=()=>{const item=cursor.result;if(item){tx.objectStore("outbox").delete(item.primaryKey);item.continue()}}}catch(error){failure=error;tx.abort()}}})}static async isWorkerLeaseActive({userId,toolProjectId,runId,epoch,workerId,attemptId}){if(!Number.isSafeInteger(epoch)||epoch<1||typeof workerId!=="string"||!workerId||typeof attemptId!=="string"||!attemptId||typeof runId!=="string"||!runId)return false;let record;try{record=await this.get({userId,toolProjectId})}catch(_){return false}const operation=record?.operations?.[attemptId];return record?.runId===runId&&record.epoch===epoch&&!!record.ownerId&&record.leaseUntil>Date.now()&&operation?.stage==="transcribe"&&operation.workerId===workerId}static fullAudioCheckpointMatches(record,operation,project,attemptId){if(!operation?.fullAudioFrames)return true;const data=project?.data_json;if(record.fullAudioTranscription!==true||!data||!Array.isArray(operation.fullAudioTimeline)||Object.keys(data.frames||{}).length!==operation.fullAudioTimeline.length)return false;if(operation.fullAudioTimeline.some(m=>{const frame=data.frames[m.frameId];return frame?.run_id!==m.frameRunId||frame.input_revision!==m.inputRevision||frame.start!==m.start||frame.end!==m.end||frame.stages?.split?.state!=="ready"}))return false;return operation.fullAudioFrames.every(m=>{const stage=data.frames[m.frameId]?.stages?.transcribe;return stage?.state==="running"&&stage.worker?.project_run_id===record.runId&&stage.worker?.attempt_id===attemptId&&stage.worker?.retry_count===operation.retryCount})}static _transcriptAttempt(record,input){const op=record?.operations?.[input.operationId];if(!op||op.stage!=="transcribe"||op.frameId!==input.frameId||op.frameRunId!==input.frameRunId||op.inputRevision!==input.inputRevision||op.workerId!==input.workerId)throw new Error("MOTION_OPERATION_SCOPE_MISMATCH");return op}static async prepareTranscriptReservation(input){const key=this._key(input);if(!/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(String(input.reservationId||""))||["__proto__","constructor","prototype"].includes(input.frameId))throw new Error("MOTION_RESERVATION_INVALID");return this._readWrite(key,record=>{this._owned(record,input);this._transcriptAttempt(record,input);if(record.state!=="running")throw new Error("MOTION_RUN_NOT_RUNNING");record.reservations||(record.reservations={});const prior=record.reservations[input.frameId];if(prior){if(prior.reservationId!==input.reservationId||prior.frameRunId!==input.frameRunId||prior.inputRevision!==input.inputRevision)throw new Error("MOTION_RESERVATION_CONFLICT");return{result:prior}}const reservation={reservationId:input.reservationId,frameRunId:input.frameRunId,inputRevision:input.inputRevision,token:null,expiresAt:null,pendingAttemptId:null,lastAttemptId:null};record.reservations[input.frameId]=reservation;return{record,result:reservation}})}static async replaceUndispatchedTranscriptReservation(input){const receipt=input.receipt;if(!/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(String(input.reservationId||""))||receipt?.provider_web?.source!=="motion"||receipt.provider_web.run_id!==input.previousReservationId||receipt.provider_web.dispatch_intent_count!==0||!["expired","revoked"].includes(receipt.token_status))throw new Error("MOTION_RESERVATION_EXPIRED");return this._readWrite(this._key(input),record=>{this._owned(record,input);this._transcriptAttempt(record,input);const prior=record.reservations?.[input.frameId];if(record.state!=="running"||!prior||prior.reservationId!==input.previousReservationId||prior.token!==input.previousToken||prior.frameRunId!==input.frameRunId||prior.inputRevision!==input.inputRevision||input.reservationId===prior.reservationId||Object.values(record.completedOperations||{}).some(item=>item.frameId===input.frameId&&item.frameRunId===input.frameRunId&&item.inputRevision===input.inputRevision)||Object.entries(record.operations||{}).some(([id,item])=>item.stage==="transcribe"&&item.frameId===input.frameId&&id!==input.operationId))throw new Error("MOTION_RESERVATION_CONFLICT");const reservation={reservationId:input.reservationId,frameRunId:input.frameRunId,inputRevision:input.inputRevision,token:null,expiresAt:null,pendingAttemptId:null,lastAttemptId:null};record.reservations[input.frameId]=reservation;return{record,result:reservation}})}static async recoverExpiredTranscriptReservation(input){const receipt=input.receipt;if(input.serverTranscriptReset!==true||receipt?.provider_web?.source!=="motion"||receipt.provider_web.run_id!==input.previousReservationId||receipt.provider_web.dispatch_intent_count!==0||!["expired","revoked"].includes(receipt.token_status)||!/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(String(input.reservationId||"")))throw new Error("MOTION_RESERVATION_EXPIRED");return this._readWrite(this._key(input),record=>{this._owned(record,input);const prior=record.reservations?.[input.frameId];const belongs=item=>item.frameId===input.frameId&&item.frameRunId===input.frameRunId&&item.inputRevision===input.inputRevision;const failures=Object.entries(record.failedOperations||{}).filter(([,item])=>belongs(item));if(!prior||prior.reservationId!==input.previousReservationId||prior.token!==input.previousToken||prior.frameRunId!==input.frameRunId||prior.inputRevision!==input.inputRevision||record.stopOrigin||!failures.length||failures.some(([,item])=>item.reason!=="MOTION_RESERVATION_EXPIRED"||item.fullAudioFrames)||Object.values(record.operations||{}).some(belongs)||Object.values(record.completedOperations||{}).some(belongs))throw new Error("MOTION_RESERVATION_CONFLICT");record.expiredTranscriptReservations||(record.expiredTranscriptReservations={});record.expiredTranscriptReservations[prior.reservationId]={...prior,token:null,failures:Object.fromEntries(failures)};for(const[id]of failures)delete record.failedOperations[id];record.reservations[input.frameId]={reservationId:input.reservationId,frameRunId:input.frameRunId,inputRevision:input.inputRevision,token:null,expiresAt:null,pendingAttemptId:null,lastAttemptId:null};if(record.state==="needs_review"&&!Object.keys(record.operations||{}).length)record.state="paused";return{record,result:true}})}static async commitTranscriptReservation(input){const key=this._key(input);if(typeof input.token!=="string"||!input.token||!Number.isSafeInteger(input.expiresAt)||input.expiresAt<=0)throw new Error("MOTION_RESERVATION_INVALID");return this._readWrite(key,record=>{this._owned(record,input);const reservation=record.reservations?.[input.frameId];if(!reservation||reservation.reservationId!==input.reservationId||reservation.frameRunId!==input.frameRunId||reservation.inputRevision!==input.inputRevision)throw new Error("MOTION_RESERVATION_CONFLICT");if(reservation.token&&reservation.token!==input.token)throw new Error("MOTION_RESERVATION_CONFLICT");if(input.retryLimit!==void 0&&(!Number.isSafeInteger(input.retryLimit)||input.retryLimit<0||typeof input.retryEnabled!=="boolean"||!Number.isSafeInteger(input.startupMs)||input.startupMs<1e4||input.startupMs>12e4||!Number.isSafeInteger(input.textTimeoutMs)||input.textTimeoutMs<1e3))throw new Error("MOTION_RESERVATION_INVALID");if(reservation.token&&input.retryLimit!==void 0&&reservation.retryLimit!==void 0&&(reservation.retryLimit!==input.retryLimit||reservation.retryEnabled!==input.retryEnabled||reservation.startupMs!==input.startupMs||reservation.textTimeoutMs!==input.textTimeoutMs))throw new Error("MOTION_RESERVATION_CONFLICT");reservation.token=input.token;reservation.expiresAt=input.expiresAt;if(input.retryLimit!==void 0)Object.assign(reservation,{retryLimit:input.retryLimit,retryEnabled:input.retryEnabled,startupMs:input.startupMs,textTimeoutMs:input.textTimeoutMs});return{record,result:true}})}static async beginTranscriptIntent(input){const key=this._key(input);return this._readWrite(key,record=>{this._owned(record,input);this._transcriptAttempt(record,input);if(record.state!=="running")throw new Error("MOTION_RUN_NOT_RUNNING");const reservation=record.reservations?.[input.frameId];if(!reservation?.token||reservation.expiresAt<=Date.now()||reservation.frameRunId!==input.frameRunId||reservation.inputRevision!==input.inputRevision)throw new Error("MOTION_RESERVATION_UNAVAILABLE");if(reservation.pendingAttemptId&&reservation.pendingAttemptId!==input.operationId)throw new Error("MOTION_INTENT_RECONCILE_REQUIRED");if(reservation.lastAttemptId===input.operationId)throw new Error("MOTION_INTENT_ALREADY_RECORDED");reservation.pendingAttemptId=input.operationId;return{record,result:{reservationId:reservation.reservationId,token:reservation.token,attemptId:input.operationId,previousAttemptId:reservation.lastAttemptId,retryReason:reservation.lastAttemptId?"motion_no_result":null}}})}static async confirmTranscriptIntent(input){const key=this._key(input);return this._readWrite(key,record=>{this._owned(record,input);const reservation=record.reservations?.[input.frameId];if(!reservation||reservation.frameRunId!==input.frameRunId||reservation.inputRevision!==input.inputRevision)throw new Error("MOTION_RESERVATION_CONFLICT");if(reservation.lastAttemptId===input.operationId&&!reservation.pendingAttemptId)return{result:true};if(reservation.pendingAttemptId!==input.operationId)throw new Error("MOTION_INTENT_RECONCILE_REQUIRED");reservation.lastAttemptId=input.operationId;reservation.pendingAttemptId=null;return{record,result:true}})}static async pendingFailedTranscriptIntent(input){const record=await this.get(input);this._owned(record,input);const reservation=record.reservations?.[input.frameId];if(!reservation?.pendingAttemptId)return null;const failed=record.failedOperations?.[reservation.pendingAttemptId];if(!reservation.token||!failed||failed.stage!=="transcribe"||failed.frameId!==input.frameId||failed.frameRunId!==reservation.frameRunId||failed.inputRevision!==reservation.inputRevision)throw new Error("MOTION_INTENT_RECONCILE_REQUIRED");return{reservationId:reservation.reservationId,token:reservation.token,frameId:input.frameId,frameRunId:reservation.frameRunId,inputRevision:reservation.inputRevision,attemptId:reservation.pendingAttemptId,previousAttemptId:reservation.lastAttemptId||null}}static async beginTranscriptSettlement(input){const key=this._key(input);if(!["success","failed"].includes(input.status))throw new Error("MOTION_SETTLEMENT_INVALID");return this._readWrite(key,record=>{this._owned(record,input);const reservation=record.reservations?.[input.frameId];if(!reservation||reservation.frameRunId!==input.frameRunId||reservation.inputRevision!==input.inputRevision)throw new Error("MOTION_RESERVATION_CONFLICT");if(reservation.settlementStatus){if(reservation.settlementStatus!==input.status)throw new Error("MOTION_SETTLEMENT_CONFLICT");return{result:{settled:true,status:reservation.settlementStatus}}}if(!reservation.token||reservation.pendingAttemptId||Object.values(record.operations).some(op=>op.stage==="transcribe"&&op.frameId===input.frameId))throw new Error("MOTION_SETTLEMENT_NOT_READY");const belongs=op=>op.frameId===input.frameId&&op.frameRunId===input.frameRunId&&op.inputRevision===input.inputRevision;const complete=Object.values(record.completedOperations||{}).some(belongs);const failures=Object.values(record.failedOperations||{}).filter(op=>belongs(op)&&!op.resolved);if(input.status==="success"?!complete:complete||!failures.length||record.retryEnabled&&failures.length<=record.transcriptMaxRetries)throw new Error("MOTION_SETTLEMENT_NOT_READY");if(reservation.pendingSettlement&&reservation.pendingSettlement!==input.status)throw new Error("MOTION_SETTLEMENT_CONFLICT");reservation.pendingSettlement=input.status;return{record,result:{token:reservation.token,reservationId:reservation.reservationId,status:input.status}}})}static async confirmTranscriptSettlement(input){const key=this._key(input);return this._readWrite(key,record=>{this._owned(record,input);const reservation=record.reservations?.[input.frameId];if(!reservation||reservation.frameRunId!==input.frameRunId||reservation.inputRevision!==input.inputRevision)throw new Error("MOTION_RESERVATION_CONFLICT");if(reservation.settlementStatus===input.status)return{result:true};if(reservation.pendingSettlement!==input.status)throw new Error("MOTION_SETTLEMENT_CONFLICT");reservation.settlementStatus=input.status;reservation.pendingSettlement=null;reservation.token=null;return{record,result:true}})}static async hasPendingWork(userId){if(!Number.isSafeInteger(Number(userId))||Number(userId)<1)throw new Error("MOTION_RUN_SCOPE_INVALID");const db=await this._db();return new Promise((resolve,reject)=>{const tx=db.transaction(["runs","outbox"],"readonly");const runs=tx.objectStore("runs").index("user").getAll(Number(userId));const events=tx.objectStore("outbox").index("user").openKeyCursor(Number(userId));tx.oncomplete=()=>resolve(runs.result.some(run=>["running","pausing","stopping","needs_review"].includes(run.state)||Object.keys(run.operations||{}).length>0||Object.values(run.reservations||{}).some(item=>item.token||item.pendingAttemptId||item.pendingSettlement))||!!events.result);tx.onabort=()=>reject(tx.error||new Error("MOTION_RUN_READ_FAILED"));tx.onerror=()=>reject(tx.error||new Error("MOTION_RUN_READ_FAILED"))})}static async listForUser(userId){if(!Number.isSafeInteger(userId)||userId<1)throw new Error("MOTION_RUN_SCOPE_INVALID");const db=await this._db();return new Promise((resolve,reject)=>{const tx=db.transaction("runs","readonly");const read=tx.objectStore("runs").index("user").getAll(userId);tx.oncomplete=()=>resolve(read.result);tx.onabort=()=>reject(tx.error||new Error("MOTION_RUN_READ_FAILED"))})}static async claim(input){const key=this._key(input);if(!/^[A-Za-z0-9_-]{1,120}$/.test(String(input.ownerId||""))||!Number.isSafeInteger(input.leaseMs)||input.leaseMs<1||!Number.isSafeInteger(Date.now()+input.leaseMs))throw new Error("MOTION_RUN_LEASE_INVALID");return this._readWrite(key,(record,outbox)=>{if(!record)throw new Error("MOTION_RUN_NOT_FOUND");if(!input.runId||record.runId!==input.runId)throw new Error("MOTION_RUN_FENCED");if(record.state==="completed")throw new Error("MOTION_RUN_COMPLETED");if(record.ownerId&&record.leaseUntil>Date.now())return{result:{acquired:false}};record.epoch++;record.ownerId=input.ownerId;record.leaseUntil=Date.now()+input.leaseMs;record.failedOperations||(record.failedOperations={});const failedTranscriptOperations=[];for(const[id,operation]of Object.entries(record.operations)){if(operation.stage==="direct_transcribe"){record.failedOperations[id]={...operation,reason:"outcome_unknown",resolved:false};delete record.operations[id];failedTranscriptOperations.push(id);continue}if(operation.stage!=="transcribe")continue;record.failedOperations[id]={...operation,reason:operation.fullAudioFrames?"MOTION_FULL_AUDIO_OUTCOME_UNKNOWN":"outcome_unknown",resolved:false};const failures=Object.values(record.failedOperations).filter(item=>item.frameId===operation.frameId&&item.frameRunId===operation.frameRunId&&item.inputRevision===operation.inputRevision).length;this._queueTranscript(record,outbox,id,operation,"failed",{errorCode:operation.fullAudioFrames?"MOTION_FULL_AUDIO_OUTCOME_UNKNOWN":"MOTION_WORKER_OUTCOME_UNKNOWN",retryExhausted:!!operation.fullAudioFrames||!record.retryEnabled||failures>record.transcriptMaxRetries});delete record.operations[id];failedTranscriptOperations.push(id)}const reviewOnly=Object.keys(record.operations).length>0;const failed=Object.values(record.failedOperations).some(operation=>operation.resolved!==true);record.state=reviewOnly?"needs_review":record.stopOrigin?"stopped":failed?"failed":"paused";return{record,result:{acquired:true,ownerId:record.ownerId,epoch:record.epoch,reviewOnly,failedTranscriptOperations}}})}static _owned(record,input){if(!record||record.runId!==input.runId||record.ownerId!==input.ownerId||record.epoch!==input.epoch||record.leaseUntil<=Date.now())throw new Error("MOTION_RUN_FENCED")}static async renew(input){const key=this._key(input);if(!Number.isSafeInteger(input.leaseMs)||input.leaseMs<1||!Number.isSafeInteger(Date.now()+input.leaseMs))throw new Error("MOTION_RUN_LEASE_INVALID");return this._readWrite(key,record=>{this._owned(record,input);record.leaseUntil=Date.now()+input.leaseMs;return{record,result:record.leaseUntil}})}static async resume(input){const key=this._key(input);return this._readWrite(key,record=>{this._owned(record,input);if(record.stopOrigin)throw new Error("MOTION_RUN_STOPPED");if(record.state==="needs_review"||Object.keys(record.operations).length)throw new Error("MOTION_RUN_REVIEW_REQUIRED");record.state="running";return{record,result:true}})}static reviewedTranscriptFailures(record,project){if(record.subtitleReview!=="waiting")return[];if(project?.tool_project_id!==record.toolProjectId||project.flow_project_id!==record.flowProjectId||Number(project.data_json?.source_revision)!==record.sourceRevision)throw new Error("MOTION_RUN_FENCED");const reviewed=member=>{const frame=project.data_json.frames?.[member.frameId];return frame?.run_id===member.frameRunId&&frame.input_revision===member.inputRevision&&frame.stages?.transcribe?.state==="ready"&&!frame.stages.transcribe.worker&&frame.transcript?.manual===true&&typeof frame.transcript.has_speech==="boolean"};return Object.values(record.failedOperations||{}).filter(item=>!item.resolved&&["transcribe","direct_transcribe"].includes(item.stage)&&(item.fullAudioFrames||[item]).every(reviewed))}static async resolveReviewedTranscriptFailures(input,project){return this._readWrite(this._key(input),record=>{this._owned(record,input);const failures=this.reviewedTranscriptFailures(record,project);if(Object.keys(record.operations||{}).length||Object.values(record.reservations||{}).some(item=>item.token||item.pendingAttemptId||item.pendingSettlement))throw new Error("MOTION_RUN_DRAIN_REQUIRED");for(const item of failures)item.resolved=true;return{record,result:failures.length}})}static async setSubtitleReview(input,state){if(!["waiting","accepted"].includes(state))throw new Error("MOTION_RUN_INVALID");return this._readWrite(this._key(input),record=>{this._owned(record,input);if(state==="accepted"&&record.subtitleReview!=="waiting")throw new Error("MOTION_RUN_REVIEW_REQUIRED");record.subtitleReview=state;return{record,result:true}})}static async pause(input){const key=this._key(input);return this._readWrite(key,record=>{this._owned(record,input);if(record.stopOrigin)throw new Error("MOTION_RUN_STOPPED");if(record.state==="needs_review")throw new Error("MOTION_RUN_REVIEW_REQUIRED");record.state=Object.keys(record.operations).length?"pausing":"paused";return{record,result:record.state}})}static async stop(input){const key=this._key(input);if(!/^[A-Za-z0-9_-]{1,80}$/.test(String(input.stopOrigin||"")))throw new Error("MOTION_STOP_ORIGIN_INVALID");return this._readWrite(key,record=>{this._owned(record,input);record.stopOrigin=record.stopOrigin||input.stopOrigin;if(record.state!=="needs_review")record.state=Object.keys(record.operations).length?"stopping":"stopped";return{record,result:record.state}})}static async markSubmitted(input){const key=this._key(input);if(!/^[A-Za-z0-9_-]{1,120}$/.test(String(input.operationId||""))||["__proto__","constructor","prototype"].includes(input.operationId)||!/^[A-Za-z0-9_-]{1,80}$/.test(String(input.frameId||""))||!/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(String(input.frameRunId||""))||!Number.isSafeInteger(input.inputRevision)||input.inputRevision<1||input.workerId!==void 0&&(input.stage!=="transcribe"||!/^[A-Za-z0-9_-]{1,120}$/.test(String(input.workerId)))||input.queueItemId!==void 0&&(input.stage!=="flow"||input.queueItemId!==input.operationId)||input.restoreArtifactId!==void 0&&(input.stage!=="persist"||!/^[A-Za-z0-9_:-]{1,160}$/.test(input.restoreArtifactId))||input.stage==="transcribe"&&!/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(input.operationId)||input.stage==="merge"&&(!Number.isSafeInteger(input.artifactRevision)||input.artifactRevision<1)||!["transcribe","direct_transcribe","upload","flow","persist","merge"].includes(input.stage))throw new Error("MOTION_OPERATION_INVALID");return this._readWrite(key,(record,outbox)=>{this._owned(record,input);if(record.state==="needs_review")throw new Error("MOTION_RUN_REVIEW_REQUIRED");if(record.state!=="running")throw new Error("MOTION_RUN_NOT_RUNNING");if(input.stage==="direct_transcribe"&&record.executionMode!=="sequential")throw new Error("MOTION_OPERATION_SCOPE_MISMATCH");if(Object.hasOwn(record.operations,input.operationId)||Object.hasOwn(record.failedOperations||{},input.operationId)||Object.hasOwn(record.completedOperations||{},input.operationId))throw new Error("MOTION_OPERATION_EXISTS");if(Object.values(record.operations).some(operation=>operation.frameId===input.frameId&&operation.stage===input.stage)){throw new Error("MOTION_OPERATION_ACTIVE")}if(input.stage==="transcribe"&&Object.values(record.operations).some(op=>op.fullAudioFrames?.some(m=>m.frameId===input.frameId)))throw new Error("MOTION_OPERATION_ACTIVE");if(input.workerId&&Object.values(record.operations).some(operation=>operation.workerId===input.workerId)){throw new Error("MOTION_WORKER_ALREADY_BOUND")}if(input.stage==="upload"&&record.rejectedUploads)delete record.rejectedUploads[`frame:${input.frameId}`];if(input.stage==="flow"&&record.rejectedFlows)delete record.rejectedFlows[`frame:${input.frameId}`];let failures=0;if(input.stage==="transcribe"||input.stage==="direct_transcribe"){failures=Object.values(record.failedOperations||{}).filter(item=>item.frameId===input.frameId&&item.stage===input.stage&&item.frameRunId===input.frameRunId&&item.inputRevision===input.inputRevision).length;if(failures>0&&(!record.retryEnabled||failures>record.transcriptMaxRetries)){throw new Error("MOTION_TRANSCRIPT_RETRY_EXHAUSTED")}}if(input.fullAudioFrames!==void 0){const members=input.fullAudioFrames;if(record.fullAudioTranscription!==true||record.executionMode!=="parallel"||input.stage!=="transcribe"||!Array.isArray(input.fullAudioTimeline)||!input.fullAudioTimeline.length||input.fullAudioTimeline.length>120||!Array.isArray(members)||!members.length||members.length>120||members.some(m=>!input.fullAudioTimeline.some(t=>JSON.stringify(t)===JSON.stringify(m)))||new Set(members.map(m=>m.frameId)).size!==members.length||members.some((m,i)=>!/^[A-Za-z0-9_-]{1,80}$/.test(m.frameId||"")||!/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(m.frameRunId||"")||!Number.isSafeInteger(m.inputRevision)||m.inputRevision<1||!Number.isFinite(m.start)||!Number.isFinite(m.end)||m.start<0||m.end<=m.start||i>0&&m.start<members[i-1].end)||members[0].frameId!==input.frameId||members[0].frameRunId!==input.frameRunId||members[0].inputRevision!==input.inputRevision)throw new Error("MOTION_FULL_AUDIO_SCOPE_INVALID");if(Object.values(record.failedOperations||{}).some(op=>op.fullAudioFrames&&!op.resolved&&op.reason==="MOTION_FULL_AUDIO_OUTCOME_UNKNOWN"))throw new Error("MOTION_FULL_AUDIO_OUTCOME_UNKNOWN");if(Object.values(record.completedOperations||{}).some(op=>op.fullAudioFrames&&op.fullAudioFrames.some(m=>members.some(next=>next.frameId===m.frameId&&next.frameRunId===m.frameRunId&&next.inputRevision===m.inputRevision))))throw new Error("MOTION_FULL_AUDIO_ALREADY_COMPLETED");if(Object.values(record.operations).some(op=>op.stage==="transcribe"&&(op.fullAudioFrames||[op]).some(m=>members.some(next=>next.frameId===m.frameId))))throw new Error("MOTION_OPERATION_ACTIVE")}record.operations[input.operationId]={frameId:input.frameId,frameRunId:input.frameRunId,inputRevision:input.inputRevision,stage:input.stage,...input.fullAudioFrames&&{fullAudioFrames:structuredClone(input.fullAudioFrames),fullAudioTimeline:structuredClone(input.fullAudioTimeline)},...input.queueItemId!==void 0&&{queueItemId:input.queueItemId},...input.restoreArtifactId!==void 0&&{restoreArtifactId:input.restoreArtifactId},...input.stage==="merge"&&{artifactRevision:input.artifactRevision},...["transcribe","direct_transcribe"].includes(input.stage)&&{retryCount:failures,...input.workerId&&{workerId:input.workerId}}};if(input.stage==="transcribe")this._queueTranscript(record,outbox,input.operationId,record.operations[input.operationId],"running");record.state="running";return{record,result:true}})}static async failDirectTranscript(input){const key=this._key(input);return this._readWrite(key,record=>{this._owned(record,input);const operation=record.operations?.[input.operationId];if(!operation||operation.stage!=="direct_transcribe"||operation.frameId!==input.frameId||operation.frameRunId!==input.frameRunId||operation.inputRevision!==input.inputRevision)throw new Error("MOTION_OPERATION_SCOPE_MISMATCH");record.failedOperations||(record.failedOperations={});const code=String(input.reason||"");record.failedOperations[input.operationId]={...operation,reason:/^[A-Za-z][A-Za-z0-9_:-]{0,99}$/.test(code)?code:"MOTION_TRANSCRIPTION_FAILED",resolved:false};delete record.operations[input.operationId];return{record,result:true}})}static async cancelDirectTranscript(input){const key=this._key(input);return this._readWrite(key,record=>{this._owned(record,input);const operation=record.operations?.[input.operationId];if(!operation||operation.stage!=="direct_transcribe"||operation.frameId!==input.frameId||operation.frameRunId!==input.frameRunId||operation.inputRevision!==input.inputRevision)throw new Error("MOTION_OPERATION_SCOPE_MISMATCH");delete record.operations[input.operationId];return{record,result:true}})}static async storeDirectTranscript(input){const key=this._key(input);const transcript=input.transcript;if(!transcript||typeof transcript.hasSpeech!=="boolean"||typeof transcript.transcript!=="string"||transcript.transcript.length>12e3||transcript.hasSpeech&&!transcript.transcript.trim()||!transcript.hasSpeech&&transcript.transcript.trim()||typeof transcript.detectedLanguage!=="string"||transcript.detectedLanguage&&!/^[A-Za-z][A-Za-z0-9-]{0,31}$/.test(transcript.detectedLanguage)||transcript.translatedText!==null&&typeof transcript.translatedText!=="string"||(transcript.translatedText?.length||0)>12e3||!transcript.hasSpeech&&transcript.translatedText)throw new Error("MOTION_TRANSCRIPT_INVALID");const normalized={hasSpeech:transcript.hasSpeech,transcript:transcript.transcript.trim(),detectedLanguage:transcript.detectedLanguage,translatedText:transcript.translatedText?.trim()||null,...transcript.speechTimeline!=null&&{speechTimeline:MotionTranscriptContract.timeline(transcript.speechTimeline,{transcript:transcript.transcript,translatedText:transcript.translatedText||"",hasSpeech:transcript.hasSpeech})}};const bytes=await crypto.subtle.digest("SHA-256",new TextEncoder().encode(JSON.stringify({normalized,originalTranscript:input.originalTranscript||null})));const digest=Array.from(new Uint8Array(bytes),value=>value.toString(16).padStart(2,"0")).join("");return this._readWrite(key,(record,outbox)=>{this._owned(record,input);const operation=record.operations?.[input.operationId];if(!operation){const prior=record.completedOperations?.[input.operationId];if(prior?.stage==="direct_transcribe"&&prior.frameId===input.frameId&&prior.frameRunId===input.frameRunId&&prior.inputRevision===input.inputRevision&&prior.digest===digest)return{result:prior.eventId};throw new Error("MOTION_OPERATION_SCOPE_MISMATCH")}if(!operation||operation.stage!=="direct_transcribe"||operation.frameId!==input.frameId||operation.frameRunId!==input.frameRunId||operation.inputRevision!==input.inputRevision)throw new Error("MOTION_OPERATION_SCOPE_MISMATCH");const event=this._queueTranscript(record,outbox,input.operationId,operation,"direct_ready",{transcript:normalized,originalTranscript:input.originalTranscript||null});record.completedOperations||(record.completedOperations={});record.completedOperations[input.operationId]={frameId:operation.frameId,frameRunId:operation.frameRunId,inputRevision:operation.inputRevision,stage:"direct_transcribe",digest,eventId:event.eventId};delete record.operations[input.operationId];for(const failed of Object.values(record.failedOperations||{})){if(failed.stage==="direct_transcribe"&&failed.frameId===operation.frameId&&failed.frameRunId===operation.frameRunId&&failed.inputRevision===operation.inputRevision)failed.resolved=true}return{record,result:event.eventId}})}static async setFlowDownloadReceipt(input){const receipt=input.downloadReceipt;const identity=value=>typeof value==="string"&&/^[A-Za-z0-9_:=\-]{1,1024}$/.test(value);if(!receipt||receipt.version!==1||!["v1","v2"].includes(receipt.apiDriver)||!["native","upscale"].includes(receipt.route)||!["resolving","upscale_started","ready","rejected"].includes(receipt.state)||![receipt.sourceMediaId,receipt.sourceOperationId,receipt.projectId].every(identity)||![receipt.requestedResolution,receipt.resolution].every(value=>typeof value==="string"&&/^[A-Za-z0-9]{1,16}$/.test(value))||receipt.state==="ready"&&![receipt.mediaId,receipt.operationId].every(identity)||receipt.state==="ready"&&(receipt.route==="native"?receipt.mediaId!==receipt.sourceMediaId||receipt.operationId!==receipt.sourceOperationId:receipt.mediaId===receipt.sourceMediaId||receipt.apiDriver==="v2"&&receipt.operationId!==receipt.mediaId)||receipt.apiDriver==="v2"&&(!Number.isSafeInteger(receipt.protocolRevision)||receipt.protocolRevision<1||typeof receipt.protocolFingerprint!=="string"||!receipt.protocolFingerprint))throw new Error("MOTION_PERSIST_SCOPE_CHANGED");const fields=["version","state","route","sourceMediaId","sourceOperationId","projectId","apiDriver","protocolRevision","protocolFingerprint","requestedResolution","resolution","mediaId","operationId"];const normalized=Object.fromEntries(fields.map(key=>[key,receipt[key]??null]));return this._readWrite(this._key(input),record=>{this._owned(record,input);const op=record.operations?.[input.operationId];if(!op||!["flow","persist"].includes(op.stage)||op.stage!==input.stage||op.frameId!==input.frameId||op.frameRunId!==input.frameRunId||op.inputRevision!==input.inputRevision||receipt.projectId!==record.flowProjectId)throw new Error("MOTION_OPERATION_SCOPE_MISMATCH");const prior=op.downloadReceipt;if(prior&&["sourceMediaId","sourceOperationId","projectId","apiDriver","protocolRevision","protocolFingerprint","requestedResolution"].some(key=>(prior[key]??null)!==normalized[key]))throw new Error("MOTION_PERSIST_SCOPE_CHANGED");if(prior?.state==="ready"&&["state","route","resolution","mediaId","operationId"].some(key=>prior[key]!==normalized[key]))throw new Error("MOTION_PERSIST_SCOPE_CHANGED");op.downloadReceipt=normalized;return{record,result:normalized}})}static async markFlowDownloadStarted(input){const key=this._key(input);return this._readWrite(key,record=>{this._owned(record,input);const operation=record.operations?.[input.operationId];if(!operation||!["flow","persist"].includes(operation.stage)||operation.stage!==input.stage||operation.frameId!==input.frameId||operation.frameRunId!==input.frameRunId||operation.inputRevision!==input.inputRevision)throw new Error("MOTION_OPERATION_SCOPE_MISMATCH");const attempts=Number.isSafeInteger(operation.persistDownloadAttempts)?operation.persistDownloadAttempts:operation.persistStarted===true||operation.stage==="persist"&&input.retryDownload===true?1:0;if(attempts>0&&input.retryDownload!==true)throw new Error("MOTION_PERSIST_RECONCILE_REQUIRED");const retries=record.retryEnabled===true&&Number.isSafeInteger(record.transcriptMaxRetries)?record.transcriptMaxRetries:0;if(attempts>=1+retries)throw new Error("MOTION_PERSIST_RETRY_EXHAUSTED");operation.persistStarted=true;operation.persistDownloadAttempts=attempts+1;return{record,result:operation.persistDownloadAttempts}})}static async failTranscript(input){const key=this._key(input);if(!/^[A-Za-z][A-Za-z0-9_:-]{0,99}$/.test(String(input.reason||"")))throw new Error("MOTION_OPERATION_OUTCOME_INVALID");return this._readWrite(key,(record,outbox)=>{this._owned(record,input);const operation=record.operations[input.operationId];if(!operation){const prior=record.failedOperations?.[input.operationId];if(prior&&prior.stage==="transcribe"&&input.stage==="transcribe"&&prior.frameId===input.frameId&&prior.frameRunId===input.frameRunId&&prior.inputRevision===input.inputRevision)return{result:true};throw new Error("MOTION_OPERATION_UNKNOWN")}if(operation.stage!=="transcribe"||input.stage!=="transcribe"||operation.frameId!==input.frameId||operation.frameRunId!==input.frameRunId||operation.inputRevision!==input.inputRevision)throw new Error("MOTION_OPERATION_SCOPE_MISMATCH");this._failTranscriptRecord(record,outbox,input.operationId,operation,input.reason);if(input.diagnostic&&["provider_task","monitor"].includes(input.diagnostic.stage)&&/^[A-Za-z][A-Za-z0-9_:-]{0,99}$/.test(String(input.diagnostic.code||"")))record.failedOperations[input.operationId].diagnostic={stage:input.diagnostic.stage,code:input.diagnostic.code};return{record,result:true}})}static _failTranscriptRecord(record,outbox,operationId,operation,reason){record.failedOperations||(record.failedOperations={});record.failedOperations[operationId]={...operation,reason,resolved:false};const failures=Object.values(record.failedOperations).filter(item=>item.frameId===operation.frameId&&item.frameRunId===operation.frameRunId&&item.inputRevision===operation.inputRevision).length;const retryExhausted=reason==="MOTION_FULL_AUDIO_OUTCOME_UNKNOWN"||!record.retryEnabled||failures>record.transcriptMaxRetries;this._queueTranscript(record,outbox,operationId,operation,"failed",{errorCode:reason,retryExhausted});delete record.operations[operationId];if(record.stopOrigin){if(!Object.keys(record.operations).length)record.state="stopped"}else if(record.state==="pausing"&&!Object.keys(record.operations).length){record.state="paused"}}static async failClosedWorker(input){const key=this._key(input);if(!Number.isSafeInteger(input.epoch)||input.epoch<1||typeof input.runId!=="string"||!input.runId||typeof input.workerId!=="string"||!input.workerId||typeof input.attemptId!=="string"||!input.attemptId)return false;return this._readWrite(key,(record,outbox)=>{const operation=record?.operations?.[input.attemptId];if(!record||record.runId!==input.runId||record.epoch!==input.epoch||operation?.stage!=="transcribe"||operation.workerId!==input.workerId)return{result:false};this._failTranscriptRecord(record,outbox,input.attemptId,operation,operation.fullAudioFrames?"MOTION_FULL_AUDIO_OUTCOME_UNKNOWN":"MOTION_WORKER_CLOSED");return{record,result:true}})}static async storeTranscript(input){const key=this._key(input);const transcript=input.transcript;if(!transcript||typeof transcript.hasSpeech!=="boolean"||typeof transcript.transcript!=="string"||transcript.transcript.length>12e3||transcript.hasSpeech&&!transcript.transcript.trim()||!transcript.hasSpeech&&transcript.transcript.trim()||typeof transcript.detectedLanguage!=="string"||transcript.detectedLanguage&&!/^[A-Za-z][A-Za-z0-9-]{0,31}$/.test(transcript.detectedLanguage)||transcript.translatedText!==null&&typeof transcript.translatedText!=="string"||typeof transcript.translatedText==="string"&&transcript.translatedText.length>12e3||!transcript.hasSpeech&&transcript.translatedText)throw new Error("MOTION_TRANSCRIPT_INVALID");const normalized={hasSpeech:transcript.hasSpeech,transcript:transcript.transcript.trim(),detectedLanguage:transcript.detectedLanguage,translatedText:transcript.translatedText?.trim()||null,...transcript.speechTimeline!=null&&{speechTimeline:MotionTranscriptContract.timeline(transcript.speechTimeline,{transcript:transcript.transcript,translatedText:transcript.translatedText||"",hasSpeech:transcript.hasSpeech})}};const digestBytes=await crypto.subtle.digest("SHA-256",new TextEncoder().encode(JSON.stringify(normalized)));const digest=Array.from(new Uint8Array(digestBytes),value=>value.toString(16).padStart(2,"0")).join("");return this._readWrite(key,(record,outbox)=>{this._owned(record,input);const operation=record.operations[input.operationId];if(!operation){const prior=record.completedOperations?.[input.operationId];if(!prior)throw new Error("MOTION_OPERATION_UNKNOWN");if(prior.frameId!==input.frameId||prior.frameRunId!==input.frameRunId||prior.inputRevision!==input.inputRevision||input.stage!=="transcribe"||prior.digest!==digest)throw new Error("MOTION_TRANSCRIPT_RESULT_CONFLICT");return{result:prior.eventId}}if(operation.stage!=="transcribe"||input.stage!=="transcribe"||operation.frameId!==input.frameId||operation.frameRunId!==input.frameRunId||operation.inputRevision!==input.inputRevision)throw new Error("MOTION_OPERATION_SCOPE_MISMATCH");if(operation.fullAudioFrames)throw new Error("MOTION_TRANSCRIPT_INVALID");const event=this._queueTranscript(record,outbox,input.operationId,operation,"ready",{transcript:normalized});record.completedOperations||(record.completedOperations={});record.completedOperations[input.operationId]={frameId:operation.frameId,frameRunId:operation.frameRunId,inputRevision:operation.inputRevision,workerId:operation.workerId||null,digest,eventId:event.eventId};delete record.operations[input.operationId];for(const failed of Object.values(record.failedOperations||{})){if(failed.frameId===operation.frameId&&failed.frameRunId===operation.frameRunId&&failed.inputRevision===operation.inputRevision)failed.resolved=true}if(!Object.keys(record.operations).length&&["pausing","stopping"].includes(record.state)){record.state=record.stopOrigin?"stopped":"paused"}return{record,result:event.eventId}})}static async storeFullAudioTranscript(input){const key=this._key(input),members=input.fullAudioFrames,transcripts=input.transcripts;if(input.stage!=="transcribe"||!Array.isArray(members)||!members.length||!Array.isArray(transcripts)||transcripts.length!==members.length||transcripts.some((t,i)=>t.frameId!==members[i].frameId||typeof t.hasSpeech!=="boolean"||typeof t.transcript!=="string"||t.transcript.length>12e3||t.hasSpeech!==!!t.transcript.trim()||typeof t.detectedLanguage!=="string"||!/^(?:[A-Za-z][A-Za-z0-9-]{0,31})?$/.test(t.detectedLanguage)||!(t.translatedText===null||typeof t.translatedText==="string")||(t.translatedText?.length||0)>12e3||!t.hasSpeech&&t.translatedText))throw new Error("MOTION_TRANSCRIPT_INVALID");const normalized=transcripts.map(t=>({frameId:t.frameId,hasSpeech:t.hasSpeech,transcript:t.transcript.trim(),detectedLanguage:t.detectedLanguage,translatedText:t.translatedText?.trim()||null,...t.speechTimeline!=null&&{speechTimeline:MotionTranscriptContract.timeline(t.speechTimeline,{transcript:t.transcript,translatedText:t.translatedText||"",hasSpeech:t.hasSpeech})}}));const digest=Array.from(new Uint8Array(await crypto.subtle.digest("SHA-256",new TextEncoder().encode(JSON.stringify(normalized)))),b=>b.toString(16).padStart(2,"0")).join("");return this._readWrite(key,(record,outbox)=>{this._owned(record,input);const operation=record.operations[input.operationId]||record.completedOperations?.[input.operationId];if(!operation||operation.frameId!==input.frameId||operation.frameRunId!==input.frameRunId||operation.inputRevision!==input.inputRevision||operation.workerId!==input.workerId||JSON.stringify(operation.fullAudioFrames)!==JSON.stringify(members))throw new Error("MOTION_TRANSCRIPT_RESULT_CONFLICT");if(record.completedOperations?.[input.operationId]){if(operation.digest!==digest)throw new Error("MOTION_TRANSCRIPT_RESULT_CONFLICT");return{result:operation.eventIds}}const events=members.map((member,i)=>this._queueTranscript(record,outbox,input.operationId,{...member,retryCount:operation.retryCount,fullAudioMember:true},"ready",{transcript:normalized[i]}));record.completedOperations||(record.completedOperations={});record.completedOperations[input.operationId]={...operation,digest,eventIds:events.map(e=>e.eventId)};delete record.operations[input.operationId];for(const failed of Object.values(record.failedOperations||{})){if(failed.fullAudioFrames&&JSON.stringify(failed.fullAudioFrames)===JSON.stringify(members))failed.resolved=true}if(!Object.keys(record.operations).length&&["pausing","stopping"].includes(record.state))record.state=record.stopOrigin?"stopped":"paused";return{record,result:events.map(e=>e.eventId)}})}static async listTranscriptOutbox(scope){const key=this._key(scope);const db=await this._db();return new Promise((resolve,reject)=>{const request=db.transaction("outbox","readonly").objectStore("outbox").index("scope").getAll(key);request.onsuccess=()=>resolve(request.result.sort((a,b)=>a.sequence-b.sequence));request.onerror=()=>reject(request.error||new Error("MOTION_OUTBOX_READ_FAILED"))})}static async ackTranscriptOutbox({userId,toolProjectId,eventId,frameId=null}){const key=this._key({userId,toolProjectId});const db=await this._db();return new Promise((resolve,reject)=>{const tx=db.transaction("outbox","readwrite");const store=tx.objectStore("outbox");let failure;let removed=false;tx.oncomplete=()=>resolve(removed);tx.onabort=()=>reject(failure||tx.error||new Error("MOTION_OUTBOX_ACK_FAILED"));const request=store.index("scope").getAll(key);request.onsuccess=()=>{const events=request.result.filter(event=>frameId===null||event.frameId===frameId).sort((a,b)=>a.sequence-b.sequence);if(!events.some(event=>event.eventId===eventId))return;if(events[0].eventId!==eventId){failure=new Error("MOTION_OUTBOX_ORDER_INVALID");tx.abort();return}store.delete(eventId);removed=true}})}static async supersedeFrameUpload(input){return this._readWrite(this._key(input),record=>{if(input.ownerId)this._owned(record,input);else if(record?.ownerId&&record.leaseUntil>Date.now())throw new Error("PROJECT_ALREADY_RUNNING");const project=input.project,operation=record?.operations?.[input.operationId];const frame=project?.data_json?.frames?.[operation?.frameId];if(!record||project?.tool_project_id!==input.toolProjectId||project.flow_project_id!==record.flowProjectId||Number(project.data_json?.source_revision)!==record.sourceRevision||operation?.stage!=="upload"||!operation?.frameRunId||!Number.isSafeInteger(operation.inputRevision)||operation.inputRevision<1||!frame?.run_id||frame.run_id===operation.frameRunId||!Number.isSafeInteger(frame.input_revision)||frame.input_revision<=operation.inputRevision){throw new Error("MOTION_UPLOAD_RECEIPT_RECONCILE_REQUIRED")}record.failedOperations||(record.failedOperations={});record.failedOperations[input.operationId]={...operation,reason:"MOTION_FRAME_INPUT_SUPERSEDED",resolved:true,supersededByFrameRunId:frame.run_id,supersededByInputRevision:frame.input_revision};delete record.operations[input.operationId];if(!Object.keys(record.operations).length&&["needs_review","pausing","stopping"].includes(record.state)){const failed=Object.values(record.failedOperations).some(item=>item.resolved!==true);record.state=record.stopOrigin?"stopped":failed?"failed":"paused"}if(!input.ownerId){record.ownerId=null;record.leaseUntil=0;record.epoch=(record.epoch||0)+1}return{record,result:true}})}static async settle(input){const key=this._key(input);if(!["received","rejected"].includes(input.outcome))throw new Error("MOTION_OPERATION_OUTCOME_INVALID");return this._readWrite(key,record=>{this._owned(record,input);if(!Object.hasOwn(record.operations,input.operationId))throw new Error("MOTION_OPERATION_UNKNOWN");const operation=record.operations[input.operationId];if(operation.frameId!==input.frameId||operation.frameRunId!==input.frameRunId||operation.inputRevision!==input.inputRevision||operation.stage!==input.stage){throw new Error("MOTION_OPERATION_SCOPE_MISMATCH")}if(operation.stage==="transcribe")throw new Error("MOTION_TRANSCRIPT_OUTBOX_REQUIRED");if(input.notDispatched===true){const flowRejected=operation.stage==="flow"&&["MOTION_CANCELLED","MOTION_FLOW_PRE_DISPATCH_FAILED"].includes(input.errorCode);const uploadRejected=operation.stage==="upload"&&["UPLOAD_STOPPED","MOTION_UPLOAD_FAILED"].includes(input.errorCode);if(input.outcome!=="rejected"||!flowRejected&&!uploadRejected)throw new Error("MOTION_OPERATION_OUTCOME_INVALID");const field=flowRejected?"rejectedFlows":"rejectedUploads";record[field]||(record[field]={});record[field][`frame:${input.frameId}`]={frameRunId:operation.frameRunId,inputRevision:operation.inputRevision,errorCode:input.errorCode}}delete record.operations[input.operationId];if(!Object.keys(record.operations).length&&["needs_review","pausing","stopping"].includes(record.state)){const failed=Object.values(record.failedOperations||{}).some(item=>item.resolved!==true);record.state=record.stopOrigin?"stopped":failed?"failed":"paused"}return{record,result:true}})}static async editFrameResult(input){const key=this._key(input);const matchesEvent=event=>event.frameId===input.frameId&&event.frameRunId===input.frameRunId&&event.inputRevision===input.inputRevision&&event.sourceRevision===input.sourceRevision;return this._readWrite(key,(record,outbox,events)=>{if(!record||record.sourceRevision!==input.sourceRevision)return{result:true};if(input.owner)this._owned(record,input.owner);else if(record.ownerId&&record.leaseUntil>Date.now())throw new Error("PROJECT_ALREADY_RUNNING");const pending=record.reservations?.[input.frameId];const reservation=input.owner&&(pending?.frameRunId!==input.frameRunId||pending?.inputRevision!==input.inputRevision)?null:pending;if(reservation?.token||reservation?.pendingAttemptId||reservation?.pendingSettlement)throw new Error("MOTION_RESERVATION_PENDING");const matches=operation=>operation.frameId===input.frameId&&operation.frameRunId===input.frameRunId&&operation.inputRevision===input.inputRevision;if(Object.values(record.operations||{}).some(operation=>matches(operation)&&!["flow","persist"].includes(operation.stage)))throw new Error("FRAME_OPERATION_MUST_RECONCILE");if(input.checkOnly)return{result:true};for(const event of events)if(matchesEvent(event)&&["running","failed"].includes(event.state))outbox.delete(event.eventId);for(const group of["operations","failedOperations","completedOperations"]){for(const[id,operation]of Object.entries(record[group]||{}))if(matches(operation))delete record[group][id]}if(reservation)delete record.reservations[input.frameId];if(!Object.keys(record.operations||{}).length&&["needs_review","pausing","stopping"].includes(record.state)){const failed=Object.values(record.failedOperations||{}).some(item=>item.resolved!==true);record.state=record.stopOrigin?"stopped":failed?"failed":"paused"}if(!input.owner){record.ownerId=null;record.leaseUntil=0;record.epoch=(record.epoch||0)+1}record.updatedAt=Date.now();return{record,result:true}},event=>matchesEvent(event)&&!["running","failed"].includes(event.state))}static async refreshTransport(owner,input){const key=this._key(owner);return this._readWrite(key,record=>{this._owned(record,owner);const target=input.flowTarget,previous=record.flowTarget;if((previous||target)&&(!previous||!target||!Number.isInteger(target.tabId)||target.tabId<0||["projectId","driverKey","origin","mode"].some(name=>previous[name]!==target[name])))throw new Error("MOTION_RUN_FENCED");const nextTarget=previous?{...previous,tabId:target.tabId}:void 0;let preparation=record.preparationSnapshot;if(preparation){const proposed=input.preparationSnapshot;if(!proposed||proposed.accountTabId!==preparation.accountTabId&&proposed.settingsFingerprint===preparation.settingsFingerprint)throw new Error("MOTION_RUN_FENCED");preparation={...preparation,...preparation.flowTarget&&{flowTarget:{...preparation.flowTarget,tabId:target.tabId}},...preparation.layout&&{layout:{...preparation.layout,sourceWindowId:proposed.layout?.sourceWindowId}}};if(preparation.layout&&(!Number.isInteger(preparation.layout.sourceWindowId)||preparation.layout.sourceWindowId<0)||JSON.stringify({...proposed,settingsFingerprint:preparation.settingsFingerprint,accountTabId:preparation.accountTabId})!==JSON.stringify(preparation))throw new Error("MOTION_RUN_FENCED")}const changed=JSON.stringify(previous)!==JSON.stringify(nextTarget)||JSON.stringify(record.preparationSnapshot)!==JSON.stringify(preparation);if(!changed)return{result:record};if(nextTarget)record.flowTarget=nextTarget;if(preparation)record.preparationSnapshot=preparation;record.updatedAt=Date.now();return{record,result:record}})}static async refreshSettings(owner,input){const key=this._key(owner);if(!/^[0-9a-f]{64}$/.test(String(input.settingsSnapshot||""))||["autoDownloadFinal","useOriginalAudio","continuityEnabled"].some(name=>typeof input[name]!=="boolean")||!/^[A-Za-z0-9]{1,20}$/.test(String(input.downloadResolution||""))||!/^[0-9]{1,2}:[0-9]{1,2}$/.test(String(input.downloadRatio||"")))throw new Error("MOTION_RUN_INVALID");return this._readWrite(key,record=>{this._owned(record,owner);if(["sourceRevision","profileRevision","executionMode","profileKey"].some(name=>record[name]!==input[name])||(record.profilePromptVariant||"legacy")!==(input.profilePromptVariant||"legacy")||record.flowProjectId!==input.flowProjectId||record.runId!==input.runId||["tabId","projectId","driverKey","origin"].some(name=>record.flowTarget?.[name]!==input.flowTarget?.[name])||!["web","api"].includes(input.flowTarget?.mode)||record.flowTarget?.mode!==input.flowTarget.mode&&record.settingsSnapshot===input.settingsSnapshot)throw new Error("MOTION_RUN_FENCED");if(Object.keys(record.operations||{}).length||Object.values(record.reservations||{}).some(item=>item.token||item.pendingAttemptId||item.pendingSettlement))throw new Error("MOTION_RUN_DRAIN_REQUIRED");if(input.preparationSnapshot&&(input.preparationSnapshot.settingsFingerprint!==input.settingsSnapshot||input.preparationSnapshot.userId!==record.userId||input.preparationSnapshot.executionMode!==record.executionMode||input.preparationSnapshot.version!==1||!/^[0-9a-f]{64}$/.test(input.preparationSnapshot.configFingerprint||"")||JSON.stringify(input.preparationSnapshot.flowTarget)!==JSON.stringify(input.flowTarget)))throw new Error("MOTION_RUN_INVALID");const nextPreparation=record.preparationSnapshot&&{...record.preparationSnapshot,settingsFingerprint:input.settingsSnapshot,flowTarget:{...record.preparationSnapshot.flowTarget,mode:input.flowTarget.mode}};if(nextPreparation&&record.settingsSnapshot!==input.settingsSnapshot&&Object.hasOwn(input.preparationSnapshot||{},"accountTabId")){const tabId=input.preparationSnapshot.accountTabId;if(tabId!==null&&(!Number.isSafeInteger(tabId)||tabId<0))throw new Error("MOTION_RUN_INVALID");nextPreparation.accountTabId=tabId}if(record.preparationSnapshot&&JSON.stringify(nextPreparation)!==JSON.stringify(input.preparationSnapshot))throw new Error("MOTION_RUN_FENCED");if(record.flowTarget)record.flowTarget={...record.flowTarget,mode:input.flowTarget.mode};for(const name of["settingsSnapshot","preparationSnapshot","autoDownloadFinal","useOriginalAudio","continuityEnabled","downloadResolution","downloadRatio","transcriptionProvider","transcriptSettings"]){if(input[name]===void 0)delete record[name];else record[name]=input[name]}record.updatedAt=Date.now();return{record,result:record}},true)}static async release(input){const key=this._key(input);return this._readWrite(key,record=>{this._owned(record,input);if(Object.keys(record.operations).length)throw new Error("MOTION_RUN_DRAIN_REQUIRED");const failed=Object.values(record.failedOperations||{}).some(item=>item.resolved!==true);record.ownerId=null;record.leaseUntil=0;record.state=record.stopOrigin?"stopped":failed?"failed":"paused";return{record,result:true}})}static async yieldReview(input){const key=this._key(input);return this._readWrite(key,record=>{this._owned(record,input);if(!Object.keys(record.operations||{}).length)throw new Error("MOTION_RUN_REVIEW_NOT_REQUIRED");if(Object.values(record.operations).some(operation=>operation.stage==="transcribe"))throw new Error("MOTION_WORKER_DRAIN_REQUIRED");record.state="needs_review";record.ownerId=null;record.leaseUntil=0;return{record,result:true}})}static isGenerationComplete(data){const completion=data?.generation_completion,frames=data?.frames||{},ids=Object.keys(frames);return data?.requires_resplit!==true&&Number.isSafeInteger(data?.source_revision)&&data.source_revision>0&&completion?.source_revision===data.source_revision&&ids.length>0&&Object.keys(completion?.frames||{}).length===ids.length&&ids.every(id=>typeof frames[id]?.run_id==="string"&&!!frames[id].run_id&&Number.isSafeInteger(frames[id]?.input_revision)&&frames[id].input_revision>0&&frames[id]?.stages?.persist?.state==="ready"&&!!frames[id]?.stages?.persist?.artifact_id&&completion.frames[id]?.run_id===frames[id].run_id&&completion.frames[id]?.input_revision===frames[id].input_revision&&completion.frames[id]?.artifact_id===frames[id].stages.persist.artifact_id)}static async complete(input){const key=this._key(input);if(!Number.isSafeInteger(input.sourceRevision)||input.sourceRevision<1||input.transcriptsVerified!==true&&input.framesVerified!==true&&(input.finalVerified!==true||!/^[A-Za-z0-9_-]{1,120}$/.test(String(input.finalArtifactId||""))))throw new Error("MOTION_FINAL_UNVERIFIED");const db=await this._db();return new Promise((resolve,reject)=>{const tx=db.transaction(["runs","outbox"],"readwrite");const runs=tx.objectStore("runs");const get=runs.get(key),count=tx.objectStore("outbox").index("scope").count(key);let failure,ready=0;tx.oncomplete=()=>resolve(true);tx.onabort=()=>reject(failure||tx.error||new Error("MOTION_RUN_TRANSACTION_FAILED"));const apply=()=>{if(++ready!==2)return;try{const record=get.result;this._owned(record,input);if(input.framesVerified===true&&(!this.isGenerationComplete(input.project?.data_json)||input.project.tool_project_id!==record.toolProjectId||input.project.flow_project_id!==record.flowProjectId||input.project.data_json.source_revision!==record.sourceRevision))throw new Error("MOTION_FINAL_UNVERIFIED");if(input.transcriptsVerified===true&&(record.taskKind!=="transcript_batch"||JSON.stringify(record.transcriptFrameIds)!==JSON.stringify(input.transcriptFrameIds)))throw new Error("MOTION_TRANSCRIPT_BATCH_UNVERIFIED");if(record.sourceRevision!==input.sourceRevision||record.state!=="running"||record.stopOrigin||Object.keys(record.operations||{}).length||Object.values(record.failedOperations||{}).some(item=>!item.resolved)||Object.values(record.reservations||{}).some(item=>item.token||item.pendingAttemptId||item.pendingSettlement)){throw new Error("MOTION_RUN_DRAIN_REQUIRED")}if(count.result)throw new Error("MOTION_OUTBOX_PENDING");record.state="completed";record.ownerId=null;record.leaseUntil=0;if(input.framesVerified===true){record.generationCompletion=structuredClone(input.project.data_json.generation_completion);record.finalArtifactId=null}else if(input.transcriptsVerified!==true)record.finalArtifactId=input.finalArtifactId;runs.put(record)}catch(error){failure=error;tx.abort()}};get.onsuccess=apply;count.onsuccess=apply})}}__publicField(MotionRunJournal,"DB_NAME","tobyflow_motion_runs");__publicField(MotionRunJournal,"_dbPromise",null);globalThis.MotionRunJournal=MotionRunJournal;
+var __defProp = Object.defineProperty;
+var __defNormalProp = (obj, key, value) =>
+  key in obj
+    ? __defProp(obj, key, {
+        enumerable: true,
+        configurable: true,
+        writable: true,
+        value,
+      })
+    : (obj[key] = value);
+var __publicField = (obj, key, value) =>
+  __defNormalProp(obj, typeof key !== "symbol" ? key + "" : key, value);
+class MotionRunJournal {
+  static _key({ userId, toolProjectId }) {
+    if (
+      !Number.isSafeInteger(Number(userId)) ||
+      Number(userId) < 1 ||
+      !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(
+        String(toolProjectId || ""),
+      )
+    ) {
+      throw new Error("MOTION_RUN_SCOPE_INVALID");
+    }
+    return `${Number(userId)}\0${toolProjectId}`;
+  }
+  static async _db() {
+    if (!this._dbPromise)
+      this._dbPromise = new Promise((resolve, reject) => {
+        const request = indexedDB.open(this.DB_NAME, 3);
+        request.onupgradeneeded = () => {
+          const runs = !request.result.objectStoreNames.contains("runs")
+            ? request.result.createObjectStore("runs", { keyPath: "key" })
+            : request.transaction.objectStore("runs");
+          if (!runs.indexNames.contains("user"))
+            runs.createIndex("user", "userId");
+          if (!request.result.objectStoreNames.contains("outbox")) {
+            const store = request.result.createObjectStore("outbox", {
+              keyPath: "eventId",
+            });
+            store.createIndex("scope", "scope");
+          }
+          const outbox = request.transaction.objectStore("outbox");
+          if (!outbox.indexNames.contains("user"))
+            outbox.createIndex("user", "userId");
+        };
+        request.onsuccess = () => {
+          const db = request.result;
+          db.onversionchange = () => {
+            db.close();
+            this._dbPromise = null;
+          };
+          resolve(db);
+        };
+        request.onerror = () =>
+          reject(request.error || new Error("MOTION_RUN_DB_FAILED"));
+        request.onblocked = () => reject(new Error("MOTION_RUN_DB_BLOCKED"));
+      }).catch((error) => {
+        this._dbPromise = null;
+        throw error;
+      });
+    return this._dbPromise;
+  }
+  static async _readWrite(key, change, requireEmptyOutbox = false) {
+    const db = await this._db();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(["runs", "outbox"], "readwrite");
+      const store = tx.objectStore("runs");
+      let result;
+      let failure;
+      tx.oncomplete = () => resolve(result);
+      tx.onabort = () =>
+        reject(
+          failure || tx.error || new Error("MOTION_RUN_TRANSACTION_FAILED"),
+        );
+      const filterOutbox = typeof requireEmptyOutbox === "function";
+      const request = store.get(key),
+        count = requireEmptyOutbox
+          ? tx
+              .objectStore("outbox")
+              .index("scope")
+              [filterOutbox ? "getAll" : "count"](key)
+          : null;
+      let ready = 0;
+      const apply = () => {
+        if (++ready < (count ? 2 : 1)) return;
+        try {
+          if (
+            filterOutbox ? count.result.some(requireEmptyOutbox) : count?.result
+          )
+            throw new Error("MOTION_OUTBOX_PENDING");
+          const update = change(
+            request.result || null,
+            tx.objectStore("outbox"),
+            filterOutbox ? count.result : [],
+          );
+          result = update.result;
+          if (update.record) store.put(update.record);
+        } catch (error) {
+          failure = error;
+          tx.abort();
+        }
+      };
+      request.onsuccess = apply;
+      if (count) count.onsuccess = apply;
+    });
+  }
+  static _queueTranscript(
+    record,
+    outbox,
+    operationId,
+    operation,
+    state,
+    extra = {},
+  ) {
+    if (operation.fullAudioFrames)
+      return operation.fullAudioFrames.map((member) =>
+        this._queueTranscript(
+          record,
+          outbox,
+          operationId,
+          {
+            ...member,
+            retryCount: operation.retryCount,
+            fullAudioMember: true,
+          },
+          state,
+          extra,
+        ),
+      );
+    record.outboxSequence = (record.outboxSequence || 0) + 1;
+    const event = {
+      eventId: `${record.key}\0${record.runId}\0${operationId}\0${state}${operation.fullAudioMember ? `\0${operation.frameId}` : ""}`,
+      scope: record.key,
+      sequence: record.outboxSequence,
+      userId: record.userId,
+      toolProjectId: record.toolProjectId,
+      flowProjectId: record.flowProjectId,
+      projectRunId: record.runId,
+      sourceRevision: record.sourceRevision,
+      attemptId: operationId,
+      frameId: operation.frameId,
+      frameRunId: operation.frameRunId,
+      inputRevision: operation.inputRevision,
+      retryCount: operation.retryCount,
+      state,
+      ...(record.transcriptSettings && {
+        transcriptSettings: record.transcriptSettings,
+      }),
+      ...extra,
+    };
+    outbox.add(event);
+    return event;
+  }
+  static async create(input) {
+    const key = this._key(input);
+    if (
+      !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(
+        String(input.runId || ""),
+      ) ||
+      !/^[A-Za-z0-9_-]{1,120}$/.test(String(input.flowProjectId || "")) ||
+      !Number.isSafeInteger(input.sourceRevision) ||
+      input.sourceRevision < 1 ||
+      !Number.isSafeInteger(input.profileRevision) ||
+      input.profileRevision < 1 ||
+      (input.profileKey !== void 0 &&
+        !/^[a-z0-9_]{1,64}$/.test(input.profileKey)) ||
+      (input.profilePromptVariant !== void 0 &&
+        !["legacy", "timeline"].includes(input.profilePromptVariant)) ||
+      (input.preparationSnapshot !== void 0 &&
+        (input.preparationSnapshot?.version !== 1 ||
+          input.preparationSnapshot.userId !== Number(input.userId) ||
+          input.preparationSnapshot.executionMode !== input.executionMode ||
+          !/^[0-9a-f]{64}$/.test(input.preparationSnapshot.configFingerprint) ||
+          input.preparationSnapshot.settingsFingerprint !==
+            input.settingsSnapshot ||
+          JSON.stringify(input.preparationSnapshot.flowTarget) !==
+            JSON.stringify(input.flowTarget))) ||
+      (input.parentBatchId !== void 0 &&
+        !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(
+          input.parentBatchId,
+        )) ||
+      (input.flowTarget !== void 0 &&
+        (!Number.isInteger(input.flowTarget?.tabId) ||
+          input.flowTarget.tabId < 0 ||
+          input.flowTarget.projectId !== input.flowProjectId ||
+          typeof input.flowTarget.driverKey !== "string" ||
+          !input.flowTarget.driverKey ||
+          typeof input.flowTarget.origin !== "string" ||
+          !/^https?:\/\//.test(input.flowTarget.origin) ||
+          !["web", "api"].includes(input.flowTarget.mode))) ||
+      !Number.isSafeInteger(input.transcriptMaxRetries) ||
+      input.transcriptMaxRetries < 0 ||
+      typeof input.retryEnabled !== "boolean" ||
+      (input.autoDownloadFinal !== void 0 &&
+        typeof input.autoDownloadFinal !== "boolean") ||
+      (input.settingsSnapshot !== void 0 &&
+        !/^[0-9a-f]{64}$/.test(String(input.settingsSnapshot))) ||
+      (input.downloadResolution !== void 0 &&
+        !/^[A-Za-z0-9]{1,20}$/.test(String(input.downloadResolution))) ||
+      (input.downloadRatio !== void 0 &&
+        !/^[0-9]{1,2}:[0-9]{1,2}$/.test(String(input.downloadRatio))) ||
+      (input.transcriptionProvider !== void 0 &&
+        !["chatgpt", "gemini"].includes(input.transcriptionProvider)) ||
+      (input.transcriptSettings !== void 0 &&
+        (!input.transcriptSettings ||
+          input.transcriptSettings.transcription_provider !==
+            input.transcriptionProvider ||
+          typeof input.transcriptSettings.translate_enabled !== "boolean" ||
+          !(
+            input.transcriptSettings.target_language === null ||
+            typeof input.transcriptSettings.target_language === "string"
+          ) ||
+          (input.transcriptSettings.target_language?.length || 0) > 80)) ||
+      (input.taskKind !== void 0 &&
+        (input.taskKind !== "transcript_batch" ||
+          !Array.isArray(input.transcriptFrameIds) ||
+          !input.transcriptFrameIds.length ||
+          input.transcriptFrameIds.length > 500 ||
+          new Set(input.transcriptFrameIds).size !==
+            input.transcriptFrameIds.length ||
+          input.transcriptFrameIds.some(
+            (id) => !/^[A-Za-z0-9_-]{1,80}$/.test(id),
+          ))) ||
+      (input.replaceDrained === true &&
+        input.taskKind !== "transcript_batch") ||
+      !["sequential", "parallel"].includes(input.executionMode)
+    )
+      throw new Error("MOTION_RUN_INVALID");
+    return this._readWrite(
+      key,
+      (current) => {
+        if (
+          current &&
+          current.state !== "completed" &&
+          !(
+            input.replaceDrained === true &&
+            (!current.ownerId || current.leaseUntil <= Date.now()) &&
+            !Object.keys(current.operations || {}).length &&
+            !Object.values(current.reservations || {}).some(
+              (item) =>
+                item.token || item.pendingAttemptId || item.pendingSettlement,
+            )
+          )
+        )
+          throw new Error("MOTION_RUN_EXISTS");
+        const record = {
+          key,
+          userId: Number(input.userId),
+          toolProjectId: input.toolProjectId,
+          flowProjectId: input.flowProjectId,
+          runId: input.runId,
+          sourceRevision: input.sourceRevision,
+          profileRevision: input.profileRevision,
+          executionMode: input.executionMode,
+          fullAudioTranscription: input.fullAudioTranscription === true,
+          useOriginalAudio: input.useOriginalAudio === true,
+          continuityEnabled: input.continuityEnabled === true,
+          ...(input.taskKind && {
+            taskKind: input.taskKind,
+            transcriptFrameIds: [...input.transcriptFrameIds],
+          }),
+          ...(input.profileKey && { profileKey: input.profileKey }),
+          ...(input.profilePromptVariant && {
+            profilePromptVariant: input.profilePromptVariant,
+          }),
+          ...(input.preparationSnapshot && {
+            preparationSnapshot: input.preparationSnapshot,
+          }),
+          ...(input.parentBatchId && { parentBatchId: input.parentBatchId }),
+          ...(input.flowTarget && {
+            flowTarget: {
+              tabId: input.flowTarget.tabId,
+              projectId: input.flowTarget.projectId,
+              driverKey: input.flowTarget.driverKey,
+              origin: input.flowTarget.origin,
+              mode: input.flowTarget.mode,
+            },
+          }),
+          ...(input.transcriptionProvider && {
+            transcriptionProvider: input.transcriptionProvider,
+          }),
+          ...(input.autoDownloadFinal !== void 0 && {
+            autoDownloadFinal: input.autoDownloadFinal,
+          }),
+          ...(input.settingsSnapshot !== void 0 && {
+            settingsSnapshot: input.settingsSnapshot,
+          }),
+          ...(input.downloadResolution !== void 0 && {
+            downloadResolution: input.downloadResolution,
+          }),
+          ...(input.downloadRatio !== void 0 && {
+            downloadRatio: input.downloadRatio,
+          }),
+          ...(input.transcriptSettings && {
+            transcriptSettings: {
+              transcription_provider:
+                input.transcriptSettings.transcription_provider,
+              translate_enabled: input.transcriptSettings.translate_enabled,
+              target_language: input.transcriptSettings.target_language || null,
+            },
+          }),
+          transcriptMaxRetries: input.transcriptMaxRetries,
+          retryEnabled: input.retryEnabled,
+          state: "paused",
+          epoch: 0,
+          ownerId: null,
+          leaseUntil: 0,
+          operations: {},
+          failedOperations: {},
+          stopOrigin: null,
+          ...(current && {
+            previousRun: {
+              runId: current.runId,
+              sourceRevision: current.sourceRevision,
+              state: current.state,
+              rerunId: current.rerunId || null,
+              finalArtifactId: current.finalArtifactId || null,
+            },
+          }),
+        };
+        return { record, result: record };
+      },
+      input.replaceDrained === true,
+    );
+  }
+  static async get(scope) {
+    const key = this._key(scope);
+    const db = await this._db();
+    return new Promise((resolve, reject) => {
+      const request = db
+        .transaction("runs", "readonly")
+        .objectStore("runs")
+        .get(key);
+      request.onsuccess = () => resolve(request.result || null);
+      request.onerror = () =>
+        reject(request.error || new Error("MOTION_RUN_READ_FAILED"));
+    });
+  }
+  static _assertSourceRunDrained(record) {
+    if (
+      record &&
+      ((record.ownerId && record.leaseUntil > Date.now()) ||
+        Object.keys(record.operations || {}).length ||
+        Object.values(record.reservations || {}).some(
+          (item) =>
+            item.token || item.pendingAttemptId || item.pendingSettlement,
+        ))
+    )
+      throw new Error("MOTION_RUN_DRAIN_REQUIRED");
+  }
+  static async assertSourceResettable(scope) {
+    return this._readWrite(
+      this._key(scope),
+      (record) => {
+        this._assertSourceRunDrained(record);
+        return { result: true };
+      },
+      true,
+    );
+  }
+  static async acknowledgeSourceChange(scope, project) {
+    const data = project?.data_json,
+      revision = data?.source_revision;
+    const frames = Object.values(data?.frames || {});
+    const uuid = (value) =>
+      /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(
+        String(value || ""),
+      );
+    const reset = uuid(data?.reset_id) && !data?.source && !frames.length;
+    const replacement =
+      !!data?.source?.artifact_id &&
+      frames.length > 0 &&
+      frames.every(
+        (frame) =>
+          uuid(frame?.run_id) &&
+          Number.isSafeInteger(frame.input_revision) &&
+          frame.input_revision > 0,
+      );
+    if (
+      project?.tool_project_id !== scope.toolProjectId ||
+      !project.flow_project_id ||
+      !Number.isSafeInteger(revision) ||
+      revision < 1 ||
+      (!reset && !replacement)
+    )
+      throw new Error("MOTION_SOURCE_CHANGE_UNVERIFIED");
+    const retired = await this._readWrite(
+      this._key(scope),
+      (record) => {
+        if (!record || record.state === "completed") return { result: null };
+        if (record.flowProjectId !== project.flow_project_id)
+          throw new Error("MOTION_FLOW_PROJECT_MISMATCH");
+        if (revision <= record.sourceRevision) return { result: null };
+        this._assertSourceRunDrained(record);
+        record.state = "completed";
+        record.ownerId = null;
+        record.leaseUntil = 0;
+        record.sourceChange = {
+          sourceRevision: revision,
+          reason: reset ? "project_reset" : "source_replaced",
+          ...(reset && { resetId: data.reset_id }),
+        };
+        return {
+          record,
+          result: {
+            runId: record.runId,
+            previousSourceRevision: record.sourceRevision,
+            ...record.sourceChange,
+          },
+        };
+      },
+      true,
+    );
+    if (retired)
+      console.info(
+        "[MotionSourceChange]",
+        JSON.stringify({
+          stage: "run_retired",
+          toolProjectId: scope.toolProjectId,
+          ...retired,
+        }),
+      );
+    return retired;
+  }
+  static async acknowledgeRerun(scope, project) {
+    const key = this._key(scope),
+      operation = project?.data_json?.rerun_operation;
+    if (
+      project?.tool_project_id !== scope.toolProjectId ||
+      !operation?.rerun_id ||
+      operation.source_revision !== project.data_json.source_revision
+    )
+      throw new Error("MOTION_RERUN_UNVERIFIED");
+    const db = await this._db();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(["runs", "outbox"], "readwrite"),
+        store = tx.objectStore("runs");
+      const read = store.get(key),
+        count = tx.objectStore("outbox").index("scope").count(key);
+      let ready = 0,
+        failure;
+      tx.oncomplete = () => resolve(true);
+      tx.onabort = () =>
+        reject(
+          failure || tx.error || new Error("MOTION_RUN_TRANSACTION_FAILED"),
+        );
+      const apply = () => {
+        if (++ready !== 2) return;
+        try {
+          const record = read.result;
+          if (
+            !record ||
+            record.state === "completed" ||
+            record.runId !== operation.previous_project_run_id
+          )
+            return;
+          if (
+            record.flowProjectId !== project.flow_project_id ||
+            record.sourceRevision !== operation.source_revision ||
+            (record.ownerId && record.leaseUntil > Date.now()) ||
+            count.result ||
+            Object.keys(record.operations || {}).length ||
+            Object.values(record.reservations || {}).some(
+              (item) =>
+                item.token || item.pendingAttemptId || item.pendingSettlement,
+            )
+          )
+            throw new Error("MOTION_RUN_DRAIN_REQUIRED");
+          record.state = "completed";
+          record.ownerId = null;
+          record.leaseUntil = 0;
+          record.rerunId = operation.rerun_id;
+          store.put(record);
+        } catch (error) {
+          failure = error;
+          tx.abort();
+        }
+      };
+      read.onsuccess = apply;
+      count.onsuccess = apply;
+    });
+  }
+  static async retireTranscriptRun({
+    owner,
+    project,
+    newRunId,
+    settledReservationIds = [],
+  }) {
+    const key = this._key(owner),
+      receipt = project?.data_json?.transcript_reset;
+    if (
+      project?.tool_project_id !== owner.toolProjectId ||
+      receipt?.rerun_id !== newRunId ||
+      receipt.previous_project_run_id !== owner.runId ||
+      receipt.source_revision !== project.data_json.source_revision
+    )
+      throw new Error("MOTION_RERUN_UNVERIFIED");
+    const db = await this._db();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(["runs", "outbox"], "readwrite"),
+        store = tx.objectStore("runs");
+      let failure;
+      tx.oncomplete = () => resolve(true);
+      tx.onabort = () =>
+        reject(
+          failure || tx.error || new Error("MOTION_RUN_TRANSACTION_FAILED"),
+        );
+      const read = store.get(key);
+      read.onsuccess = () => {
+        try {
+          const record = read.result;
+          this._owned(record, owner);
+          if (
+            record.flowProjectId !== project.flow_project_id ||
+            Object.keys(record.operations || {}).length ||
+            Object.values(record.reservations || {}).some(
+              (item) =>
+                item.token &&
+                !settledReservationIds.includes(item.reservationId),
+            )
+          )
+            throw new Error("MOTION_RUN_DRAIN_REQUIRED");
+          record.state = "completed";
+          record.ownerId = null;
+          record.leaseUntil = 0;
+          record.reservations = {};
+          record.transcriptRestartId = newRunId;
+          store.put(record);
+          const cursor = tx
+            .objectStore("outbox")
+            .index("scope")
+            .openKeyCursor(key);
+          cursor.onsuccess = () => {
+            const item = cursor.result;
+            if (item) {
+              tx.objectStore("outbox").delete(item.primaryKey);
+              item.continue();
+            }
+          };
+        } catch (error) {
+          failure = error;
+          tx.abort();
+        }
+      };
+    });
+  }
+  static async isWorkerLeaseActive({
+    userId,
+    toolProjectId,
+    runId,
+    epoch,
+    workerId,
+    attemptId,
+  }) {
+    if (
+      !Number.isSafeInteger(epoch) ||
+      epoch < 1 ||
+      typeof workerId !== "string" ||
+      !workerId ||
+      typeof attemptId !== "string" ||
+      !attemptId ||
+      typeof runId !== "string" ||
+      !runId
+    )
+      return false;
+    let record;
+    try {
+      record = await this.get({ userId, toolProjectId });
+    } catch (_) {
+      return false;
+    }
+    const operation = record?.operations?.[attemptId];
+    return (
+      record?.runId === runId &&
+      record.epoch === epoch &&
+      !!record.ownerId &&
+      record.leaseUntil > Date.now() &&
+      operation?.stage === "transcribe" &&
+      operation.workerId === workerId
+    );
+  }
+  static fullAudioCheckpointMatches(record, operation, project, attemptId) {
+    if (!operation?.fullAudioFrames) return true;
+    const data = project?.data_json;
+    if (
+      record.fullAudioTranscription !== true ||
+      !data ||
+      !Array.isArray(operation.fullAudioTimeline) ||
+      Object.keys(data.frames || {}).length !==
+        operation.fullAudioTimeline.length
+    )
+      return false;
+    if (
+      operation.fullAudioTimeline.some((m) => {
+        const frame = data.frames[m.frameId];
+        return (
+          frame?.run_id !== m.frameRunId ||
+          frame.input_revision !== m.inputRevision ||
+          frame.start !== m.start ||
+          frame.end !== m.end ||
+          frame.stages?.split?.state !== "ready"
+        );
+      })
+    )
+      return false;
+    return operation.fullAudioFrames.every((m) => {
+      const stage = data.frames[m.frameId]?.stages?.transcribe;
+      return (
+        stage?.state === "running" &&
+        stage.worker?.project_run_id === record.runId &&
+        stage.worker?.attempt_id === attemptId &&
+        stage.worker?.retry_count === operation.retryCount
+      );
+    });
+  }
+  static _transcriptAttempt(record, input) {
+    const op = record?.operations?.[input.operationId];
+    if (
+      !op ||
+      op.stage !== "transcribe" ||
+      op.frameId !== input.frameId ||
+      op.frameRunId !== input.frameRunId ||
+      op.inputRevision !== input.inputRevision ||
+      op.workerId !== input.workerId
+    )
+      throw new Error("MOTION_OPERATION_SCOPE_MISMATCH");
+    return op;
+  }
+  static async prepareTranscriptReservation(input) {
+    const key = this._key(input);
+    if (
+      !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(
+        String(input.reservationId || ""),
+      ) ||
+      ["__proto__", "constructor", "prototype"].includes(input.frameId)
+    )
+      throw new Error("MOTION_RESERVATION_INVALID");
+    return this._readWrite(key, (record) => {
+      this._owned(record, input);
+      this._transcriptAttempt(record, input);
+      if (record.state !== "running") throw new Error("MOTION_RUN_NOT_RUNNING");
+      record.reservations || (record.reservations = {});
+      const prior = record.reservations[input.frameId];
+      if (prior) {
+        if (
+          prior.reservationId !== input.reservationId ||
+          prior.frameRunId !== input.frameRunId ||
+          prior.inputRevision !== input.inputRevision
+        )
+          throw new Error("MOTION_RESERVATION_CONFLICT");
+        return { result: prior };
+      }
+      const reservation = {
+        reservationId: input.reservationId,
+        frameRunId: input.frameRunId,
+        inputRevision: input.inputRevision,
+        token: null,
+        expiresAt: null,
+        pendingAttemptId: null,
+        lastAttemptId: null,
+      };
+      record.reservations[input.frameId] = reservation;
+      return { record, result: reservation };
+    });
+  }
+  static async replaceUndispatchedTranscriptReservation(input) {
+    const receipt = input.receipt;
+    if (
+      !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(
+        String(input.reservationId || ""),
+      ) ||
+      receipt?.provider_web?.source !== "motion" ||
+      receipt.provider_web.run_id !== input.previousReservationId ||
+      receipt.provider_web.dispatch_intent_count !== 0 ||
+      !["expired", "revoked"].includes(receipt.token_status)
+    )
+      throw new Error("MOTION_RESERVATION_EXPIRED");
+    return this._readWrite(this._key(input), (record) => {
+      this._owned(record, input);
+      this._transcriptAttempt(record, input);
+      const prior = record.reservations?.[input.frameId];
+      if (
+        record.state !== "running" ||
+        !prior ||
+        prior.reservationId !== input.previousReservationId ||
+        prior.token !== input.previousToken ||
+        prior.frameRunId !== input.frameRunId ||
+        prior.inputRevision !== input.inputRevision ||
+        input.reservationId === prior.reservationId ||
+        Object.values(record.completedOperations || {}).some(
+          (item) =>
+            item.frameId === input.frameId &&
+            item.frameRunId === input.frameRunId &&
+            item.inputRevision === input.inputRevision,
+        ) ||
+        Object.entries(record.operations || {}).some(
+          ([id, item]) =>
+            item.stage === "transcribe" &&
+            item.frameId === input.frameId &&
+            id !== input.operationId,
+        )
+      )
+        throw new Error("MOTION_RESERVATION_CONFLICT");
+      const reservation = {
+        reservationId: input.reservationId,
+        frameRunId: input.frameRunId,
+        inputRevision: input.inputRevision,
+        token: null,
+        expiresAt: null,
+        pendingAttemptId: null,
+        lastAttemptId: null,
+      };
+      record.reservations[input.frameId] = reservation;
+      return { record, result: reservation };
+    });
+  }
+  static async recoverExpiredTranscriptReservation(input) {
+    const receipt = input.receipt;
+    if (
+      input.serverTranscriptReset !== true ||
+      receipt?.provider_web?.source !== "motion" ||
+      receipt.provider_web.run_id !== input.previousReservationId ||
+      receipt.provider_web.dispatch_intent_count !== 0 ||
+      !["expired", "revoked"].includes(receipt.token_status) ||
+      !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(
+        String(input.reservationId || ""),
+      )
+    )
+      throw new Error("MOTION_RESERVATION_EXPIRED");
+    return this._readWrite(this._key(input), (record) => {
+      this._owned(record, input);
+      const prior = record.reservations?.[input.frameId];
+      const belongs = (item) =>
+        item.frameId === input.frameId &&
+        item.frameRunId === input.frameRunId &&
+        item.inputRevision === input.inputRevision;
+      const failures = Object.entries(record.failedOperations || {}).filter(
+        ([, item]) => belongs(item),
+      );
+      if (
+        !prior ||
+        prior.reservationId !== input.previousReservationId ||
+        prior.token !== input.previousToken ||
+        prior.frameRunId !== input.frameRunId ||
+        prior.inputRevision !== input.inputRevision ||
+        record.stopOrigin ||
+        !failures.length ||
+        failures.some(
+          ([, item]) =>
+            item.reason !== "MOTION_RESERVATION_EXPIRED" ||
+            item.fullAudioFrames,
+        ) ||
+        Object.values(record.operations || {}).some(belongs) ||
+        Object.values(record.completedOperations || {}).some(belongs)
+      )
+        throw new Error("MOTION_RESERVATION_CONFLICT");
+      record.expiredTranscriptReservations ||
+        (record.expiredTranscriptReservations = {});
+      record.expiredTranscriptReservations[prior.reservationId] = {
+        ...prior,
+        token: null,
+        failures: Object.fromEntries(failures),
+      };
+      for (const [id] of failures) delete record.failedOperations[id];
+      record.reservations[input.frameId] = {
+        reservationId: input.reservationId,
+        frameRunId: input.frameRunId,
+        inputRevision: input.inputRevision,
+        token: null,
+        expiresAt: null,
+        pendingAttemptId: null,
+        lastAttemptId: null,
+      };
+      if (
+        record.state === "needs_review" &&
+        !Object.keys(record.operations || {}).length
+      )
+        record.state = "paused";
+      return { record, result: true };
+    });
+  }
+  static async commitTranscriptReservation(input) {
+    const key = this._key(input);
+    if (
+      typeof input.token !== "string" ||
+      !input.token ||
+      !Number.isSafeInteger(input.expiresAt) ||
+      input.expiresAt <= 0
+    )
+      throw new Error("MOTION_RESERVATION_INVALID");
+    return this._readWrite(key, (record) => {
+      this._owned(record, input);
+      const reservation = record.reservations?.[input.frameId];
+      if (
+        !reservation ||
+        reservation.reservationId !== input.reservationId ||
+        reservation.frameRunId !== input.frameRunId ||
+        reservation.inputRevision !== input.inputRevision
+      )
+        throw new Error("MOTION_RESERVATION_CONFLICT");
+      if (reservation.token && reservation.token !== input.token)
+        throw new Error("MOTION_RESERVATION_CONFLICT");
+      if (
+        input.retryLimit !== void 0 &&
+        (!Number.isSafeInteger(input.retryLimit) ||
+          input.retryLimit < 0 ||
+          typeof input.retryEnabled !== "boolean" ||
+          !Number.isSafeInteger(input.startupMs) ||
+          input.startupMs < 1e4 ||
+          input.startupMs > 12e4 ||
+          !Number.isSafeInteger(input.textTimeoutMs) ||
+          input.textTimeoutMs < 1e3)
+      )
+        throw new Error("MOTION_RESERVATION_INVALID");
+      if (
+        reservation.token &&
+        input.retryLimit !== void 0 &&
+        reservation.retryLimit !== void 0 &&
+        (reservation.retryLimit !== input.retryLimit ||
+          reservation.retryEnabled !== input.retryEnabled ||
+          reservation.startupMs !== input.startupMs ||
+          reservation.textTimeoutMs !== input.textTimeoutMs)
+      )
+        throw new Error("MOTION_RESERVATION_CONFLICT");
+      reservation.token = input.token;
+      reservation.expiresAt = input.expiresAt;
+      if (input.retryLimit !== void 0)
+        Object.assign(reservation, {
+          retryLimit: input.retryLimit,
+          retryEnabled: input.retryEnabled,
+          startupMs: input.startupMs,
+          textTimeoutMs: input.textTimeoutMs,
+        });
+      return { record, result: true };
+    });
+  }
+  static async beginTranscriptIntent(input) {
+    const key = this._key(input);
+    return this._readWrite(key, (record) => {
+      this._owned(record, input);
+      this._transcriptAttempt(record, input);
+      if (record.state !== "running") throw new Error("MOTION_RUN_NOT_RUNNING");
+      const reservation = record.reservations?.[input.frameId];
+      if (
+        !reservation?.token ||
+        reservation.expiresAt <= Date.now() ||
+        reservation.frameRunId !== input.frameRunId ||
+        reservation.inputRevision !== input.inputRevision
+      )
+        throw new Error("MOTION_RESERVATION_UNAVAILABLE");
+      if (
+        reservation.pendingAttemptId &&
+        reservation.pendingAttemptId !== input.operationId
+      )
+        throw new Error("MOTION_INTENT_RECONCILE_REQUIRED");
+      if (reservation.lastAttemptId === input.operationId)
+        throw new Error("MOTION_INTENT_ALREADY_RECORDED");
+      reservation.pendingAttemptId = input.operationId;
+      return {
+        record,
+        result: {
+          reservationId: reservation.reservationId,
+          token: reservation.token,
+          attemptId: input.operationId,
+          previousAttemptId: reservation.lastAttemptId,
+          retryReason: reservation.lastAttemptId ? "motion_no_result" : null,
+        },
+      };
+    });
+  }
+  static async confirmTranscriptIntent(input) {
+    const key = this._key(input);
+    return this._readWrite(key, (record) => {
+      this._owned(record, input);
+      const reservation = record.reservations?.[input.frameId];
+      if (
+        !reservation ||
+        reservation.frameRunId !== input.frameRunId ||
+        reservation.inputRevision !== input.inputRevision
+      )
+        throw new Error("MOTION_RESERVATION_CONFLICT");
+      if (
+        reservation.lastAttemptId === input.operationId &&
+        !reservation.pendingAttemptId
+      )
+        return { result: true };
+      if (reservation.pendingAttemptId !== input.operationId)
+        throw new Error("MOTION_INTENT_RECONCILE_REQUIRED");
+      reservation.lastAttemptId = input.operationId;
+      reservation.pendingAttemptId = null;
+      return { record, result: true };
+    });
+  }
+  static async pendingFailedTranscriptIntent(input) {
+    const record = await this.get(input);
+    this._owned(record, input);
+    const reservation = record.reservations?.[input.frameId];
+    if (!reservation?.pendingAttemptId) return null;
+    const failed = record.failedOperations?.[reservation.pendingAttemptId];
+    if (
+      !reservation.token ||
+      !failed ||
+      failed.stage !== "transcribe" ||
+      failed.frameId !== input.frameId ||
+      failed.frameRunId !== reservation.frameRunId ||
+      failed.inputRevision !== reservation.inputRevision
+    )
+      throw new Error("MOTION_INTENT_RECONCILE_REQUIRED");
+    return {
+      reservationId: reservation.reservationId,
+      token: reservation.token,
+      frameId: input.frameId,
+      frameRunId: reservation.frameRunId,
+      inputRevision: reservation.inputRevision,
+      attemptId: reservation.pendingAttemptId,
+      previousAttemptId: reservation.lastAttemptId || null,
+    };
+  }
+  static async beginTranscriptSettlement(input) {
+    const key = this._key(input);
+    if (!["success", "failed"].includes(input.status))
+      throw new Error("MOTION_SETTLEMENT_INVALID");
+    return this._readWrite(key, (record) => {
+      this._owned(record, input);
+      const reservation = record.reservations?.[input.frameId];
+      if (
+        !reservation ||
+        reservation.frameRunId !== input.frameRunId ||
+        reservation.inputRevision !== input.inputRevision
+      )
+        throw new Error("MOTION_RESERVATION_CONFLICT");
+      if (reservation.settlementStatus) {
+        if (reservation.settlementStatus !== input.status)
+          throw new Error("MOTION_SETTLEMENT_CONFLICT");
+        return {
+          result: { settled: true, status: reservation.settlementStatus },
+        };
+      }
+      if (
+        !reservation.token ||
+        reservation.pendingAttemptId ||
+        Object.values(record.operations).some(
+          (op) => op.stage === "transcribe" && op.frameId === input.frameId,
+        )
+      )
+        throw new Error("MOTION_SETTLEMENT_NOT_READY");
+      const belongs = (op) =>
+        op.frameId === input.frameId &&
+        op.frameRunId === input.frameRunId &&
+        op.inputRevision === input.inputRevision;
+      const complete = Object.values(record.completedOperations || {}).some(
+        belongs,
+      );
+      const failures = Object.values(record.failedOperations || {}).filter(
+        (op) => belongs(op) && !op.resolved,
+      );
+      if (
+        input.status === "success"
+          ? !complete
+          : complete ||
+            !failures.length ||
+            (record.retryEnabled &&
+              failures.length <= record.transcriptMaxRetries)
+      )
+        throw new Error("MOTION_SETTLEMENT_NOT_READY");
+      if (
+        reservation.pendingSettlement &&
+        reservation.pendingSettlement !== input.status
+      )
+        throw new Error("MOTION_SETTLEMENT_CONFLICT");
+      reservation.pendingSettlement = input.status;
+      return {
+        record,
+        result: {
+          token: reservation.token,
+          reservationId: reservation.reservationId,
+          status: input.status,
+        },
+      };
+    });
+  }
+  static async confirmTranscriptSettlement(input) {
+    const key = this._key(input);
+    return this._readWrite(key, (record) => {
+      this._owned(record, input);
+      const reservation = record.reservations?.[input.frameId];
+      if (
+        !reservation ||
+        reservation.frameRunId !== input.frameRunId ||
+        reservation.inputRevision !== input.inputRevision
+      )
+        throw new Error("MOTION_RESERVATION_CONFLICT");
+      if (reservation.settlementStatus === input.status)
+        return { result: true };
+      if (reservation.pendingSettlement !== input.status)
+        throw new Error("MOTION_SETTLEMENT_CONFLICT");
+      reservation.settlementStatus = input.status;
+      reservation.pendingSettlement = null;
+      reservation.token = null;
+      return { record, result: true };
+    });
+  }
+  static async hasPendingWork(userId) {
+    if (!Number.isSafeInteger(Number(userId)) || Number(userId) < 1)
+      throw new Error("MOTION_RUN_SCOPE_INVALID");
+    const db = await this._db();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(["runs", "outbox"], "readonly");
+      const runs = tx.objectStore("runs").index("user").getAll(Number(userId));
+      const events = tx
+        .objectStore("outbox")
+        .index("user")
+        .openKeyCursor(Number(userId));
+      tx.oncomplete = () =>
+        resolve(
+          runs.result.some(
+            (run) =>
+              ["running", "pausing", "stopping", "needs_review"].includes(
+                run.state,
+              ) ||
+              Object.keys(run.operations || {}).length > 0 ||
+              Object.values(run.reservations || {}).some(
+                (item) =>
+                  item.token || item.pendingAttemptId || item.pendingSettlement,
+              ),
+          ) || !!events.result,
+        );
+      tx.onabort = () =>
+        reject(tx.error || new Error("MOTION_RUN_READ_FAILED"));
+      tx.onerror = () =>
+        reject(tx.error || new Error("MOTION_RUN_READ_FAILED"));
+    });
+  }
+  static async listForUser(userId) {
+    if (!Number.isSafeInteger(userId) || userId < 1)
+      throw new Error("MOTION_RUN_SCOPE_INVALID");
+    const db = await this._db();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction("runs", "readonly");
+      const read = tx.objectStore("runs").index("user").getAll(userId);
+      tx.oncomplete = () => resolve(read.result);
+      tx.onabort = () =>
+        reject(tx.error || new Error("MOTION_RUN_READ_FAILED"));
+    });
+  }
+  static async claim(input) {
+    const key = this._key(input);
+    if (
+      !/^[A-Za-z0-9_-]{1,120}$/.test(String(input.ownerId || "")) ||
+      !Number.isSafeInteger(input.leaseMs) ||
+      input.leaseMs < 1 ||
+      !Number.isSafeInteger(Date.now() + input.leaseMs)
+    )
+      throw new Error("MOTION_RUN_LEASE_INVALID");
+    return this._readWrite(key, (record, outbox) => {
+      if (!record) throw new Error("MOTION_RUN_NOT_FOUND");
+      if (!input.runId || record.runId !== input.runId)
+        throw new Error("MOTION_RUN_FENCED");
+      if (record.state === "completed") throw new Error("MOTION_RUN_COMPLETED");
+      if (record.ownerId && record.leaseUntil > Date.now())
+        return { result: { acquired: false } };
+      record.epoch++;
+      record.ownerId = input.ownerId;
+      record.leaseUntil = Date.now() + input.leaseMs;
+      record.failedOperations || (record.failedOperations = {});
+      const failedTranscriptOperations = [];
+      for (const [id, operation] of Object.entries(record.operations)) {
+        if (operation.stage === "direct_transcribe") {
+          record.failedOperations[id] = {
+            ...operation,
+            reason: "outcome_unknown",
+            resolved: false,
+          };
+          delete record.operations[id];
+          failedTranscriptOperations.push(id);
+          continue;
+        }
+        if (operation.stage !== "transcribe") continue;
+        record.failedOperations[id] = {
+          ...operation,
+          reason: operation.fullAudioFrames
+            ? "MOTION_FULL_AUDIO_OUTCOME_UNKNOWN"
+            : "outcome_unknown",
+          resolved: false,
+        };
+        const failures = Object.values(record.failedOperations).filter(
+          (item) =>
+            item.frameId === operation.frameId &&
+            item.frameRunId === operation.frameRunId &&
+            item.inputRevision === operation.inputRevision,
+        ).length;
+        this._queueTranscript(record, outbox, id, operation, "failed", {
+          errorCode: operation.fullAudioFrames
+            ? "MOTION_FULL_AUDIO_OUTCOME_UNKNOWN"
+            : "MOTION_WORKER_OUTCOME_UNKNOWN",
+          retryExhausted:
+            !!operation.fullAudioFrames ||
+            !record.retryEnabled ||
+            failures > record.transcriptMaxRetries,
+        });
+        delete record.operations[id];
+        failedTranscriptOperations.push(id);
+      }
+      const reviewOnly = Object.keys(record.operations).length > 0;
+      const failed = Object.values(record.failedOperations).some(
+        (operation) => operation.resolved !== true,
+      );
+      record.state = reviewOnly
+        ? "needs_review"
+        : record.stopOrigin
+          ? "stopped"
+          : failed
+            ? "failed"
+            : "paused";
+      return {
+        record,
+        result: {
+          acquired: true,
+          ownerId: record.ownerId,
+          epoch: record.epoch,
+          reviewOnly,
+          failedTranscriptOperations,
+        },
+      };
+    });
+  }
+  static _owned(record, input) {
+    if (
+      !record ||
+      record.runId !== input.runId ||
+      record.ownerId !== input.ownerId ||
+      record.epoch !== input.epoch ||
+      record.leaseUntil <= Date.now()
+    )
+      throw new Error("MOTION_RUN_FENCED");
+  }
+  static async renew(input) {
+    const key = this._key(input);
+    if (
+      !Number.isSafeInteger(input.leaseMs) ||
+      input.leaseMs < 1 ||
+      !Number.isSafeInteger(Date.now() + input.leaseMs)
+    )
+      throw new Error("MOTION_RUN_LEASE_INVALID");
+    return this._readWrite(key, (record) => {
+      this._owned(record, input);
+      record.leaseUntil = Date.now() + input.leaseMs;
+      return { record, result: record.leaseUntil };
+    });
+  }
+  static async resume(input) {
+    const key = this._key(input);
+    return this._readWrite(key, (record) => {
+      this._owned(record, input);
+      if (record.stopOrigin) throw new Error("MOTION_RUN_STOPPED");
+      if (
+        record.state === "needs_review" ||
+        Object.keys(record.operations).length
+      )
+        throw new Error("MOTION_RUN_REVIEW_REQUIRED");
+      record.state = "running";
+      return { record, result: true };
+    });
+  }
+  static reviewedTranscriptFailures(record, project) {
+    if (record.subtitleReview !== "waiting") return [];
+    if (
+      project?.tool_project_id !== record.toolProjectId ||
+      project.flow_project_id !== record.flowProjectId ||
+      Number(project.data_json?.source_revision) !== record.sourceRevision
+    )
+      throw new Error("MOTION_RUN_FENCED");
+    const reviewed = (member) => {
+      const frame = project.data_json.frames?.[member.frameId];
+      return (
+        frame?.run_id === member.frameRunId &&
+        frame.input_revision === member.inputRevision &&
+        frame.stages?.transcribe?.state === "ready" &&
+        !frame.stages.transcribe.worker &&
+        frame.transcript?.manual === true &&
+        typeof frame.transcript.has_speech === "boolean"
+      );
+    };
+    return Object.values(record.failedOperations || {}).filter(
+      (item) =>
+        !item.resolved &&
+        ["transcribe", "direct_transcribe"].includes(item.stage) &&
+        (item.fullAudioFrames || [item]).every(reviewed),
+    );
+  }
+  static async resolveReviewedTranscriptFailures(input, project) {
+    return this._readWrite(this._key(input), (record) => {
+      this._owned(record, input);
+      const failures = this.reviewedTranscriptFailures(record, project);
+      if (
+        Object.keys(record.operations || {}).length ||
+        Object.values(record.reservations || {}).some(
+          (item) =>
+            item.token || item.pendingAttemptId || item.pendingSettlement,
+        )
+      )
+        throw new Error("MOTION_RUN_DRAIN_REQUIRED");
+      for (const item of failures) item.resolved = true;
+      return { record, result: failures.length };
+    });
+  }
+  static async setSubtitleReview(input, state) {
+    if (!["waiting", "accepted"].includes(state))
+      throw new Error("MOTION_RUN_INVALID");
+    return this._readWrite(this._key(input), (record) => {
+      this._owned(record, input);
+      if (state === "accepted" && record.subtitleReview !== "waiting")
+        throw new Error("MOTION_RUN_REVIEW_REQUIRED");
+      record.subtitleReview = state;
+      return { record, result: true };
+    });
+  }
+  static async pause(input) {
+    const key = this._key(input);
+    return this._readWrite(key, (record) => {
+      this._owned(record, input);
+      if (record.stopOrigin) throw new Error("MOTION_RUN_STOPPED");
+      if (record.state === "needs_review")
+        throw new Error("MOTION_RUN_REVIEW_REQUIRED");
+      record.state = Object.keys(record.operations).length
+        ? "pausing"
+        : "paused";
+      return { record, result: record.state };
+    });
+  }
+  static async stop(input) {
+    const key = this._key(input);
+    if (!/^[A-Za-z0-9_-]{1,80}$/.test(String(input.stopOrigin || "")))
+      throw new Error("MOTION_STOP_ORIGIN_INVALID");
+    return this._readWrite(key, (record) => {
+      this._owned(record, input);
+      record.stopOrigin = record.stopOrigin || input.stopOrigin;
+      if (record.state !== "needs_review")
+        record.state = Object.keys(record.operations).length
+          ? "stopping"
+          : "stopped";
+      return { record, result: record.state };
+    });
+  }
+  static async markSubmitted(input) {
+    const key = this._key(input);
+    if (
+      !/^[A-Za-z0-9_-]{1,120}$/.test(String(input.operationId || "")) ||
+      ["__proto__", "constructor", "prototype"].includes(input.operationId) ||
+      !/^[A-Za-z0-9_-]{1,80}$/.test(String(input.frameId || "")) ||
+      !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(
+        String(input.frameRunId || ""),
+      ) ||
+      !Number.isSafeInteger(input.inputRevision) ||
+      input.inputRevision < 1 ||
+      (input.workerId !== void 0 &&
+        (input.stage !== "transcribe" ||
+          !/^[A-Za-z0-9_-]{1,120}$/.test(String(input.workerId)))) ||
+      (input.queueItemId !== void 0 &&
+        (input.stage !== "flow" || input.queueItemId !== input.operationId)) ||
+      (input.restoreArtifactId !== void 0 &&
+        (input.stage !== "persist" ||
+          !/^[A-Za-z0-9_:-]{1,160}$/.test(input.restoreArtifactId))) ||
+      (input.stage === "transcribe" &&
+        !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(
+          input.operationId,
+        )) ||
+      (input.stage === "merge" &&
+        (!Number.isSafeInteger(input.artifactRevision) ||
+          input.artifactRevision < 1)) ||
+      ![
+        "transcribe",
+        "direct_transcribe",
+        "upload",
+        "flow",
+        "persist",
+        "merge",
+      ].includes(input.stage)
+    )
+      throw new Error("MOTION_OPERATION_INVALID");
+    return this._readWrite(key, (record, outbox) => {
+      this._owned(record, input);
+      if (record.state === "needs_review")
+        throw new Error("MOTION_RUN_REVIEW_REQUIRED");
+      if (record.state !== "running") throw new Error("MOTION_RUN_NOT_RUNNING");
+      if (
+        input.stage === "direct_transcribe" &&
+        record.executionMode !== "sequential"
+      )
+        throw new Error("MOTION_OPERATION_SCOPE_MISMATCH");
+      if (
+        Object.hasOwn(record.operations, input.operationId) ||
+        Object.hasOwn(record.failedOperations || {}, input.operationId) ||
+        Object.hasOwn(record.completedOperations || {}, input.operationId)
+      )
+        throw new Error("MOTION_OPERATION_EXISTS");
+      if (
+        Object.values(record.operations).some(
+          (operation) =>
+            operation.frameId === input.frameId &&
+            operation.stage === input.stage,
+        )
+      ) {
+        throw new Error("MOTION_OPERATION_ACTIVE");
+      }
+      if (
+        input.stage === "transcribe" &&
+        Object.values(record.operations).some((op) =>
+          op.fullAudioFrames?.some((m) => m.frameId === input.frameId),
+        )
+      )
+        throw new Error("MOTION_OPERATION_ACTIVE");
+      if (
+        input.workerId &&
+        Object.values(record.operations).some(
+          (operation) => operation.workerId === input.workerId,
+        )
+      ) {
+        throw new Error("MOTION_WORKER_ALREADY_BOUND");
+      }
+      if (input.stage === "upload" && record.rejectedUploads)
+        delete record.rejectedUploads[`frame:${input.frameId}`];
+      if (input.stage === "flow" && record.rejectedFlows)
+        delete record.rejectedFlows[`frame:${input.frameId}`];
+      let failures = 0;
+      if (input.stage === "transcribe" || input.stage === "direct_transcribe") {
+        failures = Object.values(record.failedOperations || {}).filter(
+          (item) =>
+            item.frameId === input.frameId &&
+            item.stage === input.stage &&
+            item.frameRunId === input.frameRunId &&
+            item.inputRevision === input.inputRevision,
+        ).length;
+        if (
+          failures > 0 &&
+          (!record.retryEnabled || failures > record.transcriptMaxRetries)
+        ) {
+          throw new Error("MOTION_TRANSCRIPT_RETRY_EXHAUSTED");
+        }
+      }
+      if (input.fullAudioFrames !== void 0) {
+        const members = input.fullAudioFrames;
+        if (
+          record.fullAudioTranscription !== true ||
+          record.executionMode !== "parallel" ||
+          input.stage !== "transcribe" ||
+          !Array.isArray(input.fullAudioTimeline) ||
+          !input.fullAudioTimeline.length ||
+          input.fullAudioTimeline.length > 120 ||
+          !Array.isArray(members) ||
+          !members.length ||
+          members.length > 120 ||
+          members.some(
+            (m) =>
+              !input.fullAudioTimeline.some(
+                (t) => JSON.stringify(t) === JSON.stringify(m),
+              ),
+          ) ||
+          new Set(members.map((m) => m.frameId)).size !== members.length ||
+          members.some(
+            (m, i) =>
+              !/^[A-Za-z0-9_-]{1,80}$/.test(m.frameId || "") ||
+              !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(
+                m.frameRunId || "",
+              ) ||
+              !Number.isSafeInteger(m.inputRevision) ||
+              m.inputRevision < 1 ||
+              !Number.isFinite(m.start) ||
+              !Number.isFinite(m.end) ||
+              m.start < 0 ||
+              m.end <= m.start ||
+              (i > 0 && m.start < members[i - 1].end),
+          ) ||
+          members[0].frameId !== input.frameId ||
+          members[0].frameRunId !== input.frameRunId ||
+          members[0].inputRevision !== input.inputRevision
+        )
+          throw new Error("MOTION_FULL_AUDIO_SCOPE_INVALID");
+        if (
+          Object.values(record.failedOperations || {}).some(
+            (op) =>
+              op.fullAudioFrames &&
+              !op.resolved &&
+              op.reason === "MOTION_FULL_AUDIO_OUTCOME_UNKNOWN",
+          )
+        )
+          throw new Error("MOTION_FULL_AUDIO_OUTCOME_UNKNOWN");
+        if (
+          Object.values(record.completedOperations || {}).some(
+            (op) =>
+              op.fullAudioFrames &&
+              op.fullAudioFrames.some((m) =>
+                members.some(
+                  (next) =>
+                    next.frameId === m.frameId &&
+                    next.frameRunId === m.frameRunId &&
+                    next.inputRevision === m.inputRevision,
+                ),
+              ),
+          )
+        )
+          throw new Error("MOTION_FULL_AUDIO_ALREADY_COMPLETED");
+        if (
+          Object.values(record.operations).some(
+            (op) =>
+              op.stage === "transcribe" &&
+              (op.fullAudioFrames || [op]).some((m) =>
+                members.some((next) => next.frameId === m.frameId),
+              ),
+          )
+        )
+          throw new Error("MOTION_OPERATION_ACTIVE");
+      }
+      record.operations[input.operationId] = {
+        frameId: input.frameId,
+        frameRunId: input.frameRunId,
+        inputRevision: input.inputRevision,
+        stage: input.stage,
+        ...(input.fullAudioFrames && {
+          fullAudioFrames: structuredClone(input.fullAudioFrames),
+          fullAudioTimeline: structuredClone(input.fullAudioTimeline),
+        }),
+        ...(input.queueItemId !== void 0 && { queueItemId: input.queueItemId }),
+        ...(input.restoreArtifactId !== void 0 && {
+          restoreArtifactId: input.restoreArtifactId,
+        }),
+        ...(input.stage === "merge" && {
+          artifactRevision: input.artifactRevision,
+        }),
+        ...(["transcribe", "direct_transcribe"].includes(input.stage) && {
+          retryCount: failures,
+          ...(input.workerId && { workerId: input.workerId }),
+        }),
+      };
+      if (input.stage === "transcribe")
+        this._queueTranscript(
+          record,
+          outbox,
+          input.operationId,
+          record.operations[input.operationId],
+          "running",
+        );
+      record.state = "running";
+      return { record, result: true };
+    });
+  }
+  static async failDirectTranscript(input) {
+    const key = this._key(input);
+    return this._readWrite(key, (record) => {
+      this._owned(record, input);
+      const operation = record.operations?.[input.operationId];
+      if (
+        !operation ||
+        operation.stage !== "direct_transcribe" ||
+        operation.frameId !== input.frameId ||
+        operation.frameRunId !== input.frameRunId ||
+        operation.inputRevision !== input.inputRevision
+      )
+        throw new Error("MOTION_OPERATION_SCOPE_MISMATCH");
+      record.failedOperations || (record.failedOperations = {});
+      const code = String(input.reason || "");
+      record.failedOperations[input.operationId] = {
+        ...operation,
+        reason: /^[A-Za-z][A-Za-z0-9_:-]{0,99}$/.test(code)
+          ? code
+          : "MOTION_TRANSCRIPTION_FAILED",
+        resolved: false,
+      };
+      delete record.operations[input.operationId];
+      return { record, result: true };
+    });
+  }
+  static async cancelDirectTranscript(input) {
+    const key = this._key(input);
+    return this._readWrite(key, (record) => {
+      this._owned(record, input);
+      const operation = record.operations?.[input.operationId];
+      if (
+        !operation ||
+        operation.stage !== "direct_transcribe" ||
+        operation.frameId !== input.frameId ||
+        operation.frameRunId !== input.frameRunId ||
+        operation.inputRevision !== input.inputRevision
+      )
+        throw new Error("MOTION_OPERATION_SCOPE_MISMATCH");
+      delete record.operations[input.operationId];
+      return { record, result: true };
+    });
+  }
+  static async storeDirectTranscript(input) {
+    const key = this._key(input);
+    const transcript = input.transcript;
+    if (
+      !transcript ||
+      typeof transcript.hasSpeech !== "boolean" ||
+      typeof transcript.transcript !== "string" ||
+      transcript.transcript.length > 12e3 ||
+      (transcript.hasSpeech && !transcript.transcript.trim()) ||
+      (!transcript.hasSpeech && transcript.transcript.trim()) ||
+      typeof transcript.detectedLanguage !== "string" ||
+      (transcript.detectedLanguage &&
+        !/^[A-Za-z][A-Za-z0-9-]{0,31}$/.test(transcript.detectedLanguage)) ||
+      (transcript.translatedText !== null &&
+        typeof transcript.translatedText !== "string") ||
+      (transcript.translatedText?.length || 0) > 12e3 ||
+      (!transcript.hasSpeech && transcript.translatedText)
+    )
+      throw new Error("MOTION_TRANSCRIPT_INVALID");
+    const normalized = {
+      hasSpeech: transcript.hasSpeech,
+      transcript: transcript.transcript.trim(),
+      detectedLanguage: transcript.detectedLanguage,
+      translatedText: transcript.translatedText?.trim() || null,
+      ...(transcript.speechTimeline != null && {
+        speechTimeline: MotionTranscriptContract.timeline(
+          transcript.speechTimeline,
+          {
+            transcript: transcript.transcript,
+            translatedText: transcript.translatedText || "",
+            hasSpeech: transcript.hasSpeech,
+          },
+        ),
+      }),
+    };
+    const bytes = await crypto.subtle.digest(
+      "SHA-256",
+      new TextEncoder().encode(
+        JSON.stringify({
+          normalized,
+          originalTranscript: input.originalTranscript || null,
+        }),
+      ),
+    );
+    const digest = Array.from(new Uint8Array(bytes), (value) =>
+      value.toString(16).padStart(2, "0"),
+    ).join("");
+    return this._readWrite(key, (record, outbox) => {
+      this._owned(record, input);
+      const operation = record.operations?.[input.operationId];
+      if (!operation) {
+        const prior = record.completedOperations?.[input.operationId];
+        if (
+          prior?.stage === "direct_transcribe" &&
+          prior.frameId === input.frameId &&
+          prior.frameRunId === input.frameRunId &&
+          prior.inputRevision === input.inputRevision &&
+          prior.digest === digest
+        )
+          return { result: prior.eventId };
+        throw new Error("MOTION_OPERATION_SCOPE_MISMATCH");
+      }
+      if (
+        !operation ||
+        operation.stage !== "direct_transcribe" ||
+        operation.frameId !== input.frameId ||
+        operation.frameRunId !== input.frameRunId ||
+        operation.inputRevision !== input.inputRevision
+      )
+        throw new Error("MOTION_OPERATION_SCOPE_MISMATCH");
+      const event = this._queueTranscript(
+        record,
+        outbox,
+        input.operationId,
+        operation,
+        "direct_ready",
+        {
+          transcript: normalized,
+          originalTranscript: input.originalTranscript || null,
+        },
+      );
+      record.completedOperations || (record.completedOperations = {});
+      record.completedOperations[input.operationId] = {
+        frameId: operation.frameId,
+        frameRunId: operation.frameRunId,
+        inputRevision: operation.inputRevision,
+        stage: "direct_transcribe",
+        digest,
+        eventId: event.eventId,
+      };
+      delete record.operations[input.operationId];
+      for (const failed of Object.values(record.failedOperations || {})) {
+        if (
+          failed.stage === "direct_transcribe" &&
+          failed.frameId === operation.frameId &&
+          failed.frameRunId === operation.frameRunId &&
+          failed.inputRevision === operation.inputRevision
+        )
+          failed.resolved = true;
+      }
+      return { record, result: event.eventId };
+    });
+  }
+  static async setFlowDownloadReceipt(input) {
+    const receipt = input.downloadReceipt;
+    const identity = (value) =>
+      typeof value === "string" && /^[A-Za-z0-9_:=\-]{1,1024}$/.test(value);
+    if (
+      !receipt ||
+      receipt.version !== 1 ||
+      !["v1", "v2"].includes(receipt.apiDriver) ||
+      !["native", "upscale"].includes(receipt.route) ||
+      !["resolving", "upscale_started", "ready", "rejected"].includes(
+        receipt.state,
+      ) ||
+      ![
+        receipt.sourceMediaId,
+        receipt.sourceOperationId,
+        receipt.projectId,
+      ].every(identity) ||
+      ![receipt.requestedResolution, receipt.resolution].every(
+        (value) =>
+          typeof value === "string" && /^[A-Za-z0-9]{1,16}$/.test(value),
+      ) ||
+      (receipt.state === "ready" &&
+        ![receipt.mediaId, receipt.operationId].every(identity)) ||
+      (receipt.state === "ready" &&
+        (receipt.route === "native"
+          ? receipt.mediaId !== receipt.sourceMediaId ||
+            receipt.operationId !== receipt.sourceOperationId
+          : receipt.mediaId === receipt.sourceMediaId ||
+            (receipt.apiDriver === "v2" &&
+              receipt.operationId !== receipt.mediaId))) ||
+      (receipt.apiDriver === "v2" &&
+        (!Number.isSafeInteger(receipt.protocolRevision) ||
+          receipt.protocolRevision < 1 ||
+          typeof receipt.protocolFingerprint !== "string" ||
+          !receipt.protocolFingerprint))
+    )
+      throw new Error("MOTION_PERSIST_SCOPE_CHANGED");
+    const fields = [
+      "version",
+      "state",
+      "route",
+      "sourceMediaId",
+      "sourceOperationId",
+      "projectId",
+      "apiDriver",
+      "protocolRevision",
+      "protocolFingerprint",
+      "requestedResolution",
+      "resolution",
+      "mediaId",
+      "operationId",
+    ];
+    const normalized = Object.fromEntries(
+      fields.map((key) => [key, receipt[key] ?? null]),
+    );
+    return this._readWrite(this._key(input), (record) => {
+      this._owned(record, input);
+      const op = record.operations?.[input.operationId];
+      if (
+        !op ||
+        !["flow", "persist"].includes(op.stage) ||
+        op.stage !== input.stage ||
+        op.frameId !== input.frameId ||
+        op.frameRunId !== input.frameRunId ||
+        op.inputRevision !== input.inputRevision ||
+        receipt.projectId !== record.flowProjectId
+      )
+        throw new Error("MOTION_OPERATION_SCOPE_MISMATCH");
+      const prior = op.downloadReceipt;
+      if (
+        prior &&
+        [
+          "sourceMediaId",
+          "sourceOperationId",
+          "projectId",
+          "apiDriver",
+          "protocolRevision",
+          "protocolFingerprint",
+          "requestedResolution",
+        ].some((key) => (prior[key] ?? null) !== normalized[key])
+      )
+        throw new Error("MOTION_PERSIST_SCOPE_CHANGED");
+      if (
+        prior?.state === "ready" &&
+        ["state", "route", "resolution", "mediaId", "operationId"].some(
+          (key) => prior[key] !== normalized[key],
+        )
+      )
+        throw new Error("MOTION_PERSIST_SCOPE_CHANGED");
+      op.downloadReceipt = normalized;
+      return { record, result: normalized };
+    });
+  }
+  static async markFlowDownloadStarted(input) {
+    const key = this._key(input);
+    return this._readWrite(key, (record) => {
+      this._owned(record, input);
+      const operation = record.operations?.[input.operationId];
+      if (
+        !operation ||
+        !["flow", "persist"].includes(operation.stage) ||
+        operation.stage !== input.stage ||
+        operation.frameId !== input.frameId ||
+        operation.frameRunId !== input.frameRunId ||
+        operation.inputRevision !== input.inputRevision
+      )
+        throw new Error("MOTION_OPERATION_SCOPE_MISMATCH");
+      const attempts = Number.isSafeInteger(operation.persistDownloadAttempts)
+        ? operation.persistDownloadAttempts
+        : operation.persistStarted === true ||
+            (operation.stage === "persist" && input.retryDownload === true)
+          ? 1
+          : 0;
+      if (attempts > 0 && input.retryDownload !== true)
+        throw new Error("MOTION_PERSIST_RECONCILE_REQUIRED");
+      const retries =
+        record.retryEnabled === true &&
+        Number.isSafeInteger(record.transcriptMaxRetries)
+          ? record.transcriptMaxRetries
+          : 0;
+      if (attempts >= 1 + retries)
+        throw new Error("MOTION_PERSIST_RETRY_EXHAUSTED");
+      operation.persistStarted = true;
+      operation.persistDownloadAttempts = attempts + 1;
+      return { record, result: operation.persistDownloadAttempts };
+    });
+  }
+  static async failTranscript(input) {
+    const key = this._key(input);
+    if (!/^[A-Za-z][A-Za-z0-9_:-]{0,99}$/.test(String(input.reason || "")))
+      throw new Error("MOTION_OPERATION_OUTCOME_INVALID");
+    return this._readWrite(key, (record, outbox) => {
+      this._owned(record, input);
+      const operation = record.operations[input.operationId];
+      if (!operation) {
+        const prior = record.failedOperations?.[input.operationId];
+        if (
+          prior &&
+          prior.stage === "transcribe" &&
+          input.stage === "transcribe" &&
+          prior.frameId === input.frameId &&
+          prior.frameRunId === input.frameRunId &&
+          prior.inputRevision === input.inputRevision
+        )
+          return { result: true };
+        throw new Error("MOTION_OPERATION_UNKNOWN");
+      }
+      if (
+        operation.stage !== "transcribe" ||
+        input.stage !== "transcribe" ||
+        operation.frameId !== input.frameId ||
+        operation.frameRunId !== input.frameRunId ||
+        operation.inputRevision !== input.inputRevision
+      )
+        throw new Error("MOTION_OPERATION_SCOPE_MISMATCH");
+      this._failTranscriptRecord(
+        record,
+        outbox,
+        input.operationId,
+        operation,
+        input.reason,
+      );
+      if (
+        input.diagnostic &&
+        ["provider_task", "monitor"].includes(input.diagnostic.stage) &&
+        /^[A-Za-z][A-Za-z0-9_:-]{0,99}$/.test(
+          String(input.diagnostic.code || ""),
+        )
+      )
+        record.failedOperations[input.operationId].diagnostic = {
+          stage: input.diagnostic.stage,
+          code: input.diagnostic.code,
+        };
+      return { record, result: true };
+    });
+  }
+  static _failTranscriptRecord(record, outbox, operationId, operation, reason) {
+    record.failedOperations || (record.failedOperations = {});
+    record.failedOperations[operationId] = {
+      ...operation,
+      reason,
+      resolved: false,
+    };
+    const failures = Object.values(record.failedOperations).filter(
+      (item) =>
+        item.frameId === operation.frameId &&
+        item.frameRunId === operation.frameRunId &&
+        item.inputRevision === operation.inputRevision,
+    ).length;
+    const retryExhausted =
+      reason === "MOTION_FULL_AUDIO_OUTCOME_UNKNOWN" ||
+      !record.retryEnabled ||
+      failures > record.transcriptMaxRetries;
+    this._queueTranscript(record, outbox, operationId, operation, "failed", {
+      errorCode: reason,
+      retryExhausted,
+    });
+    delete record.operations[operationId];
+    if (record.stopOrigin) {
+      if (!Object.keys(record.operations).length) record.state = "stopped";
+    } else if (
+      record.state === "pausing" &&
+      !Object.keys(record.operations).length
+    ) {
+      record.state = "paused";
+    }
+  }
+  static async failClosedWorker(input) {
+    const key = this._key(input);
+    if (
+      !Number.isSafeInteger(input.epoch) ||
+      input.epoch < 1 ||
+      typeof input.runId !== "string" ||
+      !input.runId ||
+      typeof input.workerId !== "string" ||
+      !input.workerId ||
+      typeof input.attemptId !== "string" ||
+      !input.attemptId
+    )
+      return false;
+    return this._readWrite(key, (record, outbox) => {
+      const operation = record?.operations?.[input.attemptId];
+      if (
+        !record ||
+        record.runId !== input.runId ||
+        record.epoch !== input.epoch ||
+        operation?.stage !== "transcribe" ||
+        operation.workerId !== input.workerId
+      )
+        return { result: false };
+      this._failTranscriptRecord(
+        record,
+        outbox,
+        input.attemptId,
+        operation,
+        operation.fullAudioFrames
+          ? "MOTION_FULL_AUDIO_OUTCOME_UNKNOWN"
+          : "MOTION_WORKER_CLOSED",
+      );
+      return { record, result: true };
+    });
+  }
+  static async storeTranscript(input) {
+    const key = this._key(input);
+    const transcript = input.transcript;
+    if (
+      !transcript ||
+      typeof transcript.hasSpeech !== "boolean" ||
+      typeof transcript.transcript !== "string" ||
+      transcript.transcript.length > 12e3 ||
+      (transcript.hasSpeech && !transcript.transcript.trim()) ||
+      (!transcript.hasSpeech && transcript.transcript.trim()) ||
+      typeof transcript.detectedLanguage !== "string" ||
+      (transcript.detectedLanguage &&
+        !/^[A-Za-z][A-Za-z0-9-]{0,31}$/.test(transcript.detectedLanguage)) ||
+      (transcript.translatedText !== null &&
+        typeof transcript.translatedText !== "string") ||
+      (typeof transcript.translatedText === "string" &&
+        transcript.translatedText.length > 12e3) ||
+      (!transcript.hasSpeech && transcript.translatedText)
+    )
+      throw new Error("MOTION_TRANSCRIPT_INVALID");
+    const normalized = {
+      hasSpeech: transcript.hasSpeech,
+      transcript: transcript.transcript.trim(),
+      detectedLanguage: transcript.detectedLanguage,
+      translatedText: transcript.translatedText?.trim() || null,
+      ...(transcript.speechTimeline != null && {
+        speechTimeline: MotionTranscriptContract.timeline(
+          transcript.speechTimeline,
+          {
+            transcript: transcript.transcript,
+            translatedText: transcript.translatedText || "",
+            hasSpeech: transcript.hasSpeech,
+          },
+        ),
+      }),
+    };
+    const digestBytes = await crypto.subtle.digest(
+      "SHA-256",
+      new TextEncoder().encode(JSON.stringify(normalized)),
+    );
+    const digest = Array.from(new Uint8Array(digestBytes), (value) =>
+      value.toString(16).padStart(2, "0"),
+    ).join("");
+    return this._readWrite(key, (record, outbox) => {
+      this._owned(record, input);
+      const operation = record.operations[input.operationId];
+      if (!operation) {
+        const prior = record.completedOperations?.[input.operationId];
+        if (!prior) throw new Error("MOTION_OPERATION_UNKNOWN");
+        if (
+          prior.frameId !== input.frameId ||
+          prior.frameRunId !== input.frameRunId ||
+          prior.inputRevision !== input.inputRevision ||
+          input.stage !== "transcribe" ||
+          prior.digest !== digest
+        )
+          throw new Error("MOTION_TRANSCRIPT_RESULT_CONFLICT");
+        return { result: prior.eventId };
+      }
+      if (
+        operation.stage !== "transcribe" ||
+        input.stage !== "transcribe" ||
+        operation.frameId !== input.frameId ||
+        operation.frameRunId !== input.frameRunId ||
+        operation.inputRevision !== input.inputRevision
+      )
+        throw new Error("MOTION_OPERATION_SCOPE_MISMATCH");
+      if (operation.fullAudioFrames)
+        throw new Error("MOTION_TRANSCRIPT_INVALID");
+      const event = this._queueTranscript(
+        record,
+        outbox,
+        input.operationId,
+        operation,
+        "ready",
+        { transcript: normalized },
+      );
+      record.completedOperations || (record.completedOperations = {});
+      record.completedOperations[input.operationId] = {
+        frameId: operation.frameId,
+        frameRunId: operation.frameRunId,
+        inputRevision: operation.inputRevision,
+        workerId: operation.workerId || null,
+        digest,
+        eventId: event.eventId,
+      };
+      delete record.operations[input.operationId];
+      for (const failed of Object.values(record.failedOperations || {})) {
+        if (
+          failed.frameId === operation.frameId &&
+          failed.frameRunId === operation.frameRunId &&
+          failed.inputRevision === operation.inputRevision
+        )
+          failed.resolved = true;
+      }
+      if (
+        !Object.keys(record.operations).length &&
+        ["pausing", "stopping"].includes(record.state)
+      ) {
+        record.state = record.stopOrigin ? "stopped" : "paused";
+      }
+      return { record, result: event.eventId };
+    });
+  }
+  static async storeFullAudioTranscript(input) {
+    const key = this._key(input),
+      members = input.fullAudioFrames,
+      transcripts = input.transcripts;
+    if (
+      input.stage !== "transcribe" ||
+      !Array.isArray(members) ||
+      !members.length ||
+      !Array.isArray(transcripts) ||
+      transcripts.length !== members.length ||
+      transcripts.some(
+        (t, i) =>
+          t.frameId !== members[i].frameId ||
+          typeof t.hasSpeech !== "boolean" ||
+          typeof t.transcript !== "string" ||
+          t.transcript.length > 12e3 ||
+          t.hasSpeech !== !!t.transcript.trim() ||
+          typeof t.detectedLanguage !== "string" ||
+          !/^(?:[A-Za-z][A-Za-z0-9-]{0,31})?$/.test(t.detectedLanguage) ||
+          !(
+            t.translatedText === null || typeof t.translatedText === "string"
+          ) ||
+          (t.translatedText?.length || 0) > 12e3 ||
+          (!t.hasSpeech && t.translatedText),
+      )
+    )
+      throw new Error("MOTION_TRANSCRIPT_INVALID");
+    const normalized = transcripts.map((t) => ({
+      frameId: t.frameId,
+      hasSpeech: t.hasSpeech,
+      transcript: t.transcript.trim(),
+      detectedLanguage: t.detectedLanguage,
+      translatedText: t.translatedText?.trim() || null,
+      ...(t.speechTimeline != null && {
+        speechTimeline: MotionTranscriptContract.timeline(t.speechTimeline, {
+          transcript: t.transcript,
+          translatedText: t.translatedText || "",
+          hasSpeech: t.hasSpeech,
+        }),
+      }),
+    }));
+    const digest = Array.from(
+      new Uint8Array(
+        await crypto.subtle.digest(
+          "SHA-256",
+          new TextEncoder().encode(JSON.stringify(normalized)),
+        ),
+      ),
+      (b) => b.toString(16).padStart(2, "0"),
+    ).join("");
+    return this._readWrite(key, (record, outbox) => {
+      this._owned(record, input);
+      const operation =
+        record.operations[input.operationId] ||
+        record.completedOperations?.[input.operationId];
+      if (
+        !operation ||
+        operation.frameId !== input.frameId ||
+        operation.frameRunId !== input.frameRunId ||
+        operation.inputRevision !== input.inputRevision ||
+        operation.workerId !== input.workerId ||
+        JSON.stringify(operation.fullAudioFrames) !== JSON.stringify(members)
+      )
+        throw new Error("MOTION_TRANSCRIPT_RESULT_CONFLICT");
+      if (record.completedOperations?.[input.operationId]) {
+        if (operation.digest !== digest)
+          throw new Error("MOTION_TRANSCRIPT_RESULT_CONFLICT");
+        return { result: operation.eventIds };
+      }
+      const events = members.map((member, i) =>
+        this._queueTranscript(
+          record,
+          outbox,
+          input.operationId,
+          {
+            ...member,
+            retryCount: operation.retryCount,
+            fullAudioMember: true,
+          },
+          "ready",
+          { transcript: normalized[i] },
+        ),
+      );
+      record.completedOperations || (record.completedOperations = {});
+      record.completedOperations[input.operationId] = {
+        ...operation,
+        digest,
+        eventIds: events.map((e) => e.eventId),
+      };
+      delete record.operations[input.operationId];
+      for (const failed of Object.values(record.failedOperations || {})) {
+        if (
+          failed.fullAudioFrames &&
+          JSON.stringify(failed.fullAudioFrames) === JSON.stringify(members)
+        )
+          failed.resolved = true;
+      }
+      if (
+        !Object.keys(record.operations).length &&
+        ["pausing", "stopping"].includes(record.state)
+      )
+        record.state = record.stopOrigin ? "stopped" : "paused";
+      return { record, result: events.map((e) => e.eventId) };
+    });
+  }
+  static async listTranscriptOutbox(scope) {
+    const key = this._key(scope);
+    const db = await this._db();
+    return new Promise((resolve, reject) => {
+      const request = db
+        .transaction("outbox", "readonly")
+        .objectStore("outbox")
+        .index("scope")
+        .getAll(key);
+      request.onsuccess = () =>
+        resolve(request.result.sort((a, b) => a.sequence - b.sequence));
+      request.onerror = () =>
+        reject(request.error || new Error("MOTION_OUTBOX_READ_FAILED"));
+    });
+  }
+  static async ackTranscriptOutbox({
+    userId,
+    toolProjectId,
+    eventId,
+    frameId = null,
+  }) {
+    const key = this._key({ userId, toolProjectId });
+    const db = await this._db();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction("outbox", "readwrite");
+      const store = tx.objectStore("outbox");
+      let failure;
+      let removed = false;
+      tx.oncomplete = () => resolve(removed);
+      tx.onabort = () =>
+        reject(failure || tx.error || new Error("MOTION_OUTBOX_ACK_FAILED"));
+      const request = store.index("scope").getAll(key);
+      request.onsuccess = () => {
+        const events = request.result
+          .filter((event) => frameId === null || event.frameId === frameId)
+          .sort((a, b) => a.sequence - b.sequence);
+        if (!events.some((event) => event.eventId === eventId)) return;
+        if (events[0].eventId !== eventId) {
+          failure = new Error("MOTION_OUTBOX_ORDER_INVALID");
+          tx.abort();
+          return;
+        }
+        store.delete(eventId);
+        removed = true;
+      };
+    });
+  }
+  static async supersedeFrameUpload(input) {
+    return this._readWrite(this._key(input), (record) => {
+      if (input.ownerId) this._owned(record, input);
+      else if (record?.ownerId && record.leaseUntil > Date.now())
+        throw new Error("PROJECT_ALREADY_RUNNING");
+      const project = input.project,
+        operation = record?.operations?.[input.operationId];
+      const frame = project?.data_json?.frames?.[operation?.frameId];
+      if (
+        !record ||
+        project?.tool_project_id !== input.toolProjectId ||
+        project.flow_project_id !== record.flowProjectId ||
+        Number(project.data_json?.source_revision) !== record.sourceRevision ||
+        operation?.stage !== "upload" ||
+        !operation?.frameRunId ||
+        !Number.isSafeInteger(operation.inputRevision) ||
+        operation.inputRevision < 1 ||
+        !frame?.run_id ||
+        frame.run_id === operation.frameRunId ||
+        !Number.isSafeInteger(frame.input_revision) ||
+        frame.input_revision <= operation.inputRevision
+      ) {
+        throw new Error("MOTION_UPLOAD_RECEIPT_RECONCILE_REQUIRED");
+      }
+      record.failedOperations || (record.failedOperations = {});
+      record.failedOperations[input.operationId] = {
+        ...operation,
+        reason: "MOTION_FRAME_INPUT_SUPERSEDED",
+        resolved: true,
+        supersededByFrameRunId: frame.run_id,
+        supersededByInputRevision: frame.input_revision,
+      };
+      delete record.operations[input.operationId];
+      if (
+        !Object.keys(record.operations).length &&
+        ["needs_review", "pausing", "stopping"].includes(record.state)
+      ) {
+        const failed = Object.values(record.failedOperations).some(
+          (item) => item.resolved !== true,
+        );
+        record.state = record.stopOrigin
+          ? "stopped"
+          : failed
+            ? "failed"
+            : "paused";
+      }
+      if (!input.ownerId) {
+        record.ownerId = null;
+        record.leaseUntil = 0;
+        record.epoch = (record.epoch || 0) + 1;
+      }
+      return { record, result: true };
+    });
+  }
+  static async settle(input) {
+    const key = this._key(input);
+    if (!["received", "rejected"].includes(input.outcome))
+      throw new Error("MOTION_OPERATION_OUTCOME_INVALID");
+    return this._readWrite(key, (record) => {
+      this._owned(record, input);
+      if (!Object.hasOwn(record.operations, input.operationId))
+        throw new Error("MOTION_OPERATION_UNKNOWN");
+      const operation = record.operations[input.operationId];
+      if (
+        operation.frameId !== input.frameId ||
+        operation.frameRunId !== input.frameRunId ||
+        operation.inputRevision !== input.inputRevision ||
+        operation.stage !== input.stage
+      ) {
+        throw new Error("MOTION_OPERATION_SCOPE_MISMATCH");
+      }
+      if (operation.stage === "transcribe")
+        throw new Error("MOTION_TRANSCRIPT_OUTBOX_REQUIRED");
+      if (input.notDispatched === true) {
+        const flowRejected =
+          operation.stage === "flow" &&
+          ["MOTION_CANCELLED", "MOTION_FLOW_PRE_DISPATCH_FAILED"].includes(
+            input.errorCode,
+          );
+        const uploadRejected =
+          operation.stage === "upload" &&
+          ["UPLOAD_STOPPED", "MOTION_UPLOAD_FAILED"].includes(input.errorCode);
+        if (input.outcome !== "rejected" || (!flowRejected && !uploadRejected))
+          throw new Error("MOTION_OPERATION_OUTCOME_INVALID");
+        const field = flowRejected ? "rejectedFlows" : "rejectedUploads";
+        record[field] || (record[field] = {});
+        record[field][`frame:${input.frameId}`] = {
+          frameRunId: operation.frameRunId,
+          inputRevision: operation.inputRevision,
+          errorCode: input.errorCode,
+        };
+      }
+      delete record.operations[input.operationId];
+      if (
+        !Object.keys(record.operations).length &&
+        ["needs_review", "pausing", "stopping"].includes(record.state)
+      ) {
+        const failed = Object.values(record.failedOperations || {}).some(
+          (item) => item.resolved !== true,
+        );
+        record.state = record.stopOrigin
+          ? "stopped"
+          : failed
+            ? "failed"
+            : "paused";
+      }
+      return { record, result: true };
+    });
+  }
+  static async editFrameResult(input) {
+    const key = this._key(input);
+    const matchesEvent = (event) =>
+      event.frameId === input.frameId &&
+      event.frameRunId === input.frameRunId &&
+      event.inputRevision === input.inputRevision &&
+      event.sourceRevision === input.sourceRevision;
+    return this._readWrite(
+      key,
+      (record, outbox, events) => {
+        if (!record || record.sourceRevision !== input.sourceRevision)
+          return { result: true };
+        if (input.owner) this._owned(record, input.owner);
+        else if (record.ownerId && record.leaseUntil > Date.now())
+          throw new Error("PROJECT_ALREADY_RUNNING");
+        const pending = record.reservations?.[input.frameId];
+        const reservation =
+          input.owner &&
+          (pending?.frameRunId !== input.frameRunId ||
+            pending?.inputRevision !== input.inputRevision)
+            ? null
+            : pending;
+        if (
+          reservation?.token ||
+          reservation?.pendingAttemptId ||
+          reservation?.pendingSettlement
+        )
+          throw new Error("MOTION_RESERVATION_PENDING");
+        const matches = (operation) =>
+          operation.frameId === input.frameId &&
+          operation.frameRunId === input.frameRunId &&
+          operation.inputRevision === input.inputRevision;
+        if (
+          Object.values(record.operations || {}).some(
+            (operation) =>
+              matches(operation) &&
+              !["flow", "persist"].includes(operation.stage),
+          )
+        )
+          throw new Error("FRAME_OPERATION_MUST_RECONCILE");
+        if (input.checkOnly) return { result: true };
+        for (const event of events)
+          if (
+            matchesEvent(event) &&
+            ["running", "failed"].includes(event.state)
+          )
+            outbox.delete(event.eventId);
+        for (const group of [
+          "operations",
+          "failedOperations",
+          "completedOperations",
+        ]) {
+          for (const [id, operation] of Object.entries(record[group] || {}))
+            if (matches(operation)) delete record[group][id];
+        }
+        if (reservation) delete record.reservations[input.frameId];
+        if (
+          !Object.keys(record.operations || {}).length &&
+          ["needs_review", "pausing", "stopping"].includes(record.state)
+        ) {
+          const failed = Object.values(record.failedOperations || {}).some(
+            (item) => item.resolved !== true,
+          );
+          record.state = record.stopOrigin
+            ? "stopped"
+            : failed
+              ? "failed"
+              : "paused";
+        }
+        if (!input.owner) {
+          record.ownerId = null;
+          record.leaseUntil = 0;
+          record.epoch = (record.epoch || 0) + 1;
+        }
+        record.updatedAt = Date.now();
+        return { record, result: true };
+      },
+      (event) =>
+        matchesEvent(event) && !["running", "failed"].includes(event.state),
+    );
+  }
+  static async refreshTransport(owner, input) {
+    const key = this._key(owner);
+    return this._readWrite(key, (record) => {
+      this._owned(record, owner);
+      const target = input.flowTarget,
+        previous = record.flowTarget;
+      if (
+        (previous || target) &&
+        (!previous ||
+          !target ||
+          !Number.isInteger(target.tabId) ||
+          target.tabId < 0 ||
+          ["projectId", "driverKey", "origin", "mode"].some(
+            (name) => previous[name] !== target[name],
+          ))
+      )
+        throw new Error("MOTION_RUN_FENCED");
+      const nextTarget = previous
+        ? { ...previous, tabId: target.tabId }
+        : void 0;
+      let preparation = record.preparationSnapshot;
+      if (preparation) {
+        const proposed = input.preparationSnapshot;
+        if (
+          !proposed ||
+          (proposed.accountTabId !== preparation.accountTabId &&
+            proposed.settingsFingerprint === preparation.settingsFingerprint)
+        )
+          throw new Error("MOTION_RUN_FENCED");
+        preparation = {
+          ...preparation,
+          ...(preparation.flowTarget && {
+            flowTarget: { ...preparation.flowTarget, tabId: target.tabId },
+          }),
+          ...(preparation.layout && {
+            layout: {
+              ...preparation.layout,
+              sourceWindowId: proposed.layout?.sourceWindowId,
+            },
+          }),
+        };
+        if (
+          (preparation.layout &&
+            (!Number.isInteger(preparation.layout.sourceWindowId) ||
+              preparation.layout.sourceWindowId < 0)) ||
+          JSON.stringify({
+            ...proposed,
+            settingsFingerprint: preparation.settingsFingerprint,
+            accountTabId: preparation.accountTabId,
+          }) !== JSON.stringify(preparation)
+        )
+          throw new Error("MOTION_RUN_FENCED");
+      }
+      const changed =
+        JSON.stringify(previous) !== JSON.stringify(nextTarget) ||
+        JSON.stringify(record.preparationSnapshot) !==
+          JSON.stringify(preparation);
+      if (!changed) return { result: record };
+      if (nextTarget) record.flowTarget = nextTarget;
+      if (preparation) record.preparationSnapshot = preparation;
+      record.updatedAt = Date.now();
+      return { record, result: record };
+    });
+  }
+  static async refreshSettings(owner, input) {
+    const key = this._key(owner);
+    if (
+      !/^[0-9a-f]{64}$/.test(String(input.settingsSnapshot || "")) ||
+      ["autoDownloadFinal", "useOriginalAudio", "continuityEnabled"].some(
+        (name) => typeof input[name] !== "boolean",
+      ) ||
+      !/^[A-Za-z0-9]{1,20}$/.test(String(input.downloadResolution || "")) ||
+      !/^[0-9]{1,2}:[0-9]{1,2}$/.test(String(input.downloadRatio || ""))
+    )
+      throw new Error("MOTION_RUN_INVALID");
+    return this._readWrite(
+      key,
+      (record) => {
+        this._owned(record, owner);
+        if (
+          [
+            "sourceRevision",
+            "profileRevision",
+            "executionMode",
+            "profileKey",
+          ].some((name) => record[name] !== input[name]) ||
+          (record.profilePromptVariant || "legacy") !==
+            (input.profilePromptVariant || "legacy") ||
+          record.flowProjectId !== input.flowProjectId ||
+          record.runId !== input.runId ||
+          ["tabId", "projectId", "driverKey", "origin"].some(
+            (name) => record.flowTarget?.[name] !== input.flowTarget?.[name],
+          ) ||
+          !["web", "api"].includes(input.flowTarget?.mode) ||
+          (record.flowTarget?.mode !== input.flowTarget.mode &&
+            record.settingsSnapshot === input.settingsSnapshot)
+        )
+          throw new Error("MOTION_RUN_FENCED");
+        if (
+          Object.keys(record.operations || {}).length ||
+          Object.values(record.reservations || {}).some(
+            (item) =>
+              item.token || item.pendingAttemptId || item.pendingSettlement,
+          )
+        )
+          throw new Error("MOTION_RUN_DRAIN_REQUIRED");
+        if (
+          input.preparationSnapshot &&
+          (input.preparationSnapshot.settingsFingerprint !==
+            input.settingsSnapshot ||
+            input.preparationSnapshot.userId !== record.userId ||
+            input.preparationSnapshot.executionMode !== record.executionMode ||
+            input.preparationSnapshot.version !== 1 ||
+            !/^[0-9a-f]{64}$/.test(
+              input.preparationSnapshot.configFingerprint || "",
+            ) ||
+            JSON.stringify(input.preparationSnapshot.flowTarget) !==
+              JSON.stringify(input.flowTarget))
+        )
+          throw new Error("MOTION_RUN_INVALID");
+        const nextPreparation = record.preparationSnapshot && {
+          ...record.preparationSnapshot,
+          settingsFingerprint: input.settingsSnapshot,
+          flowTarget: {
+            ...record.preparationSnapshot.flowTarget,
+            mode: input.flowTarget.mode,
+          },
+        };
+        if (
+          nextPreparation &&
+          record.settingsSnapshot !== input.settingsSnapshot &&
+          Object.hasOwn(input.preparationSnapshot || {}, "accountTabId")
+        ) {
+          const tabId = input.preparationSnapshot.accountTabId;
+          if (tabId !== null && (!Number.isSafeInteger(tabId) || tabId < 0))
+            throw new Error("MOTION_RUN_INVALID");
+          nextPreparation.accountTabId = tabId;
+        }
+        if (
+          record.preparationSnapshot &&
+          JSON.stringify(nextPreparation) !==
+            JSON.stringify(input.preparationSnapshot)
+        )
+          throw new Error("MOTION_RUN_FENCED");
+        if (record.flowTarget)
+          record.flowTarget = {
+            ...record.flowTarget,
+            mode: input.flowTarget.mode,
+          };
+        for (const name of [
+          "settingsSnapshot",
+          "preparationSnapshot",
+          "autoDownloadFinal",
+          "useOriginalAudio",
+          "continuityEnabled",
+          "downloadResolution",
+          "downloadRatio",
+          "transcriptionProvider",
+          "transcriptSettings",
+        ]) {
+          if (input[name] === void 0) delete record[name];
+          else record[name] = input[name];
+        }
+        record.updatedAt = Date.now();
+        return { record, result: record };
+      },
+      true,
+    );
+  }
+  static async release(input) {
+    const key = this._key(input);
+    return this._readWrite(key, (record) => {
+      this._owned(record, input);
+      if (Object.keys(record.operations).length)
+        throw new Error("MOTION_RUN_DRAIN_REQUIRED");
+      const failed = Object.values(record.failedOperations || {}).some(
+        (item) => item.resolved !== true,
+      );
+      record.ownerId = null;
+      record.leaseUntil = 0;
+      record.state = record.stopOrigin
+        ? "stopped"
+        : failed
+          ? "failed"
+          : "paused";
+      return { record, result: true };
+    });
+  }
+  static async yieldReview(input) {
+    const key = this._key(input);
+    return this._readWrite(key, (record) => {
+      this._owned(record, input);
+      if (!Object.keys(record.operations || {}).length)
+        throw new Error("MOTION_RUN_REVIEW_NOT_REQUIRED");
+      if (
+        Object.values(record.operations).some(
+          (operation) => operation.stage === "transcribe",
+        )
+      )
+        throw new Error("MOTION_WORKER_DRAIN_REQUIRED");
+      record.state = "needs_review";
+      record.ownerId = null;
+      record.leaseUntil = 0;
+      return { record, result: true };
+    });
+  }
+  static isGenerationComplete(data) {
+    const completion = data?.generation_completion,
+      frames = data?.frames || {},
+      ids = Object.keys(frames);
+    return (
+      data?.requires_resplit !== true &&
+      Number.isSafeInteger(data?.source_revision) &&
+      data.source_revision > 0 &&
+      completion?.source_revision === data.source_revision &&
+      ids.length > 0 &&
+      Object.keys(completion?.frames || {}).length === ids.length &&
+      ids.every(
+        (id) =>
+          typeof frames[id]?.run_id === "string" &&
+          !!frames[id].run_id &&
+          Number.isSafeInteger(frames[id]?.input_revision) &&
+          frames[id].input_revision > 0 &&
+          frames[id]?.stages?.persist?.state === "ready" &&
+          !!frames[id]?.stages?.persist?.artifact_id &&
+          completion.frames[id]?.run_id === frames[id].run_id &&
+          completion.frames[id]?.input_revision === frames[id].input_revision &&
+          completion.frames[id]?.artifact_id ===
+            frames[id].stages.persist.artifact_id,
+      )
+    );
+  }
+  static async complete(input) {
+    const key = this._key(input);
+    if (
+      !Number.isSafeInteger(input.sourceRevision) ||
+      input.sourceRevision < 1 ||
+      (input.transcriptsVerified !== true &&
+        input.framesVerified !== true &&
+        (input.finalVerified !== true ||
+          !/^[A-Za-z0-9_-]{1,120}$/.test(String(input.finalArtifactId || ""))))
+    )
+      throw new Error("MOTION_FINAL_UNVERIFIED");
+    const db = await this._db();
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction(["runs", "outbox"], "readwrite");
+      const runs = tx.objectStore("runs");
+      const get = runs.get(key),
+        count = tx.objectStore("outbox").index("scope").count(key);
+      let failure,
+        ready = 0;
+      tx.oncomplete = () => resolve(true);
+      tx.onabort = () =>
+        reject(
+          failure || tx.error || new Error("MOTION_RUN_TRANSACTION_FAILED"),
+        );
+      const apply = () => {
+        if (++ready !== 2) return;
+        try {
+          const record = get.result;
+          this._owned(record, input);
+          if (
+            input.framesVerified === true &&
+            (!this.isGenerationComplete(input.project?.data_json) ||
+              input.project.tool_project_id !== record.toolProjectId ||
+              input.project.flow_project_id !== record.flowProjectId ||
+              input.project.data_json.source_revision !== record.sourceRevision)
+          )
+            throw new Error("MOTION_FINAL_UNVERIFIED");
+          if (
+            input.transcriptsVerified === true &&
+            (record.taskKind !== "transcript_batch" ||
+              JSON.stringify(record.transcriptFrameIds) !==
+                JSON.stringify(input.transcriptFrameIds))
+          )
+            throw new Error("MOTION_TRANSCRIPT_BATCH_UNVERIFIED");
+          if (
+            record.sourceRevision !== input.sourceRevision ||
+            record.state !== "running" ||
+            record.stopOrigin ||
+            Object.keys(record.operations || {}).length ||
+            Object.values(record.failedOperations || {}).some(
+              (item) => !item.resolved,
+            ) ||
+            Object.values(record.reservations || {}).some(
+              (item) =>
+                item.token || item.pendingAttemptId || item.pendingSettlement,
+            )
+          ) {
+            throw new Error("MOTION_RUN_DRAIN_REQUIRED");
+          }
+          if (count.result) throw new Error("MOTION_OUTBOX_PENDING");
+          record.state = "completed";
+          record.ownerId = null;
+          record.leaseUntil = 0;
+          if (input.framesVerified === true) {
+            record.generationCompletion = structuredClone(
+              input.project.data_json.generation_completion,
+            );
+            record.finalArtifactId = null;
+          } else if (input.transcriptsVerified !== true)
+            record.finalArtifactId = input.finalArtifactId;
+          runs.put(record);
+        } catch (error) {
+          failure = error;
+          tx.abort();
+        }
+      };
+      get.onsuccess = apply;
+      count.onsuccess = apply;
+    });
+  }
+}
+__publicField(MotionRunJournal, "DB_NAME", "tobyflow_motion_runs");
+__publicField(MotionRunJournal, "_dbPromise", null);
+globalThis.MotionRunJournal = MotionRunJournal;

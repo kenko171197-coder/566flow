@@ -1,1 +1,142 @@
-var __defProp=Object.defineProperty;var __defNormalProp=(obj,key,value)=>key in obj?__defProp(obj,key,{enumerable:true,configurable:true,writable:true,value}):obj[key]=value;var __publicField=(obj,key,value)=>__defNormalProp(obj,typeof key!=="symbol"?key+"":key,value);const _BackendSync=class _BackendSync{static init(){if(!window.eventBus)return;window.eventBus.on("node:completed",data=>{if(_BackendSync._disabled)return;const node=data?.node;const result=data?.result;if(node?.node_id&&result?.fileIds?.length>0){_BackendSync._syncNodeResult({nodeId:node.node_id,wfId:node.wf_id,nodeName:node.node_name,mediaType:node.media_type,provider:node.provider||result.provider||null,projectId:node.project_id||result.project_id||null,result})}});window.eventBus.on("task:status_changed",data=>{if(_BackendSync._disabled)return;if(data?.status==="completed"&&data?.resultFileIds){_BackendSync._syncTaskResult(data)}});console.log("[BackendSync] Initialized")}static async _syncNodeResult(data){if(!window.authManager?.isLoggedIn())return;try{const fileIds=data.result.fileIds||[];if(fileIds.length===0)return;const imageUrls=await _BackendSync._resolveFileUrls(fileIds,{provider:data.provider,projectId:data.projectId,thumbnails:data.result.thumbnails});await _BackendSync._apiCall("POST","results/sync",{type:"workflow_node",node_id:data.nodeId,wf_id:data.wfId||null,file_ids:fileIds,image_urls:imageUrls,node_name:data.nodeName||"",media_type:data.mediaType||"Image"})}catch(e){console.debug("[BackendSync] Node sync failed:",e.message);_BackendSync._disabled=true}}static async _syncTaskResult(data){if(!window.authManager?.isLoggedIn())return;try{const ids=(data.resultFileIds||"").split(",").map(s=>s.trim()).filter(Boolean);if(ids.length===0)return;const imageUrls=await _BackendSync._resolveFileUrls(ids,{provider:data.provider,projectId:data.projectId||data.project_id,thumbnails:data.resultThumbnails||data.result_thumbnails});await _BackendSync._apiCall("POST","results/sync",{type:"task",task_id:data.taskId,task_name:data.taskName||"",file_ids:ids,image_urls:imageUrls,media_type:data.mediaType||"Image"})}catch(e){console.debug("[BackendSync] Task sync failed:",e.message);_BackendSync._disabled=true}}static async _resolveFileUrls(fileIds,context={}){const urls=new Map,pending=[];for(const id of fileIds){const info=context.thumbnails?.[id];const url=typeof info==="string"?info:info?.thumbnail||info?.source_thumbnail;if(typeof url==="string"&&url.startsWith("https://"))urls.set(id,url);else pending.push(id)}if(!pending.length||context.provider&&context.provider!=="flow")return fileIds.map(id=>urls.get(id)).filter(Boolean);try{if(window.flow_uuid_gateway){const result=await window.flow_uuid_gateway.resolve(pending,{mode:"web",passive:true,projectId:context.projectId});for(const id of pending){const url=result.results[id]?.metadata?.thumbnail;if(url?.startsWith("https://"))urls.set(id,url)}}}catch(_){}return fileIds.map(id=>urls.get(id)).filter(Boolean)}static async _apiCall(method,endpoint,data){if(window.authManager?._apiCall){return window.authManager._apiCall(method,endpoint,data)}return new Promise((resolve,reject)=>{chrome.runtime.sendMessage({action:"apiRequest",method,endpoint:`api/v1/${endpoint}`,data},response=>{if(response?.success)resolve(response.data);else reject(new Error(response?.error||"API call failed"))})})}};__publicField(_BackendSync,"_disabled",false);let BackendSync=_BackendSync;window.BackendSync=BackendSync;if(window.eventBus){BackendSync.init()}else{document.addEventListener("DOMContentLoaded",()=>BackendSync.init())}
+var __defProp = Object.defineProperty;
+var __defNormalProp = (obj, key, value) =>
+  key in obj
+    ? __defProp(obj, key, {
+        enumerable: true,
+        configurable: true,
+        writable: true,
+        value,
+      })
+    : (obj[key] = value);
+var __publicField = (obj, key, value) =>
+  __defNormalProp(obj, typeof key !== "symbol" ? key + "" : key, value);
+const _BackendSync = class _BackendSync {
+  static init() {
+    if (!window.eventBus) return;
+    window.eventBus.on("node:completed", (data) => {
+      if (_BackendSync._disabled) return;
+      const node = data?.node;
+      const result = data?.result;
+      if (node?.node_id && result?.fileIds?.length > 0) {
+        _BackendSync._syncNodeResult({
+          nodeId: node.node_id,
+          wfId: node.wf_id,
+          nodeName: node.node_name,
+          mediaType: node.media_type,
+          provider: node.provider || result.provider || null,
+          projectId: node.project_id || result.project_id || null,
+          result,
+        });
+      }
+    });
+    window.eventBus.on("task:status_changed", (data) => {
+      if (_BackendSync._disabled) return;
+      if (data?.status === "completed" && data?.resultFileIds) {
+        _BackendSync._syncTaskResult(data);
+      }
+    });
+    console.log("[BackendSync] Initialized");
+  }
+  static async _syncNodeResult(data) {
+    if (!window.authManager?.isLoggedIn()) return;
+    try {
+      const fileIds = data.result.fileIds || [];
+      if (fileIds.length === 0) return;
+      const imageUrls = await _BackendSync._resolveFileUrls(fileIds, {
+        provider: data.provider,
+        projectId: data.projectId,
+        thumbnails: data.result.thumbnails,
+      });
+      await _BackendSync._apiCall("POST", "results/sync", {
+        type: "workflow_node",
+        node_id: data.nodeId,
+        wf_id: data.wfId || null,
+        file_ids: fileIds,
+        image_urls: imageUrls,
+        node_name: data.nodeName || "",
+        media_type: data.mediaType || "Image",
+      });
+    } catch (e) {
+      console.debug("[BackendSync] Node sync failed:", e.message);
+      _BackendSync._disabled = true;
+    }
+  }
+  static async _syncTaskResult(data) {
+    if (!window.authManager?.isLoggedIn()) return;
+    try {
+      const ids = (data.resultFileIds || "")
+        .split(",")
+        .map((s) => s.trim())
+        .filter(Boolean);
+      if (ids.length === 0) return;
+      const imageUrls = await _BackendSync._resolveFileUrls(ids, {
+        provider: data.provider,
+        projectId: data.projectId || data.project_id,
+        thumbnails: data.resultThumbnails || data.result_thumbnails,
+      });
+      await _BackendSync._apiCall("POST", "results/sync", {
+        type: "task",
+        task_id: data.taskId,
+        task_name: data.taskName || "",
+        file_ids: ids,
+        image_urls: imageUrls,
+        media_type: data.mediaType || "Image",
+      });
+    } catch (e) {
+      console.debug("[BackendSync] Task sync failed:", e.message);
+      _BackendSync._disabled = true;
+    }
+  }
+  static async _resolveFileUrls(fileIds, context = {}) {
+    const urls = new Map(),
+      pending = [];
+    for (const id of fileIds) {
+      const info = context.thumbnails?.[id];
+      const url =
+        typeof info === "string"
+          ? info
+          : info?.thumbnail || info?.source_thumbnail;
+      if (typeof url === "string" && url.startsWith("https://"))
+        urls.set(id, url);
+      else pending.push(id);
+    }
+    if (!pending.length || (context.provider && context.provider !== "flow"))
+      return fileIds.map((id) => urls.get(id)).filter(Boolean);
+    try {
+      if (window.flow_uuid_gateway) {
+        const result = await window.flow_uuid_gateway.resolve(pending, {
+          mode: "web",
+          passive: true,
+          projectId: context.projectId,
+        });
+        for (const id of pending) {
+          const url = result.results[id]?.metadata?.thumbnail;
+          if (url?.startsWith("https://")) urls.set(id, url);
+        }
+      }
+    } catch (_) {}
+    return fileIds.map((id) => urls.get(id)).filter(Boolean);
+  }
+  static async _apiCall(method, endpoint, data) {
+    if (window.authManager?._apiCall) {
+      return window.authManager._apiCall(method, endpoint, data);
+    }
+    return new Promise((resolve, reject) => {
+      chrome.runtime.sendMessage(
+        { action: "apiRequest", method, endpoint: `api/v1/${endpoint}`, data },
+        (response) => {
+          if (response?.success) resolve(response.data);
+          else reject(new Error(response?.error || "API call failed"));
+        },
+      );
+    });
+  }
+};
+__publicField(_BackendSync, "_disabled", false);
+let BackendSync = _BackendSync;
+window.BackendSync = BackendSync;
+if (window.eventBus) {
+  BackendSync.init();
+} else {
+  document.addEventListener("DOMContentLoaded", () => BackendSync.init());
+}

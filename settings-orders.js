@@ -1,1 +1,446 @@
-(function(){"use strict";const tr=(key,fallback)=>{const value=window.I18n?.t?.(`settings.${key}`);return value&&value!==`settings.${key}`?value:fallback};const state={userId:null,rows:new Map,nextCursor:null,loaded:false,loading:false,epoch:0,plan:null};let list,message,sentinel,scrollRoot,planBox,observer;let normalWindowId=null;async function primeNormalWindow(){try{const windows=await chrome.windows.getAll({windowTypes:["normal"]});normalWindowId=(windows.find(item=>item.focused)||windows[0])?.id??null}catch(_){normalWindowId=null}}function el(tag,className,content){const node=document.createElement(tag);if(className)node.className=className;if(content!=null)node.textContent=String(content);return node}function statusLabel(status){return tr(`ordersStatus_${status}`,status)}function money(order){const amount=Number(order.amount);if(!Number.isFinite(amount))return"\u2014";try{return new Intl.NumberFormat(window.I18n?.locale||"vi",{style:"currency",currency:order.currency||"VND",maximumFractionDigits:order.currency==="VND"?0:2}).format(amount)}catch(_){return`${amount} ${order.currency||""}`}}function date(value){const parsed=value?new Date(value):null;return parsed&&!Number.isNaN(parsed.getTime())?parsed.toLocaleDateString(window.I18n?.locale||"vi"):"\u2014"}function setMessage(value,error=false){message.textContent=value||"";message.classList.toggle("is-error",error)}function renderPlan(){if(!planBox)return;planBox.replaceChildren();if(!state.plan)return;const icon=el("span","s-orders-plan-icon");icon.setAttribute("aria-hidden","true");const logo=el("img");logo.src="icons/icon-128.png";logo.alt="";icon.append(logo);const copy=el("div","s-orders-plan-copy");const heading=el("div","s-orders-plan-label",tr("ordersCurrentPlan","Current plan"));const value=el("strong","s-orders-plan-name",state.plan.name||"\u2014");const expiry=el("div","s-orders-plan-expiry",state.plan.expires_at?`${tr("ordersPlanExpires","Expires")}: ${date(state.plan.expires_at)}`:tr("ordersNoExpiry","No expiry date"));copy.append(heading,value,expiry);const upgrade=el("button","s-orders-plan-upgrade",tr("ordersUpgrade","Upgrade"));upgrade.type="button";upgrade.addEventListener("click",async()=>{try{const response=await chrome.runtime.sendMessage({action:"openUpgradeSidePanel",windowId:normalWindowId});if(!response?.ok)throw new Error(response?.error||"SIDEBAR_OPEN_FAILED")}catch(error){setMessage(`${tr("ordersActionFailed","Action failed. Please try again.")} ${error?.message||""}`.trim(),true);primeNormalWindow()}});planBox.append(icon,copy,upgrade)}function closeMenus(){list.querySelectorAll(".s-order-menu.open").forEach(menu=>menu.classList.remove("open"))}function menuAction(menu,label,callback,danger=false){const button=el("button",`s-order-menu-action${danger?" is-danger":""}`,label);button.type="button";button.addEventListener("click",async event=>{event.stopPropagation();closeMenus();if(button.disabled)return;button.disabled=true;try{await callback()}catch(error){setMessage(`${tr("ordersActionFailed","Action failed. Please try again.")} ${error?.message||""}`.trim(),true)}finally{button.disabled=false}});menu.appendChild(button)}async function confirmAction(text){return window.customDialog?.confirm?window.customDialog.confirm(text,{title:tr("ordersConfirmTitle","Confirm action"),type:"warning",confirmText:tr("ordersConfirm","Confirm"),cancelText:tr("ordersBack","Back")}):window.confirm(text)}async function mutate(order,kind,prompt){if(!await confirmAction(prompt))return;try{const data=await window.authManager._apiCall("POST",`orders/${order.id}/${kind}`);if(kind==="cancel"){order.status="cancelled";order.can_pay=false;order.can_cancel=false}if(kind==="cancel-renewal"){order.subscription_status=data.subscription_status;order.can_cancel_renewal=false}render(order);setMessage(kind==="cancel"?tr("ordersCancelled","Order cancelled."):tr("ordersRenewalCancelled","Renewal cancelled. Your paid access remains until the end of the period."))}catch(error){setMessage(`${tr("ordersActionFailed","Action failed. Please try again.")} ${error?.message||""}`.trim(),true)}}async function checkout(order){try{const data=await window.authManager._apiCall("POST",`orders/${order.id}/checkout`);const url=new URL(data.checkout_url);const webBase=new URL(window.ApiBaseConfig.getWebBase());if(url.protocol!=="https:"||url.origin!==webBase.origin)throw new Error("CHECKOUT_URL_INVALID");await chrome.tabs.create({url:url.href})}catch(error){setMessage(`${tr("ordersActionFailed","Action failed. Please try again.")} ${error?.message||""}`.trim(),true)}}function render(order){const old=list.querySelector(`[data-order-id="${Number(order.id)}"]`);const card=el("article","s-order-card");card.dataset.orderId=String(Number(order.id));const main=el("div","s-order-main");const heading=el("div","s-order-heading");heading.append(el("strong","",order.plan_name||order.invoice||`#${order.id}`));heading.append(el("span","s-order-amount",money(order)));main.append(heading);const meta=el("div","s-order-meta");meta.append(el("span","",order.invoice||`#${order.id}`));meta.append(el("span","",order.provider==="lemonsqueezy"?"Lemon Squeezy":order.provider));meta.append(el("span","",date(order.created_at)));if(order.billing_cycle)meta.append(el("span","",tr(`ordersCycle_${order.billing_cycle}`,order.billing_cycle)));main.append(meta);const badge=el("span",`s-order-status status-${order.status}`,statusLabel(order.status));main.append(badge);if(order.provider==="lemonsqueezy"&&order.subscription_status==="cancelled"){main.append(el("div","s-order-renewal",tr("ordersRenewalOff","Renewal cancelled; paid access remains active.")))}card.append(main);const menu=el("div","s-order-menu");const trigger=el("button","s-order-menu-trigger","\u22EE");trigger.type="button";trigger.setAttribute("aria-label",tr("ordersActions","Order actions"));trigger.setAttribute("aria-haspopup","true");trigger.addEventListener("click",event=>{event.stopPropagation();const wasOpen=menu.classList.contains("open");closeMenus();if(!wasOpen){menu.classList.add("open");const rootBottom=scrollRoot?.getBoundingClientRect().bottom||window.innerHeight;const below=trigger.getBoundingClientRect().bottom+actions.offsetHeight;menu.classList.toggle("open-up",below>rootBottom)}});const actions=el("div","s-order-menu-popover");menuAction(actions,tr("ordersCopyInvoice","Copy invoice number"),async()=>{await navigator.clipboard.writeText(order.invoice||String(order.id));setMessage(tr("ordersCopied","Invoice number copied."))});if(order.can_pay===true){menuAction(actions,tr("ordersPay","Pay"),()=>checkout(order))}if(order.can_cancel===true){menuAction(actions,tr("ordersCancel","Cancel order"),()=>mutate(order,"cancel",tr("ordersCancelConfirm","Cancel this unpaid order?")),true)}if(order.can_cancel_renewal===true){menuAction(actions,tr("ordersCancelRenewal","Cancel renewal"),()=>mutate(order,"cancel-renewal",tr("ordersRenewalConfirm","Stop future charges for this subscription? Your paid access remains until the end of the period.")),true)}menu.append(trigger,actions);card.append(menu);if(old)old.replaceWith(card);else list.append(card)}async function loadMore(){if(!isActive()||state.loading||state.loaded&&!state.nextCursor)return;const userId=window.authManager?.user?.id;if(!userId||!window.authManager?.isLoggedIn?.()){setMessage(tr("ordersLogin","Sign in to view your orders."));return}const epoch=state.epoch;state.loading=true;setMessage(tr("ordersLoading","Loading orders\u2026"));try{const suffix=state.nextCursor?`?cursor=${encodeURIComponent(state.nextCursor)}`:"";const response=await window.authManager._apiCall("GET",`orders${suffix}`);if(state.epoch!==epoch||window.authManager?.user?.id!==userId)return;for(const order of response.data||[]){if(!state.rows.has(order.id)){state.rows.set(order.id,order);render(order)}}state.nextCursor=response.meta?.next_cursor||null;if(response.meta?.current_plan){state.plan=response.meta.current_plan;renderPlan()}state.loaded=true;setMessage(state.rows.size?"":tr("ordersEmpty","No orders yet."))}catch(error){if(state.epoch===epoch)setMessage(`${tr("ordersLoadFailed","Could not load orders. Scroll to retry.")} ${error?.message||""}`.trim(),true)}finally{if(state.epoch===epoch){state.loading=false;if(state.loaded&&state.nextCursor)setTimeout(checkNearEnd,0)}}}function isActive(){return document.querySelector(".settings-tab.active")?.dataset.tab==="settings"&&document.querySelector(".set-subtab.active")?.dataset.setgroup==="orders"}function checkNearEnd(){if(!scrollRoot||!sentinel||state.loading||!isActive())return;if(sentinel.getBoundingClientRect().top<=scrollRoot.getBoundingClientRect().bottom+120)loadMore()}async function show(){ensureNodes();if(!list||!message||!scrollRoot)return;await prepare();if(state.loaded)checkNearEnd()}function ensureNodes(){list||(list=document.getElementById("settingsOrdersList"));message||(message=document.getElementById("settingsOrdersMessage"));sentinel||(sentinel=document.getElementById("settingsOrdersSentinel"));scrollRoot||(scrollRoot=document.getElementById("settingsContainer"));planBox||(planBox=document.getElementById("settingsOrdersPlan"))}async function prepare(force=false){ensureNodes();if(!list||!message||!scrollRoot)return false;const userId=window.authManager?.isLoggedIn?.()?window.authManager.user?.id??null:null;if(state.userId!==userId||force){state.userId=userId;state.epoch++;state.loading=false;state.rows.clear();state.nextCursor=null;state.loaded=false;state.plan=null;list.replaceChildren();renderPlan()}const tab=document.querySelector('.set-subtab[data-setgroup="orders"]');if(!userId){tab?.classList.add("hidden");setMessage("");if(isActive())document.querySelector('.set-subtab[data-setgroup="general"]')?.click();return false}tab?.classList.remove("hidden");if(isActive()){if(!normalWindowId)primeNormalWindow();if(!state.loaded)await loadMore()}return true}function bindLazyScroll(){ensureNodes();if(!list||!message||!scrollRoot)return;if(!scrollRoot.dataset.ordersScrollBound){scrollRoot.dataset.ordersScrollBound="1";scrollRoot.addEventListener("scroll",checkNearEnd,{passive:true})}if(!observer&&typeof IntersectionObserver!=="undefined"){observer=new IntersectionObserver(entries=>{if(entries.some(entry=>entry.isIntersecting)&&isActive())loadMore()},{root:scrollRoot,rootMargin:"120px"});observer.observe(sentinel)}}document.addEventListener("click",closeMenus);window.SettingsOrders={show,prepare,bindLazyScroll}})();
+(function () {
+  "use strict";
+  const tr = (key, fallback) => {
+    const value = window.I18n?.t?.(`settings.${key}`);
+    return value && value !== `settings.${key}` ? value : fallback;
+  };
+  const state = {
+    userId: null,
+    rows: new Map(),
+    nextCursor: null,
+    loaded: false,
+    loading: false,
+    epoch: 0,
+    plan: null,
+  };
+  let list, message, sentinel, scrollRoot, planBox, observer;
+  let normalWindowId = null;
+  async function primeNormalWindow() {
+    try {
+      const windows = await chrome.windows.getAll({ windowTypes: ["normal"] });
+      normalWindowId =
+        (windows.find((item) => item.focused) || windows[0])?.id ?? null;
+    } catch (_) {
+      normalWindowId = null;
+    }
+  }
+  function el(tag, className, content) {
+    const node = document.createElement(tag);
+    if (className) node.className = className;
+    if (content != null) node.textContent = String(content);
+    return node;
+  }
+  function statusLabel(status) {
+    return tr(`ordersStatus_${status}`, status);
+  }
+  function money(order) {
+    const amount = Number(order.amount);
+    if (!Number.isFinite(amount)) return "\u2014";
+    try {
+      return new Intl.NumberFormat(window.I18n?.locale || "vi", {
+        style: "currency",
+        currency: order.currency || "VND",
+        maximumFractionDigits: order.currency === "VND" ? 0 : 2,
+      }).format(amount);
+    } catch (_) {
+      return `${amount} ${order.currency || ""}`;
+    }
+  }
+  function date(value) {
+    const parsed = value ? new Date(value) : null;
+    return parsed && !Number.isNaN(parsed.getTime())
+      ? parsed.toLocaleDateString(window.I18n?.locale || "vi")
+      : "\u2014";
+  }
+  function setMessage(value, error = false) {
+    message.textContent = value || "";
+    message.classList.toggle("is-error", error);
+  }
+  function renderPlan() {
+    if (!planBox) return;
+    planBox.replaceChildren();
+    if (!state.plan) return;
+    const icon = el("span", "s-orders-plan-icon");
+    icon.setAttribute("aria-hidden", "true");
+    const logo = el("img");
+    logo.src = "icons/icon-128.png";
+    logo.alt = "";
+    icon.append(logo);
+    const copy = el("div", "s-orders-plan-copy");
+    const heading = el(
+      "div",
+      "s-orders-plan-label",
+      tr("ordersCurrentPlan", "Current plan"),
+    );
+    const value = el(
+      "strong",
+      "s-orders-plan-name",
+      state.plan.name || "\u2014",
+    );
+    const expiry = el(
+      "div",
+      "s-orders-plan-expiry",
+      state.plan.expires_at
+        ? `${tr("ordersPlanExpires", "Expires")}: ${date(state.plan.expires_at)}`
+        : tr("ordersNoExpiry", "No expiry date"),
+    );
+    copy.append(heading, value, expiry);
+    const upgrade = el(
+      "button",
+      "s-orders-plan-upgrade",
+      tr("ordersUpgrade", "Upgrade"),
+    );
+    upgrade.type = "button";
+    upgrade.addEventListener("click", async () => {
+      try {
+        const response = await chrome.runtime.sendMessage({
+          action: "openUpgradeSidePanel",
+          windowId: normalWindowId,
+        });
+        if (!response?.ok)
+          throw new Error(response?.error || "SIDEBAR_OPEN_FAILED");
+      } catch (error) {
+        setMessage(
+          `${tr("ordersActionFailed", "Action failed. Please try again.")} ${error?.message || ""}`.trim(),
+          true,
+        );
+        primeNormalWindow();
+      }
+    });
+    planBox.append(icon, copy, upgrade);
+  }
+  function closeMenus() {
+    list
+      .querySelectorAll(".s-order-menu.open")
+      .forEach((menu) => menu.classList.remove("open"));
+  }
+  function menuAction(menu, label, callback, danger = false) {
+    const button = el(
+      "button",
+      `s-order-menu-action${danger ? " is-danger" : ""}`,
+      label,
+    );
+    button.type = "button";
+    button.addEventListener("click", async (event) => {
+      event.stopPropagation();
+      closeMenus();
+      if (button.disabled) return;
+      button.disabled = true;
+      try {
+        await callback();
+      } catch (error) {
+        setMessage(
+          `${tr("ordersActionFailed", "Action failed. Please try again.")} ${error?.message || ""}`.trim(),
+          true,
+        );
+      } finally {
+        button.disabled = false;
+      }
+    });
+    menu.appendChild(button);
+  }
+  async function confirmAction(text) {
+    return window.customDialog?.confirm
+      ? window.customDialog.confirm(text, {
+          title: tr("ordersConfirmTitle", "Confirm action"),
+          type: "warning",
+          confirmText: tr("ordersConfirm", "Confirm"),
+          cancelText: tr("ordersBack", "Back"),
+        })
+      : window.confirm(text);
+  }
+  async function mutate(order, kind, prompt) {
+    if (!(await confirmAction(prompt))) return;
+    try {
+      const data = await window.authManager._apiCall(
+        "POST",
+        `orders/${order.id}/${kind}`,
+      );
+      if (kind === "cancel") {
+        order.status = "cancelled";
+        order.can_pay = false;
+        order.can_cancel = false;
+      }
+      if (kind === "cancel-renewal") {
+        order.subscription_status = data.subscription_status;
+        order.can_cancel_renewal = false;
+      }
+      render(order);
+      setMessage(
+        kind === "cancel"
+          ? tr("ordersCancelled", "Order cancelled.")
+          : tr(
+              "ordersRenewalCancelled",
+              "Renewal cancelled. Your paid access remains until the end of the period.",
+            ),
+      );
+    } catch (error) {
+      setMessage(
+        `${tr("ordersActionFailed", "Action failed. Please try again.")} ${error?.message || ""}`.trim(),
+        true,
+      );
+    }
+  }
+  async function checkout(order) {
+    try {
+      const data = await window.authManager._apiCall(
+        "POST",
+        `orders/${order.id}/checkout`,
+      );
+      const url = new URL(data.checkout_url);
+      const webBase = new URL(window.ApiBaseConfig.getWebBase());
+      if (url.protocol !== "https:" || url.origin !== webBase.origin)
+        throw new Error("CHECKOUT_URL_INVALID");
+      await chrome.tabs.create({ url: url.href });
+    } catch (error) {
+      setMessage(
+        `${tr("ordersActionFailed", "Action failed. Please try again.")} ${error?.message || ""}`.trim(),
+        true,
+      );
+    }
+  }
+  function render(order) {
+    const old = list.querySelector(`[data-order-id="${Number(order.id)}"]`);
+    const card = el("article", "s-order-card");
+    card.dataset.orderId = String(Number(order.id));
+    const main = el("div", "s-order-main");
+    const heading = el("div", "s-order-heading");
+    heading.append(
+      el("strong", "", order.plan_name || order.invoice || `#${order.id}`),
+    );
+    heading.append(el("span", "s-order-amount", money(order)));
+    main.append(heading);
+    const meta = el("div", "s-order-meta");
+    meta.append(el("span", "", order.invoice || `#${order.id}`));
+    meta.append(
+      el(
+        "span",
+        "",
+        order.provider === "lemonsqueezy" ? "Lemon Squeezy" : order.provider,
+      ),
+    );
+    meta.append(el("span", "", date(order.created_at)));
+    if (order.billing_cycle)
+      meta.append(
+        el(
+          "span",
+          "",
+          tr(`ordersCycle_${order.billing_cycle}`, order.billing_cycle),
+        ),
+      );
+    main.append(meta);
+    const badge = el(
+      "span",
+      `s-order-status status-${order.status}`,
+      statusLabel(order.status),
+    );
+    main.append(badge);
+    if (
+      order.provider === "lemonsqueezy" &&
+      order.subscription_status === "cancelled"
+    ) {
+      main.append(
+        el(
+          "div",
+          "s-order-renewal",
+          tr(
+            "ordersRenewalOff",
+            "Renewal cancelled; paid access remains active.",
+          ),
+        ),
+      );
+    }
+    card.append(main);
+    const menu = el("div", "s-order-menu");
+    const trigger = el("button", "s-order-menu-trigger", "\u22EE");
+    trigger.type = "button";
+    trigger.setAttribute("aria-label", tr("ordersActions", "Order actions"));
+    trigger.setAttribute("aria-haspopup", "true");
+    trigger.addEventListener("click", (event) => {
+      event.stopPropagation();
+      const wasOpen = menu.classList.contains("open");
+      closeMenus();
+      if (!wasOpen) {
+        menu.classList.add("open");
+        const rootBottom =
+          scrollRoot?.getBoundingClientRect().bottom || window.innerHeight;
+        const below =
+          trigger.getBoundingClientRect().bottom + actions.offsetHeight;
+        menu.classList.toggle("open-up", below > rootBottom);
+      }
+    });
+    const actions = el("div", "s-order-menu-popover");
+    menuAction(
+      actions,
+      tr("ordersCopyInvoice", "Copy invoice number"),
+      async () => {
+        await navigator.clipboard.writeText(order.invoice || String(order.id));
+        setMessage(tr("ordersCopied", "Invoice number copied."));
+      },
+    );
+    if (order.can_pay === true) {
+      menuAction(actions, tr("ordersPay", "Pay"), () => checkout(order));
+    }
+    if (order.can_cancel === true) {
+      menuAction(
+        actions,
+        tr("ordersCancel", "Cancel order"),
+        () =>
+          mutate(
+            order,
+            "cancel",
+            tr("ordersCancelConfirm", "Cancel this unpaid order?"),
+          ),
+        true,
+      );
+    }
+    if (order.can_cancel_renewal === true) {
+      menuAction(
+        actions,
+        tr("ordersCancelRenewal", "Cancel renewal"),
+        () =>
+          mutate(
+            order,
+            "cancel-renewal",
+            tr(
+              "ordersRenewalConfirm",
+              "Stop future charges for this subscription? Your paid access remains until the end of the period.",
+            ),
+          ),
+        true,
+      );
+    }
+    menu.append(trigger, actions);
+    card.append(menu);
+    if (old) old.replaceWith(card);
+    else list.append(card);
+  }
+  async function loadMore() {
+    if (!isActive() || state.loading || (state.loaded && !state.nextCursor))
+      return;
+    const userId = window.authManager?.user?.id;
+    if (!userId || !window.authManager?.isLoggedIn?.()) {
+      setMessage(tr("ordersLogin", "Sign in to view your orders."));
+      return;
+    }
+    const epoch = state.epoch;
+    state.loading = true;
+    setMessage(tr("ordersLoading", "Loading orders\u2026"));
+    try {
+      const suffix = state.nextCursor
+        ? `?cursor=${encodeURIComponent(state.nextCursor)}`
+        : "";
+      const response = await window.authManager._apiCall(
+        "GET",
+        `orders${suffix}`,
+      );
+      if (state.epoch !== epoch || window.authManager?.user?.id !== userId)
+        return;
+      for (const order of response.data || []) {
+        if (!state.rows.has(order.id)) {
+          state.rows.set(order.id, order);
+          render(order);
+        }
+      }
+      state.nextCursor = response.meta?.next_cursor || null;
+      if (response.meta?.current_plan) {
+        state.plan = response.meta.current_plan;
+        renderPlan();
+      }
+      state.loaded = true;
+      setMessage(state.rows.size ? "" : tr("ordersEmpty", "No orders yet."));
+    } catch (error) {
+      if (state.epoch === epoch)
+        setMessage(
+          `${tr("ordersLoadFailed", "Could not load orders. Scroll to retry.")} ${error?.message || ""}`.trim(),
+          true,
+        );
+    } finally {
+      if (state.epoch === epoch) {
+        state.loading = false;
+        if (state.loaded && state.nextCursor) setTimeout(checkNearEnd, 0);
+      }
+    }
+  }
+  function isActive() {
+    return (
+      document.querySelector(".settings-tab.active")?.dataset.tab ===
+        "settings" &&
+      document.querySelector(".set-subtab.active")?.dataset.setgroup ===
+        "orders"
+    );
+  }
+  function checkNearEnd() {
+    if (!scrollRoot || !sentinel || state.loading || !isActive()) return;
+    if (
+      sentinel.getBoundingClientRect().top <=
+      scrollRoot.getBoundingClientRect().bottom + 120
+    )
+      loadMore();
+  }
+  async function show() {
+    ensureNodes();
+    if (!list || !message || !scrollRoot) return;
+    await prepare();
+    if (state.loaded) checkNearEnd();
+  }
+  function ensureNodes() {
+    list || (list = document.getElementById("settingsOrdersList"));
+    message || (message = document.getElementById("settingsOrdersMessage"));
+    sentinel || (sentinel = document.getElementById("settingsOrdersSentinel"));
+    scrollRoot || (scrollRoot = document.getElementById("settingsContainer"));
+    planBox || (planBox = document.getElementById("settingsOrdersPlan"));
+  }
+  async function prepare(force = false) {
+    ensureNodes();
+    if (!list || !message || !scrollRoot) return false;
+    const userId = window.authManager?.isLoggedIn?.()
+      ? (window.authManager.user?.id ?? null)
+      : null;
+    if (state.userId !== userId || force) {
+      state.userId = userId;
+      state.epoch++;
+      state.loading = false;
+      state.rows.clear();
+      state.nextCursor = null;
+      state.loaded = false;
+      state.plan = null;
+      list.replaceChildren();
+      renderPlan();
+    }
+    const tab = document.querySelector('.set-subtab[data-setgroup="orders"]');
+    if (!userId) {
+      tab?.classList.add("hidden");
+      setMessage("");
+      if (isActive())
+        document.querySelector('.set-subtab[data-setgroup="general"]')?.click();
+      return false;
+    }
+    tab?.classList.remove("hidden");
+    if (isActive()) {
+      if (!normalWindowId) primeNormalWindow();
+      if (!state.loaded) await loadMore();
+    }
+    return true;
+  }
+  function bindLazyScroll() {
+    ensureNodes();
+    if (!list || !message || !scrollRoot) return;
+    if (!scrollRoot.dataset.ordersScrollBound) {
+      scrollRoot.dataset.ordersScrollBound = "1";
+      scrollRoot.addEventListener("scroll", checkNearEnd, { passive: true });
+    }
+    if (!observer && typeof IntersectionObserver !== "undefined") {
+      observer = new IntersectionObserver(
+        (entries) => {
+          if (entries.some((entry) => entry.isIntersecting) && isActive())
+            loadMore();
+        },
+        { root: scrollRoot, rootMargin: "120px" },
+      );
+      observer.observe(sentinel);
+    }
+  }
+  document.addEventListener("click", closeMenus);
+  window.SettingsOrders = { show, prepare, bindLazyScroll };
+})();

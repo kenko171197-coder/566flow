@@ -1,1 +1,45 @@
-"use strict";importScripts("../../vendor/mediabunny.js");self.onmessage=async({data})=>{const{id,blob,seekEpsilon}=data;let input,sample,canvas;try{const{Input,BlobSource,ALL_FORMATS,VideoSampleSink}=self.Mediabunny;input=new Input({source:new BlobSource(blob),formats:ALL_FORMATS});const track=await input.getPrimaryVideoTrack();if(!track||!await track.canDecode())throw new Error("FRAME_VIDEO_DECODE_UNSUPPORTED");const duration=await track.computeDuration();if(!Number.isFinite(duration)||duration<=0)throw new Error("FRAME_VIDEO_DURATION_INVALID");sample=await new VideoSampleSink(track).getSample(Math.max(0,duration-seekEpsilon));if(!sample)throw new Error("FRAME_VIDEO_FRAME_EMPTY");canvas=new OffscreenCanvas(sample.displayWidth,sample.displayHeight);sample.draw(canvas.getContext("2d",{alpha:false}),0,0,canvas.width,canvas.height);const image=await canvas.convertToBlob({type:"image/png"});self.postMessage({id,success:true,blob:image,width:canvas.width,height:canvas.height})}catch(error){const code=/^FRAME_VIDEO_[A-Z_]+$/.test(error?.message||"")?error.message:"FRAME_VIDEO_DECODE_FAILED";self.postMessage({id,success:false,code})}finally{sample?.close();input?.dispose();if(canvas)canvas.width=canvas.height=1}};
+"use strict";
+importScripts("../../vendor/mediabunny.js");
+self.onmessage = async ({ data }) => {
+  const { id, blob, seekEpsilon } = data;
+  let input, sample, canvas;
+  try {
+    const { Input, BlobSource, ALL_FORMATS, VideoSampleSink } = self.Mediabunny;
+    input = new Input({ source: new BlobSource(blob), formats: ALL_FORMATS });
+    const track = await input.getPrimaryVideoTrack();
+    if (!track || !(await track.canDecode()))
+      throw new Error("FRAME_VIDEO_DECODE_UNSUPPORTED");
+    const duration = await track.computeDuration();
+    if (!Number.isFinite(duration) || duration <= 0)
+      throw new Error("FRAME_VIDEO_DURATION_INVALID");
+    sample = await new VideoSampleSink(track).getSample(
+      Math.max(0, duration - seekEpsilon),
+    );
+    if (!sample) throw new Error("FRAME_VIDEO_FRAME_EMPTY");
+    canvas = new OffscreenCanvas(sample.displayWidth, sample.displayHeight);
+    sample.draw(
+      canvas.getContext("2d", { alpha: false }),
+      0,
+      0,
+      canvas.width,
+      canvas.height,
+    );
+    const image = await canvas.convertToBlob({ type: "image/png" });
+    self.postMessage({
+      id,
+      success: true,
+      blob: image,
+      width: canvas.width,
+      height: canvas.height,
+    });
+  } catch (error) {
+    const code = /^FRAME_VIDEO_[A-Z_]+$/.test(error?.message || "")
+      ? error.message
+      : "FRAME_VIDEO_DECODE_FAILED";
+    self.postMessage({ id, success: false, code });
+  } finally {
+    sample?.close();
+    input?.dispose();
+    if (canvas) canvas.width = canvas.height = 1;
+  }
+};

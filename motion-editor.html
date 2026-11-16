@@ -1,33 +1,1563 @@
 <!doctype html>
 <html lang="vi">
-<head><meta charset="utf-8"><meta name="viewport" content="width=device-width, initial-scale=1"><title>Motion Studio · 566Flow</title><link rel="stylesheet" href="src/shared/template-badge.css"><link rel="stylesheet" href="src/motion/motion-sidebar-tokens.css"><link rel="stylesheet" href="src/shared/image-picker.css"><link rel="stylesheet" href="src/motion/motion-editor.css"><link rel="stylesheet" href="src/motion/motion-templates.css"><link rel="stylesheet" href="src/shared/upload-controls.css"><link rel="stylesheet" href="src/motion/motion-ui-additions.css"><link rel="stylesheet" href="src/motion/motion-download-modal.css"><link rel="stylesheet" href="src/motion/motion-picker-sidebar.css"><link rel="stylesheet" href="src/shared/custom-dialog.css"><style>.motion-editor-loading{position:fixed;inset:0;z-index:999999;display:flex;flex-direction:column;align-items:center;justify-content:center;gap:18px;background:var(--background,#1c1c1f);transition:opacity .3s ease}.motion-editor-loading.is-out{opacity:0;pointer-events:none}.motion-editor-loading__spinner{width:42px;height:42px;border:3px solid rgba(255,255,255,.12);border-top-color:var(--primary,#d3b525);border-radius:50%;animation:motion-editor-loading-spin .8s linear infinite}.motion-editor-loading__text{font-size:13px;font-weight:500;letter-spacing:.2px;color:var(--muted-foreground,#9a9aa2);text-align:center}.motion-editor-loading [hidden]{display:none}@keyframes motion-editor-loading-spin{to{transform:rotate(360deg)}}@media(prefers-reduced-motion:reduce){.motion-editor-loading__spinner{animation:motion-editor-loading-spin 1.5s linear infinite;animation-duration:1.5s!important}}</style></head>
-<body class="motion-popup wf-popup"><div id="motionFlowProjectOverlay" class="motion-flow-project-overlay" role="alert" aria-live="polite" hidden><div class="motion-flow-project-card"><h2><span id="motionFlowProjectTitle" data-i18n="motionEditor.text000">Không tìm thấy Flow project</span></h2><p id="motionFlowProjectMessage"></p><div class="motion-flow-project-actions"><button id="motionFlowProjectRetry" type="button"><span data-i18n="motionEditor.text001">Kiểm tra lại</span></button><button id="motionFlowProjectClose" type="button"><span data-i18n="motionEditor.text002">Đóng editor</span></button></div></div></div><div id="motionEditorLoading" class="motion-editor-loading" role="status" aria-live="polite"><div id="motionEditorLoadingSpinner" class="motion-editor-loading__spinner" aria-hidden="true"></div><div id="motionEditorLoadingText" class="motion-editor-loading__text" hidden><span data-i18n="motionEditor.text003">Đang tải Motion Studio…</span></div><button id="motionEditorLoadingRetry" type="button" hidden><span data-i18n="motionEditor.text004">Thử lại</span></button></div>
-  <header class="studio-topbar"><div class="studio-brand"><div class="header-project-title"><div id="projectTitleRow" class="project-title-row"><h1 id="projectName" role="button" tabindex="0" title="Đổi tên project">Motion Studio</h1><button id="editNameBtn" class="icon-button" type="button" title="Đổi tên project" aria-label="Đổi tên project"></button></div><div id="nameEditor" class="name-editor" hidden><input id="projectNameInput" type="text" maxlength="160" aria-label="Tên project"><button id="saveNameBtn" hidden type="button"><span data-i18n="motionEditor.text005">Lưu</span></button><button id="cancelNameBtn" hidden class="ghost-button" type="button"><span data-i18n="motionEditor.text006">Hủy</span></button></div><div class="topbar-project-meta"><span class="motion-header-brand"><img src="icons/icon-32.png" alt="" aria-hidden="true"><span>566Flow</span><span id="motionHeaderVersion" class="motion-header-version"></span></span><button id="projectFlowMode" class="topbar-flow-mode" type="button" aria-label="Mở cài đặt Flow mode"><span class="motion-flow-dot" aria-hidden="true"></span><span class="motion-flow-mode-label">Max Speed</span><span class="motion-flow-version" hidden></span></button><div class="sidebar-summary"><span class="dot dot-ready"></span><span id="projectState"><span data-i18n="motionEditor.text007">Sẵn sàng</span></span><span id="frameCount">0 frame</span></div></div></div></div><nav class="step-list studio-steps" aria-label="Các bước Motion"><div class="step is-current"><span>01</span><div><strong><span data-i18n="motionEditor.text008">Video gốc</span></strong><small><span data-i18n="motionEditor.text009">Cắt clip và âm thanh</span></small></div></div><div class="step"><span>02</span><div><strong><span data-i18n="motionEditor.text010">Tạo chuyển động</span></strong><small><span data-i18n="motionEditor.text011">Từng frame độc lập</span></small></div></div><div class="step"><span>03</span><div><strong><span data-i18n="motionEditor.text012">Xuất video</span></strong><small><span data-i18n="motionEditor.text013">Ghép và tải về</span></small></div></div></nav><div class="topbar-actions"><button id="usageLink" class="usage-link" type="button" title="Mở Settings → Storage" aria-label="Dung lượng Motion trên thiết bị, mở Storage"><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><line x1="22" y1="12" x2="2" y2="12"></line><path d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11Z"></path><line x1="6" y1="16" x2="6.01" y2="16"></line><line x1="10" y1="16" x2="10.01" y2="16"></line></svg><span class="usage-meter" aria-hidden="true"><span id="usageFill"></span></span><span id="usage">—</span></button><button id="headerResetBtn" type="button" aria-label="Clean Motion project"><svg xmlns="http://www.w3.org/2000/svg" width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="m7 21-4.3-4.3c-1-1-1-2.5 0-3.4l9.6-9.6c1-1 2.5-1 3.4 0l5.6 5.6c1 1 1 2.5 0 3.4L13 21"></path><path d="M22 21H7"></path><path d="m5 11 9 9"></path></svg><span>Clean</span></button><button id="headerSaveBtn" type="button" aria-label="Lưu project"><span data-i18n="motionEditor.text005">Lưu</span></button><button id="closeBtn" class="icon-button" type="button" aria-label="Đóng editor"></button></div></header>
-  <main class="studio-layout"><div id="sidebarResizeHandle" role="separator" aria-label="Thay đổi độ rộng sidebar" aria-orientation="vertical" tabindex="0"></div>
-    <aside class="studio-sidebar" aria-label="Thiết lập Motion Studio"><div class="sidebar-fields">
-      
-      
-      <section class="sidebar-section motion-settings"><div class="motion-field-row motion-model-reference-row"><label class="setting-field"><span class="ratio-field-label"><span class="motion-field-icon motion-flow-model-icon" aria-hidden="true"></span><span data-i18n="motionEditor.flowModel">Model</span></span><select id="motionFlowModel" data-i18n-title="motionEditor.flowModel" aria-label="Model"></select></label><label class="setting-field"><span class="ratio-field-label"><span class="motion-field-icon motion-reference-mode-label-icon" aria-hidden="true"></span><span data-i18n="motionEditor.referenceMode">Chế độ tham chiếu</span></span><select id="referenceMode"><option value="character_only" data-i18n="motionEditor.text018">Chỉ character</option><option value="character_background">Character + background</option></select></label></div><div class="motion-field-row"><label class="setting-field"><span class="ratio-field-label"><span id="motionRatioIcon" class="motion-ratio-label-icon" aria-hidden="true"></span><span data-i18n="motionEditor.text014">Tỉ lệ video</span></span><select id="motionRatio" disabled><option value="" data-i18n="motionEditor.text015">Đang tải cấu hình…</option></select></label><label class="setting-field"><span class="ratio-field-label"><span class="motion-camera-icon" aria-hidden="true"></span><span data-i18n="motionEditor.text016">Độ phân giải</span></span><select id="flowResolution" disabled><option value="" data-i18n="motionEditor.text015">Đang tải cấu hình…</option></select></label></div><div class="setting-field"><div class="motion-reference-heading"><span class="ratio-field-label"><svg width="18" height="18" viewBox="0 0 20 20" fill="currentColor" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><path d="M8.958 8.501a1.5 1.5 0 1 1 0 2.999 1.5 1.5 0 0 1 0-2.999"></path><path fill-rule="evenodd" d="M6.974 3.95a3.065 3.065 0 0 1 3.461-2.608l5.975.84a3.065 3.065 0 0 1 2.608 3.462l-.84 5.975a3.064 3.064 0 0 1-3.46 2.607l-.938-.132.03.206a3.065 3.065 0 0 1-2.608 3.462l-5.975.839a3.065 3.065 0 0 1-3.461-2.607l-.84-5.975a3.065 3.065 0 0 1 2.608-3.462l3.134-.441zm-.517 9.528a1.337 1.337 0 0 0-1.871.263l-1.513 2.007.009.06a1.736 1.736 0 0 0 1.96 1.477l5.45-.767zm3.237-6.443-5.974.838a1.736 1.736 0 0 0-1.477 1.96l.568 4.051.713-.944a2.666 2.666 0 0 1 3.733-.524l4.72 3.557a1.73 1.73 0 0 0 .516-1.487l-.84-5.975a1.735 1.735 0 0 0-1.959-1.476m.557-4.375a1.735 1.735 0 0 0-1.96 1.476l-.252 1.787 1.47-.206a3.066 3.066 0 0 1 3.462 2.61l.617 4.397 1.314.186a1.735 1.735 0 0 0 1.96-1.477l.84-5.975a1.736 1.736 0 0 0-1.478-1.96z" clip-rule="evenodd"></path></svg><span data-i18n="motionEditor.text017">Ảnh tham chiếu</span></span></div><label id="characterCountGroup" class="setting-field" hidden><span class="ratio-field-label"><svg width="16" height="16" viewBox="0 0 200 200" xmlns="http://www.w3.org/2000/svg" fill="currentColor" aria-hidden="true"><path d="M95.5,26.8c38.9,0,70.5,31.5,70.5,70.5c0,0,0,0,0,0V119c0,3-2.4,5.4-5.4,5.4c-3,0-5.4-2.4-5.4-5.4V97.3c0-32.9-26.7-59.6-59.6-59.6S35.8,64.3,35.8,97.3c0,0,0,0,0,0v72.3c-0.1,3-2.6,5.3-5.6,5.2c-2.8-0.1-5.1-2.4-5.2-5.2V97.3C25,58.4,56.5,26.8,95.5,26.8C95.5,26.8,95.5,26.8,95.5,26.8z M136.3,85.3c2.6-1.4,5.9-0.4,7.3,2.2c0.4,0.8,0.6,1.7,0.6,2.6V119c0,3-2.4,5.4-5.4,5.4c-3,0-5.4-2.4-5.4-5.4V99c-23.5,11.6-50.1,15.4-75.9,10.9v16.3c0,21,17,37.9,38,37.9c2.1,0,4.2-0.2,6.3-0.5c3-0.4,5.7,1.7,6.1,4.7c0.4,2.8-1.5,5.4-4.3,6c-26.6,4.5-51.7-13.4-56.2-40c-0.5-2.7-0.7-5.4-0.7-8.1v-22.9l0.1-1.2c0.7-2.9,3.6-4.7,6.5-4.1c0,0,0,0,0,0c26.7,6.1,54.7,2.4,78.8-10.5L136.3,85.3L136.3,85.3z M144.6,130.9c0.4-0.9,1.4-1.3,2.2-0.9c0.4,0.2,0.8,0.5,0.9,0.9l4.6,10.9c1.7,4.1,5,7.4,9.1,9.1l10.9,4.6c0.9,0.4,1.3,1.3,0.9,2.2c-0.2,0.4-0.5,0.8-0.9,0.9l-10.9,4.6c-4.1,1.7-7.4,5-9.1,9.1l-4.6,10.9c-0.4,0.9-1.4,1.3-2.3,0.9c-0.4-0.2-0.7-0.5-0.9-0.9l-4.6-10.9c-1.7-4.1-5-7.4-9.1-9.1l-10.9-4.6c-0.9-0.4-1.3-1.3-0.9-2.2c0.2-0.4,0.5-0.8,0.9-0.9l10.9-4.6c4.1-1.7,7.3-5,9.1-9.1C140,141.8,144.6,130.9,144.6,130.9z"></path></svg><span data-i18n="motionEditor.characterCount">Characters</span></span><select id="characterCount"><option value="1" data-i18n="motionEditor.oneCharacter">1 character</option><option value="2" data-i18n="motionEditor.twoCharacters">2 characters</option></select></label><div id="characterDropZone" class="reference-drop-zone" role="button" tabindex="0" aria-label="Thả ảnh character hoặc mở bộ chọn"><div id="characterRefPreview" class="reference-preview" aria-hidden="true"><span class="character-reference-icon" aria-hidden="true"></span></div><div><strong id="characterRefLabel">Character</strong><small id="characterRefSummary"><span data-i18n="motionEditor.text019">Thả ảnh hoặc chọn từ thư viện</span></small></div></div><div id="character2RefGroup" hidden><div id="character2DropZone" class="reference-drop-zone" role="button" tabindex="0" aria-label="Thả ảnh character hoặc mở bộ chọn"><div id="character2RefPreview" class="reference-preview" aria-hidden="true"><span class="character-reference-icon" aria-hidden="true"></span></div><div><strong data-i18n="motionEditor.character2">Character 2</strong><small id="character2RefSummary"><span data-i18n="motionEditor.text019">Thả ảnh hoặc chọn từ thư viện</span></small></div></div></div><div id="backgroundRefGroup" hidden><div id="backgroundDropZone" class="reference-drop-zone" role="button" tabindex="0" aria-label="Thả ảnh background hoặc mở bộ chọn"><div id="backgroundRefPreview" class="reference-preview" aria-hidden="true"><svg class="ref-btn-icon" width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round"><path d="M15 8h.01"></path><path d="M12.5 21h-6.5a3 3 0 0 1 -3 -3v-12a3 3 0 0 1 3 -3h12a3 3 0 0 1 3 3v6.5"></path><path d="M3 16l5 -5c.928 -.893 2.072 -.893 3 0l3.5 3.5"></path><path d="M14 14l1 -1c.679 -.653 1.473 -.829 2.214 -.526"></path><path d="M19 22v-6"></path><path d="M22 19l-3 -3l-3 3"></path></svg></div><div><strong>Background</strong><small id="backgroundRefSummary"><span data-i18n="motionEditor.text019">Thả ảnh hoặc chọn từ thư viện</span></small></div></div></div><p id="referenceStatus" class="helper-text" role="status"></p></div><aside id="motionTemplateGuide" class="motion-template-guide" hidden></aside><div id="motionSpeechAgentField" class="setting-field motion-agent-field" hidden><div class="motion-agent-picker"><span class="motion-agent-label"><span class="motion-agent-icon" aria-hidden="true"></span><span data-i18n="motionEditor.text022">Agent lời thoại</span></span><div class="motion-agent-choices" role="group" aria-label="Chọn agent lời thoại"><button type="button" data-motion-agent="chatgpt" aria-pressed="false"><i aria-hidden="true"></i>ChatGPT</button><button type="button" data-motion-agent="gemini" aria-pressed="false"><i aria-hidden="true"></i>Gemini</button></div></div><select id="transcriptionAgent" hidden aria-hidden="true" tabindex="-1"><option value="chatgpt">ChatGPT</option><option value="gemini">Gemini</option></select><span class="agent-status-row"><small id="transcriptionAgentStatus" role="status"><span data-i18n="motionEditor.text023">Đang kiểm tra…</span></small><button id="transcriptionAgentOpen" type="button"><span data-i18n="motionEditor.text024">Connect</span></button></span></div><div class="setting-toggle"><span><strong class="motion-toggle-label motion-toggle-voice"><span data-i18n="motionEditor.text025">Đồng bộ lời thoại</span></strong><small><span data-i18n="motionEditor.text026">Yêu cầu Flow tạo giọng mới</span></small></span><input id="voiceEnabled" type="checkbox" role="switch" aria-label="Đồng bộ lời thoại"></div><div class="setting-toggle"><span><strong class="motion-toggle-label motion-toggle-subtitle"><span data-i18n="motionEditor.text027">Hiện phụ đề</span></strong><small><span data-i18n="motionEditor.text028">Yêu cầu Flow vẽ chữ</span></small></span><input id="subtitleEnabled" type="checkbox" role="switch" aria-label="Hiện phụ đề"></div><div id="reviewSubtitleRow" class="setting-toggle" hidden><span><strong class="motion-toggle-label motion-toggle-review"><span data-i18n="motionEditor.reviewSubtitle">Review sub</span></strong><small data-i18n="motionEditor.reviewSubtitleHint">Dừng trước khi tạo video để kiểm tra sub</small></span><input id="reviewSubtitle" type="checkbox" role="switch" aria-label="Review sub"></div><div id="translateDialogueRow" class="setting-toggle" hidden><span><strong class="motion-toggle-label motion-toggle-language"><span data-i18n="motionEditor.text029">Dịch lời thoại</span></strong><small><span data-i18n="motionEditor.text030">Dùng bản dịch cho voice/sub</span></small></span><input id="translateEnabled" type="checkbox" role="switch" disabled aria-label="Dịch lời thoại"></div><div id="targetLanguageRow" class="setting-field" hidden><span id="targetLanguageHeading"><span data-i18n="motionEditor.text031">Ngôn ngữ đích</span></span><input id="targetLanguage" type="text" maxlength="80" placeholder="Ví dụ: Vietnamese"></div><div class="motion-field-row motion-speech-fields"><label id="voiceModeRow" class="setting-field" hidden><span class="ratio-field-label"><span class="motion-speech-style-icon" aria-hidden="true"></span><span data-i18n="motionEditor.voiceMode">Kiểu lời thoại</span></span><select id="motionVoiceMode"><option value="lip_sync" data-i18n="motionEditor.voiceModeLipSync" selected>Lip-sync</option><option value="character" data-i18n="motionEditor.voiceModeNormal">Normal dialogue</option><option value="narration" data-i18n="motionEditor.voiceModeNarration">Off-screen narration</option></select><small id="voiceModeHint" data-i18n="motionEditor.voiceStyleUnavailable" hidden>Admin cần cấu hình và publish prompt cho chế độ thoại đã chọn.</small></label><div id="voicePickerRow" class="setting-field" hidden><span id="motionFlowVoiceHeading" class="ratio-field-label"><span id="motionFlowVoiceIcon" class="motion-flow-voice-icon" aria-hidden="true"></span><span data-i18n="motionEditor.text032">Giọng đọc Flow</span></span><button id="motionVoiceTrigger" aria-labelledby="motionFlowVoiceHeading motionVoiceLabel" class="motion-voice-trigger" type="button"><span id="motionVoiceThumb" class="motion-voice-thumb" aria-hidden="true"></span><span id="motionVoiceLabel"><span data-i18n="motionEditor.text033">Giọng ngẫu nhiên</span></span><span class="motion-select-arrow" aria-hidden="true"></span></button><input id="motionVoiceSlug" type="hidden" value=""></div></div><label id="voiceDescriptionRow" class="setting-field" hidden><span class="ratio-field-label"><span class="motion-voice-description-icon" aria-hidden="true"></span><span data-i18n="motionEditor.text034">Mô tả giọng</span></span><span class="motion-prompt-input-wrap"><textarea id="voiceDescription" aria-describedby="voiceDescriptionCounter voiceDescriptionLimitError" rows="2" maxlength="500" data-i18n-placeholder="motionEditor.voiceDescriptionPlaceholder" placeholder="Giọng, nhịp, cảm xúc…"></textarea><span id="voiceDescriptionCounter" class="motion-text-count"></span></span><span id="voiceDescriptionLimitError" class="motion-text-limit-error" role="status" aria-live="polite" hidden></span></label><label id="customPromptRow" class="setting-field"><span class="ratio-field-label"><span class="motion-custom-prompt-icon" aria-hidden="true"></span><span data-i18n="motionEditor.customPrompt">Prompt tùy chỉnh</span></span><span class="motion-prompt-input-wrap"><textarea id="motionCustomPrompt" aria-describedby="motionCustomPromptCounter motionCustomPromptLimitError" rows="2" maxlength="5000" data-i18n-placeholder="motionEditor.customPromptPlaceholder" placeholder="Thêm yêu cầu vào cuối prompt tạo video…"></textarea><span id="motionCustomPromptCounter" class="motion-text-count"></span></span><span id="motionCustomPromptLimitError" class="motion-text-limit-error" role="status" aria-live="polite" hidden></span></label><button id="saveMotionSettings" hidden class="primary-button" type="button" disabled><span data-i18n="motionEditor.text035">Lưu Motion</span></button><p id="motionSettingsStatus" class="helper-text" role="status"></p></section>
-      <section class="sidebar-section settings-section"><div class="setting-toggle"><span><strong id="continuityLabel" class="motion-toggle-label motion-toggle-continuity" data-i18n="motionEditor.continuity">Liền mạch giữa các frame</strong><small id="continuityHint" data-i18n="motionEditor.continuityHint">Dùng ảnh cuối kết quả trước làm tham chiếu phụ. Video được tạo lần lượt để giữ ngoại hình nhất quán.</small></span><input id="continuityEnabled" type="checkbox" role="switch" aria-labelledby="continuityLabel" aria-describedby="continuityHint"></div><div class="setting-toggle"><span><strong class="motion-download-label"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M11 5 6 9H3v6h3l5 4z"/><path d="M15 8a6 6 0 0 1 0 8m3-11a10 10 0 0 1 0 14"/></svg><span id="useOriginalAudioLabel" data-i18n="motionEditor.useOriginalAudio">Sử dụng âm thanh gốc</span></strong><small id="useOriginalAudioHint" data-i18n="motionEditor.useOriginalAudioHint">Thay âm thanh video cuối bằng âm thanh gốc. Khẩu hình do AI tạo có thể không khớp hoàn toàn.</small></span><input id="useOriginalAudio" type="checkbox" role="switch" aria-labelledby="useOriginalAudioLabel" aria-describedby="useOriginalAudioHint"></div><div class="setting-toggle"><span><strong class="motion-download-label"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M12 3v12m-4-4 4 4 4-4"/><path d="M5 17v3h14v-3"/></svg><span data-i18n="motionEditor.text036">Tự động tải video cuối</span></strong><small><span data-i18n="motionEditor.text037">Tải sau khi ghép hoàn tất</span></small></span><input id="autoDownloadFinal" type="checkbox" role="switch" aria-label="Tự động tải video cuối"></div><div id="removeFinalVideoWatermarkRow" class="setting-toggle motion-final-watermark-row" hidden><span><strong class="motion-download-label"><svg width="16" height="16" viewBox="0 0 24 24" fill="none" aria-hidden="true"><g fill="currentColor"><path d="M2 14.25c.41 0 .75.34.75.75v2.5c0 2.07 1.68 3.75 3.75 3.75H9c.41 0 .75.34.75.75s-.34.75-.75.75H6.5c-2.89 0-5.25-2.35-5.25-5.25V15c0-.41.34-.75.75-.75m20 1c.41 0 .75.34.75.75v1.5c0 2.9-2.36 5.25-5.25 5.25H16c-.41 0-.75-.34-.75-.75s.34-.75.75-.75h1.5c2.07 0 3.75-1.68 3.75-3.75V16c0-.41.34-.75.75-.75"></path><path fill-rule="evenodd" d="M14 5.75c2.42 0 3.75 1.33 3.75 3.75v1.75H19c.41 0 .75.34.75.75s-.34.75-.75.75h-1.25v1.75c0 2.42-1.33 3.75-3.75 3.75h-4c-2.42 0-3.75-1.33-3.75-3.75v-1.75H5c-.41 0-.75-.34-.75-.75s.34-.75.75-.75h1.25V9.5c0-2.42 1.33-3.75 3.75-3.75zm-6.25 7v1.75c0 1.58.67 2.25 2.25 2.25h4c1.58 0 2.25-.67 2.25-2.25v-1.75zM10 7.25c-1.58 0-2.25.67-2.25 2.25v1.75h8.5V9.5c0-1.58-.67-2.25-2.25-2.25z" clip-rule="evenodd"></path><path d="M9 1.25c.41 0 .75.34.75.75s-.34.75-.75.75H6.5c-2.07 0-3.75 1.68-3.75 3.75V9c0 .41-.34.75-.75.75s-.75-.34-.75-.75V6.5c0-2.9 2.36-5.25 5.25-5.25zm8.5 0c2.89 0 5.25 2.35 5.25 5.25V9c0 .41-.34.75-.75.75s-.75-.34-.75-.75V6.5c0-2.07-1.68-3.75-3.75-3.75H15c-.41 0-.75-.34-.75-.75s.34-.75.75-.75z"></path></g></svg><span id="removeFinalVideoWatermarkLabel" data-i18n="motionEditor.removeVideoWatermark">Remove video watermark</span></strong><small id="removeFinalVideoWatermarkHint" data-i18n="motionEditor.removeVideoWatermarkHint">Remove Omni watermark on videos download (~68% Effective)</small></span><input id="removeFinalVideoWatermark" type="checkbox" role="switch" aria-labelledby="removeFinalVideoWatermarkLabel" aria-describedby="removeFinalVideoWatermarkHint"></div><button id="savePreferences" hidden class="primary-button" type="button" disabled><span data-i18n="motionEditor.text038">Lưu thiết lập</span></button></section>
-      </div><p id="motionSettingsLockNote" class="helper-text motion-settings-lock-note" role="status" hidden></p><section class="sidebar-section control-section"><p id="preferencesStatus" class="helper-text" role="status"></p><button id="pauseBtn" class="wide-button" type="button" disabled><span data-i18n="motionEditor.text039">Tạm dừng</span></button><p id="pauseStatus" class="helper-text" role="status"></p></section>
-    </aside>
-    <div class="studio-main">
-      <section class="viewer-grid" aria-label="Màn xem video">
-        <article class="viewer-panel"><div class="viewer-heading"><div><h2><span data-i18n="motionEditor.text008">Video gốc</span></h2></div><span id="sourceMeta" class="viewer-meta"><span data-i18n="motionEditor.text041">Chưa chọn video</span></span></div><div id="sourceDropZone" class="viewer-screen source-drop-zone" role="button" tabindex="0" aria-label="Thả video nguồn hoặc chọn video"><video id="sourceStageVideo" controls playsinline hidden></video><div id="sourcePlaceholder" class="viewer-placeholder"><span class="source-upload-icon" aria-hidden="true"></span><strong><span data-i18n="motionEditor.text042">Thả video vào đây</span></strong><span class="source-drop-or"><span data-i18n="motionEditor.text043">hoặc</span></span><span class="source-pick-button"><span data-i18n="motionEditor.text044">Chọn video</span></span><small data-i18n="motionEditor.sourceUploadHint">MP4, MOV hoặc WebM · Tránh tải video có người nổi tiếng.</small></div></div><div class="viewer-footer"><input id="sourceInput" type="file" accept="video/mp4,video/quicktime,video/webm" aria-label="Chọn video gốc"><button id="motionTemplateBtn" type="button"><span class="motion-template-trigger-icon" aria-hidden="true"></span><span data-i18n="motionTemplates.title">Motion Templates</span><span class="template-subtab-badge" aria-hidden="true">HOT</span></button><button id="replaceSourceBtn" type="button"><span data-i18n="motionEditor.text045">Chọn / thay video</span></button><label class="motion-speed-picker"><span class="motion-speed-icon" aria-hidden="true"></span><select id="slowSourceBtn" aria-label="Speed" disabled><option value="" selected disabled>Speed</option><option value="0.7">0.7×</option><option value="0.6">0.6×</option><option value="0.5">0.5×</option><option value="0.4">0.4×</option></select></label><button id="splitBtn" class="primary-button" type="button" disabled><span data-i18n="motionEditor.text046">Cắt và lưu</span></button></div></article>
-        <article class="viewer-panel"><div class="viewer-heading"><div><h2><span data-i18n="motionEditor.text040">Video hoàn chỉnh</span></h2></div><span id="finalState" class="viewer-meta"><span data-i18n="motionEditor.text047">Chưa có video</span></span></div><div class="viewer-screen"><video id="resultStageVideo" controls playsinline hidden></video><div id="resultMergeLoading" class="result-merge-loading" role="status" aria-live="polite" hidden><span class="result-merge-spinner" aria-hidden="true"></span><strong><span data-i18n="motionEditor.text048">Đang ghép video…</span></strong></div><div id="resultPlaceholder" class="viewer-placeholder"><span class="placeholder-icon result-icon" aria-hidden="true"></span><strong><span data-i18n="motionEditor.text049">Video kết quả sẽ xuất hiện tại đây</span></strong><small><span data-i18n="motionEditor.text050">Ghép sau khi mọi frame đã có kết quả Flow</span></small></div></div><p id="finalSpeedHint" class="motion-speed-hint" role="status" hidden></p><div class="viewer-footer"><button id="mergeBtn" type="button" disabled><span data-i18n="motionEditor.text051">Ghép frame</span></button><label class="motion-speed-picker"><span class="motion-speed-icon" aria-hidden="true"></span><select id="finalSpeedBtn" aria-label="Final video Speed" disabled><option value="" selected disabled>Speed</option><option value="0.7">1.43× (0.7×)</option><option value="0.6">1.67× (0.6×)</option><option value="0.5">2× (0.5×)</option><option value="0.4">2.5× (0.4×)</option></select></label><button id="playFinal" type="button" disabled><span data-i18n="videoSplit.preview">Xem video</span></button><button id="downloadFinal" type="button" disabled><span data-i18n="motionEditor.text052">Tải video</span></button></div></article>
-        <button id="playBothVideos" class="motion-compare-play" type="button" hidden disabled aria-label="Play videos" data-i18n-title="videoSplit.preview"><svg class="motion-compare-play-icon" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M8 5v14l11-7z"/></svg><svg class="motion-compare-pause-icon" viewBox="0 0 24 24" fill="currentColor" aria-hidden="true"><path d="M6 5h4v14H6zm8 0h4v14h-4z"/></svg></button>
-      </section>
-      <section class="activity-bar" aria-label="Tiến độ"><div class="activity-copy"><span class="activity-pulse" aria-hidden="true"></span><p id="status" role="status"><span data-i18n="motionEditor.text053">Đang mở project…</span></p></div><button id="cancelBtn" type="button" disabled><span data-i18n="motionEditor.text054">Hủy tác vụ</span></button><progress id="progress" value="0" max="100"></progress></section>
-      <section class="timeline-section" aria-label="Timeline frame"><div id="timelineResizeHandle" class="timeline-resize-handle" role="separator" tabindex="0" aria-label="Timeline" aria-orientation="horizontal"></div><div class="timeline-toolbar"><div><div class="timeline-heading"><h2>Frame video</h2><small id="motionFrameLimitHint" hidden></small></div><button id="clearFramesBtn" type="button" class="clear-frames-btn" disabled><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M3 6h18M8 6V4h8v2m3 0-1 14H6L5 6m5 4v6m4-6v6"/></svg><span data-i18n="motionEditor.text055">Xóa tất cả frame</span></button><small id="motionSplitSummary" aria-live="polite"></small></div><div class="timeline-legend"><span><i class="legend-dot ready"></i> <span data-i18n="common.ready">Sẵn sàng</span></span><span><i class="legend-dot running"></i> <span data-i18n="videoSplit.working">Đang xử lý</span></span><span><i class="legend-dot failed"></i> <span data-i18n="common.error">Lỗi</span></span></div></div><div class="timeline-scroll" tabindex="0" role="region" aria-label="Timeline, cuộn ngang để xem các frame"><div id="timelineRuler" class="timeline-ruler"></div><div class="timeline-track"><div class="track-label track-source"><strong><span data-i18n="motionEditor.text058">NGUỒN</span></strong><small><span data-i18n="motionEditor.text008">Video gốc</span></small></div><div id="sourceTrack" class="track-clips"></div></div><div class="timeline-track result-track"><div class="track-label track-flow"><strong>FLOW</strong><small><span data-i18n="motionEditor.text059">Kết quả gen</span></small></div><div id="resultTrack" class="track-clips"></div></div></div><div id="frames" class="sr-only" aria-hidden="true"></div></section>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1" />
+    <title>Motion Studio · 566Flow</title>
+    <link rel="stylesheet" href="src/shared/template-badge.css" />
+    <link rel="stylesheet" href="src/motion/motion-sidebar-tokens.css" />
+    <link rel="stylesheet" href="src/shared/image-picker.css" />
+    <link rel="stylesheet" href="src/motion/motion-editor.css" />
+    <link rel="stylesheet" href="src/motion/motion-templates.css" />
+    <link rel="stylesheet" href="src/shared/upload-controls.css" />
+    <link rel="stylesheet" href="src/motion/motion-ui-additions.css" />
+    <link rel="stylesheet" href="src/motion/motion-download-modal.css" />
+    <link rel="stylesheet" href="src/motion/motion-picker-sidebar.css" />
+    <link rel="stylesheet" href="src/shared/custom-dialog.css" />
+    <style>
+      .motion-editor-loading {
+        position: fixed;
+        inset: 0;
+        z-index: 999999;
+        display: flex;
+        flex-direction: column;
+        align-items: center;
+        justify-content: center;
+        gap: 18px;
+        background: var(--background, #1c1c1f);
+        transition: opacity 0.3s ease;
+      }
+      .motion-editor-loading.is-out {
+        opacity: 0;
+        pointer-events: none;
+      }
+      .motion-editor-loading__spinner {
+        width: 42px;
+        height: 42px;
+        border: 3px solid rgba(255, 255, 255, 0.12);
+        border-top-color: var(--primary, #d3b525);
+        border-radius: 50%;
+        animation: motion-editor-loading-spin 0.8s linear infinite;
+      }
+      .motion-editor-loading__text {
+        font-size: 13px;
+        font-weight: 500;
+        letter-spacing: 0.2px;
+        color: var(--muted-foreground, #9a9aa2);
+        text-align: center;
+      }
+      .motion-editor-loading [hidden] {
+        display: none;
+      }
+      @keyframes motion-editor-loading-spin {
+        to {
+          transform: rotate(360deg);
+        }
+      }
+      @media (prefers-reduced-motion: reduce) {
+        .motion-editor-loading__spinner {
+          animation: motion-editor-loading-spin 1.5s linear infinite;
+          animation-duration: 1.5s !important;
+        }
+      }
+    </style>
+  </head>
+  <body class="motion-popup wf-popup">
+    <div
+      id="motionFlowProjectOverlay"
+      class="motion-flow-project-overlay"
+      role="alert"
+      aria-live="polite"
+      hidden
+    >
+      <div class="motion-flow-project-card">
+        <h2>
+          <span id="motionFlowProjectTitle" data-i18n="motionEditor.text000"
+            >Không tìm thấy Flow project</span
+          >
+        </h2>
+        <p id="motionFlowProjectMessage"></p>
+        <div class="motion-flow-project-actions">
+          <button id="motionFlowProjectRetry" type="button">
+            <span data-i18n="motionEditor.text001">Kiểm tra lại</span></button
+          ><button id="motionFlowProjectClose" type="button">
+            <span data-i18n="motionEditor.text002">Đóng editor</span>
+          </button>
+        </div>
+      </div>
     </div>
-  </main>
-  <dialog id="frameDialog" class="frame-dialog" aria-labelledby="frameDialogTitle"><div class="dialog-top"><div><span id="frameDialogKicker" class="eyebrow">FRAME</span><h2 id="frameDialogTitle"><span data-i18n="motionEditor.text060">Chi tiết frame</span></h2></div><button id="closeFrameDialog" class="icon-button" type="button" aria-label="Đóng chi tiết frame"></button></div><div class="frame-dialog-content"><div class="frame-dialog-body"><div class="frame-preview-column"><div id="frameVideoGrid" class="frame-video-grid"><div id="frameCompareSource" class="frame-video-cell" hidden><span class="frame-video-label"><span data-i18n="motionEditor.text008">Video gốc</span></span><div class="frame-video-wrap"><video id="frameCompareSourceVideo" muted playsinline></video><div id="frameCompareSourceEmpty" class="dialog-empty" hidden><span data-i18n="motionEditor.text061">Chưa có video gốc</span></div></div></div><div class="frame-video-cell"><span id="frameResultLabel" class="frame-video-label"><span data-i18n="motionEditor.text008">Video gốc</span></span><div class="frame-video-wrap"><video id="frameDialogVideo" controls playsinline></video><div id="frameDialogVideoEmpty" class="dialog-empty" hidden><span data-i18n="motionEditor.text062">Chưa có video cho frame này</span></div></div></div></div><div class="frame-audio-controls"><audio id="frameDialogAudio" controls preload="metadata" aria-label="Âm thanh frame" hidden></audio></div></div><div class="frame-info"><div class="frame-info-row" hidden><strong><span data-i18n="motionEditor.text063">Trạng thái</span></strong><span id="frameDialogStatus"></span></div><div class="frame-info-row"><strong class="frame-time-label"><span class="motion-speed-icon" aria-hidden="true"></span><span data-i18n="motionEditor.text064">Thời gian</span></strong><span id="frameDialogTime"></span></div><div id="frameDialogError" class="frame-error" hidden></div><div class="frame-transcript" id="frameTranscriptPanel"><div class="frame-transcript-heading"><div class="frame-transcript-title"><strong><span data-i18n="motionEditor.text065">Lời thoại / phụ đề</span></strong><div id="frameSubEmpty" class="frame-sub-empty" hidden><span class="frame-sub-empty-message">(<span data-i18n="motionEditor.frameSpeechMissing">Chưa có lời thoại</span>)</span><small id="frameSubHint" hidden></small></div></div><label class="speech-check" for="frameHasSpeech"><span><span data-i18n="motionEditor.text068">Frame có lời nói</span></span><input id="frameHasSpeech" type="checkbox" role="switch" checked aria-controls="frameTranscriptInput frameTranslationInput" aria-describedby="frameSpeechUsage" ></label></div><p id="frameSpeechUsage" class="frame-speech-usage" role="status" hidden></p><div id="frameTranscriptError" class="frame-transcript-error" role="status" hidden><span class="motion-sub-status-dot" aria-hidden="true"></span><div class="frame-transcript-error-copy"><strong id="frameTranscriptErrorTitle"></strong><span id="frameTranscriptErrorReason" hidden></span><code id="frameTranscriptErrorCode" hidden></code></div></div><div class="transcript-field"><label for="frameTranscriptInput" class="transcript-label transcript-original"><span data-i18n="motionEditor.text069">Lời gốc</span></label><div class="transcript-input-wrap"><textarea id="frameTranscriptInput" rows="3" maxlength="12000" placeholder="Nhập hoặc sửa lời thoại của frame"></textarea></div></div><label class="transcript-field"><span class="transcript-label transcript-translation"><span data-i18n="motionEditor.text070">Bản dịch (nếu có)</span></span><textarea id="frameTranslationInput" rows="2" maxlength="12000" placeholder="Để trống nếu dùng lời gốc"></textarea></label><details id="frameSpeechTimeline" class="frame-speech-timeline" hidden><summary data-i18n="motionEditor.speechTimeline">Nhịp thoại</summary><pre id="frameSpeechTimelineText"></pre><small data-i18n="motionEditor.speechTimelineHint">Thời gian tính từ đầu frame. Sửa lời thoại sẽ xóa timeline cũ; lấy Sub lại để cập nhật.</small></details><div class="frame-transcript-actions"><button id="frameSaveTranscript" type="button"><svg width="15" height="15" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><path d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2Z"/><path d="M17 21v-8H7v8M7 3v5h8"/></svg><span><span data-i18n="motionEditor.text071">Lưu lời thoại</span></span></button><button id="frameResub" type="button" disabled><span data-i18n="motionEditor.text067">Tạo Sub</span></button></div></div></div></div><div id="frameDialogSteps" class="motion-frame-steps" role="status" aria-live="polite"></div></div><footer class="dialog-actions frame-dialog-footer"><button id="framePlaySource" type="button"><span data-i18n="motionEditor.text008">Video gốc</span></button><button id="framePlayResult" type="button"><span data-i18n="motionEditor.text072">Kết quả</span></button><button id="frameUploadClip" type="button" disabled>Upload clip Flow</button><button id="frameRegen" type="button"><span data-i18n="motionEditor.text073">Chạy lại frame</span></button><button id="frameDownload" type="button"><span data-i18n="motionEditor.text074">Tải video local</span></button></footer></dialog>
-  <dialog id="flowDownloadDialog" class="preview-dialog" aria-labelledby="flowDownloadTitle"><div class="dialog-top"><strong id="flowDownloadTitle"><span data-i18n="motionEditor.text075">Tải video Flow</span></strong><button id="closeFlowDownload" class="icon-button" type="button" aria-label="Đóng tải video"></button></div><div class="frame-info"><label class="transcript-field"><span data-i18n="motionEditor.text076">Độ phân giải</span><select id="frameFlowResolution"></select></label><p id="flowDownloadStatus" role="status"></p><button id="confirmFlowDownload" type="button"><span data-i18n="motionEditor.text077">Tải và lưu frame</span></button></div></dialog>
-  <dialog id="previewDialog" class="preview-dialog" aria-labelledby="previewTitle"><div class="dialog-top"><strong id="previewTitle"></strong><button id="closePreview" class="icon-button" type="button" aria-label="Đóng preview"></button></div><video id="previewVideo" controls playsinline></video></dialog>
-  <script src="src/core/Diag566.js"></script>
-<script src="src/core/EventBus.js"></script><script src="src/core/LocalFetchShim.js"></script><script src="src/core/ApiBaseConfig.js"></script><script src="src/core/AuthManager.js"></script><script src="src/core/ExtensionDeviceManager.js"></script><script src="src/core/RequestSigner.js"></script><script src="src/core/I18n.js"></script><script src="src/core/ProviderConfigManager.js"></script><script src="src/core/ModelRegistry.js"></script><script src="src/core/providers/AIProviderAdapter.js"></script><script src="src/core/providers/FlowAdapter.js"></script><script src="src/core/providers/ProviderRegistry.js"></script><script src="src/core/AlbumStore.js"></script><script src="src/core/ImageStore.js"></script><script src="src/shared/ImagePickerModal.js"></script><script src="src/core/flow/FlowDriverRegistry.js"></script><script src="src/core/FlowUuidGateway.js"></script>
-  <script src="src/core/MessageBridge.js"></script><script src="src/core/VoiceRegistry.js"></script><script src="src/shared/VoiceSelectModal.js"></script><script src="src/core/VoicePicker.js"></script><script src="src/core/errors/ConfigRequiredError.js"></script><script src="src/core/SystemConfig.js"></script><script src="src/core/ExecutionConfig.js"></script><script src="src/core/FeatureGate.js"></script><script src="src/core/ChatGPTSession.js"></script><script src="src/core/GeminiSession.js"></script><script src="src/settings/StorageSettings.js"></script><script src="src/core/BridgeClient.js"></script><script src="src/core/providers/FlowApiAdapter.js"></script><script src="src/core/flow-api/FlowApiDriverError.js"></script><script src="src/core/flow-api/FlowApiV1Driver.js"></script><script src="src/core/flow-api/FlowApiV2CheckpointStore.js"></script><script src="src/core/flow-api/FlowApiV2Driver.js"></script><script src="src/core/flow-api/FlowApiDriverResolver.js"></script><script src="src/core/flow-api/FlowApiDownloadRetry.js"></script><script src="src/core/flow-api/FlowApiFacade.js"></script><script src="src/core/flow-api/FlowApiSessionCoordinator.js"></script><script src="src/core/MotionArtifactStore.js"></script><script src="src/motion/MotionResolutionPolicy.js"></script><script src="src/motion/MotionFlowUpload.js"></script><script src="src/motion/MotionFlowDownload.js"></script><script src="src/motion/MotionRunJournal.js"></script><script src="src/motion/MotionFrameResultActions.js"></script><script src="src/motion/MotionMergeTask.js"></script><script src="src/core/VideoWmClient.js"></script><script src="src/shared/CustomDialog.js"></script><script src="src/core/errors/ConfigErrorHandler.js"></script><script src="src/core/ConfigAccessUI.js"></script><script src="src/motion/MotionEditorTheme.js"></script><script src="src/motion/MotionTimelineScroll.js"></script><script src="src/core/ValidationRules.js"></script><script src="src/core/ExecutionGate.js"></script><script src="src/core/errors/QuotaErrorHandler.js"></script><script src="src/core/WatermarkClient.js"></script><script src="src/shared/DownloadHelper.js"></script><script src="src/core/flow-api/FlowApiTelemetry.js"></script><script src="src/core/ExecutionLock.js"></script><script src="src/core/QueueItem.js"></script><script src="src/core/Job.js"></script><script src="src/core/MentionParser.js"></script><script src="src/core/FlowV2CorrelationProtocol.js"></script><script src="src/core/FlowV2CorrelationBroker.js"></script>
-<script src="src/core/PendingUploadStore.js"></script><script src="src/motion/MotionLocalReferences.js"></script><script src="src/core/MediaRegistry.js"></script><script src="src/core/FileUploader.js"></script>
-<script src="src/core/EditorExecutor.js"></script><script src="src/core/TileMonitor.js"></script><script src="src/core/FlowWebRecovery.js"></script><script src="src/core/RefImageAssignment.js"></script><script src="src/core/PromptQueue.js"></script><script src="src/motion/MotionCharacterReferences.js"></script>
-<script src="src/motion/MotionPromptComposer.js"></script><script src="src/motion/MotionTranscriptContract.js"></script><script src="src/motion/MotionFullAudioTranscript.js"></script><script src="src/motion/MotionOriginalAudio.js"></script><script src="src/motion/MotionTranscriptCommit.js"></script><script src="src/core/VideoFrameExtractor.js"></script><script src="src/motion/MotionContinuity.js"></script><script src="src/motion/MotionFlowQueueRequest.js"></script><script src="src/shared/ProviderBrandIcons.js"></script><script src="src/history/GenerationHistory.js"></script><script src="src/motion/MotionSplitPolicy.js"></script><script src="src/motion/MotionSplitSettingsDialog.js"></script><script src="src/motion/MotionAudioRegenerator.js"></script><script src="src/motion/MotionFailureNotice.js"></script><script src="src/motion/MotionFrameSteps.js"></script><script src="src/motion/MotionTextFieldLimits.js"></script><script src="src/motion/MotionTemplateLibrary.js"></script><script src="src/motion/MotionEditor.js"></script>
-</body></html>
+    <div
+      id="motionEditorLoading"
+      class="motion-editor-loading"
+      role="status"
+      aria-live="polite"
+    >
+      <div
+        id="motionEditorLoadingSpinner"
+        class="motion-editor-loading__spinner"
+        aria-hidden="true"
+      ></div>
+      <div
+        id="motionEditorLoadingText"
+        class="motion-editor-loading__text"
+        hidden
+      >
+        <span data-i18n="motionEditor.text003">Đang tải Motion Studio…</span>
+      </div>
+      <button id="motionEditorLoadingRetry" type="button" hidden>
+        <span data-i18n="motionEditor.text004">Thử lại</span>
+      </button>
+    </div>
+    <header class="studio-topbar">
+      <div class="studio-brand">
+        <div class="header-project-title">
+          <div id="projectTitleRow" class="project-title-row">
+            <h1
+              id="projectName"
+              role="button"
+              tabindex="0"
+              title="Đổi tên project"
+            >
+              Motion Studio
+            </h1>
+            <button
+              id="editNameBtn"
+              class="icon-button"
+              type="button"
+              title="Đổi tên project"
+              aria-label="Đổi tên project"
+            ></button>
+          </div>
+          <div id="nameEditor" class="name-editor" hidden>
+            <input
+              id="projectNameInput"
+              type="text"
+              maxlength="160"
+              aria-label="Tên project"
+            /><button id="saveNameBtn" hidden type="button">
+              <span data-i18n="motionEditor.text005">Lưu</span></button
+            ><button
+              id="cancelNameBtn"
+              hidden
+              class="ghost-button"
+              type="button"
+            >
+              <span data-i18n="motionEditor.text006">Hủy</span>
+            </button>
+          </div>
+          <div class="topbar-project-meta">
+            <span class="motion-header-brand"
+              ><img src="icons/icon-32.png" alt="" aria-hidden="true" /><span
+                >566Flow</span
+              ><span
+                id="motionHeaderVersion"
+                class="motion-header-version"
+              ></span></span
+            ><button
+              id="projectFlowMode"
+              class="topbar-flow-mode"
+              type="button"
+              aria-label="Mở cài đặt Flow mode"
+            >
+              <span class="motion-flow-dot" aria-hidden="true"></span
+              ><span class="motion-flow-mode-label">Max Speed</span
+              ><span class="motion-flow-version" hidden></span>
+            </button>
+            <div class="sidebar-summary">
+              <span class="dot dot-ready"></span
+              ><span id="projectState"
+                ><span data-i18n="motionEditor.text007">Sẵn sàng</span></span
+              ><span id="frameCount">0 frame</span>
+            </div>
+          </div>
+        </div>
+      </div>
+      <nav class="step-list studio-steps" aria-label="Các bước Motion">
+        <div class="step is-current">
+          <span>01</span>
+          <div>
+            <strong
+              ><span data-i18n="motionEditor.text008">Video gốc</span></strong
+            ><small
+              ><span data-i18n="motionEditor.text009"
+                >Cắt clip và âm thanh</span
+              ></small
+            >
+          </div>
+        </div>
+        <div class="step">
+          <span>02</span>
+          <div>
+            <strong
+              ><span data-i18n="motionEditor.text010"
+                >Tạo chuyển động</span
+              ></strong
+            ><small
+              ><span data-i18n="motionEditor.text011"
+                >Từng frame độc lập</span
+              ></small
+            >
+          </div>
+        </div>
+        <div class="step">
+          <span>03</span>
+          <div>
+            <strong
+              ><span data-i18n="motionEditor.text012">Xuất video</span></strong
+            ><small
+              ><span data-i18n="motionEditor.text013"
+                >Ghép và tải về</span
+              ></small
+            >
+          </div>
+        </div>
+      </nav>
+      <div class="topbar-actions">
+        <button
+          id="usageLink"
+          class="usage-link"
+          type="button"
+          title="Mở Settings → Storage"
+          aria-label="Dung lượng Motion trên thiết bị, mở Storage"
+        >
+          <svg
+            width="14"
+            height="14"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            aria-hidden="true"
+          >
+            <line x1="22" y1="12" x2="2" y2="12"></line>
+            <path
+              d="M5.45 5.11 2 12v6a2 2 0 0 0 2 2h16a2 2 0 0 0 2-2v-6l-3.45-6.89A2 2 0 0 0 16.76 4H7.24a2 2 0 0 0-1.79 1.11Z"
+            ></path>
+            <line x1="6" y1="16" x2="6.01" y2="16"></line>
+            <line x1="10" y1="16" x2="10.01" y2="16"></line></svg
+          ><span class="usage-meter" aria-hidden="true"
+            ><span id="usageFill"></span></span
+          ><span id="usage">—</span></button
+        ><button
+          id="headerResetBtn"
+          type="button"
+          aria-label="Clean Motion project"
+        >
+          <svg
+            xmlns="http://www.w3.org/2000/svg"
+            width="16"
+            height="16"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+            stroke-linecap="round"
+            stroke-linejoin="round"
+            aria-hidden="true"
+          >
+            <path
+              d="m7 21-4.3-4.3c-1-1-1-2.5 0-3.4l9.6-9.6c1-1 2.5-1 3.4 0l5.6 5.6c1 1 1 2.5 0 3.4L13 21"
+            ></path>
+            <path d="M22 21H7"></path>
+            <path d="m5 11 9 9"></path></svg
+          ><span>Clean</span></button
+        ><button id="headerSaveBtn" type="button" aria-label="Lưu project">
+          <span data-i18n="motionEditor.text005">Lưu</span></button
+        ><button
+          id="closeBtn"
+          class="icon-button"
+          type="button"
+          aria-label="Đóng editor"
+        ></button>
+      </div>
+    </header>
+    <main class="studio-layout">
+      <div
+        id="sidebarResizeHandle"
+        role="separator"
+        aria-label="Thay đổi độ rộng sidebar"
+        aria-orientation="vertical"
+        tabindex="0"
+      ></div>
+      <aside class="studio-sidebar" aria-label="Thiết lập Motion Studio">
+        <div class="sidebar-fields">
+          <section class="sidebar-section motion-settings">
+            <div class="motion-field-row motion-model-reference-row">
+              <label class="setting-field"
+                ><span class="ratio-field-label"
+                  ><span
+                    class="motion-field-icon motion-flow-model-icon"
+                    aria-hidden="true"
+                  ></span
+                  ><span data-i18n="motionEditor.flowModel">Model</span></span
+                ><select
+                  id="motionFlowModel"
+                  data-i18n-title="motionEditor.flowModel"
+                  aria-label="Model"
+                ></select></label
+              ><label class="setting-field"
+                ><span class="ratio-field-label"
+                  ><span
+                    class="motion-field-icon motion-reference-mode-label-icon"
+                    aria-hidden="true"
+                  ></span
+                  ><span data-i18n="motionEditor.referenceMode"
+                    >Chế độ tham chiếu</span
+                  ></span
+                ><select id="referenceMode">
+                  <option
+                    value="character_only"
+                    data-i18n="motionEditor.text018"
+                  >
+                    Chỉ character
+                  </option>
+                  <option value="character_background">
+                    Character + background
+                  </option>
+                </select></label
+              >
+            </div>
+            <div class="motion-field-row">
+              <label class="setting-field"
+                ><span class="ratio-field-label"
+                  ><span
+                    id="motionRatioIcon"
+                    class="motion-ratio-label-icon"
+                    aria-hidden="true"
+                  ></span
+                  ><span data-i18n="motionEditor.text014"
+                    >Tỉ lệ video</span
+                  ></span
+                ><select id="motionRatio" disabled>
+                  <option value="" data-i18n="motionEditor.text015">
+                    Đang tải cấu hình…
+                  </option>
+                </select></label
+              ><label class="setting-field"
+                ><span class="ratio-field-label"
+                  ><span class="motion-camera-icon" aria-hidden="true"></span
+                  ><span data-i18n="motionEditor.text016"
+                    >Độ phân giải</span
+                  ></span
+                ><select id="flowResolution" disabled>
+                  <option value="" data-i18n="motionEditor.text015">
+                    Đang tải cấu hình…
+                  </option>
+                </select></label
+              >
+            </div>
+            <div class="setting-field">
+              <div class="motion-reference-heading">
+                <span class="ratio-field-label"
+                  ><svg
+                    width="18"
+                    height="18"
+                    viewBox="0 0 20 20"
+                    fill="currentColor"
+                    xmlns="http://www.w3.org/2000/svg"
+                    aria-hidden="true"
+                  >
+                    <path
+                      d="M8.958 8.501a1.5 1.5 0 1 1 0 2.999 1.5 1.5 0 0 1 0-2.999"
+                    ></path>
+                    <path
+                      fill-rule="evenodd"
+                      d="M6.974 3.95a3.065 3.065 0 0 1 3.461-2.608l5.975.84a3.065 3.065 0 0 1 2.608 3.462l-.84 5.975a3.064 3.064 0 0 1-3.46 2.607l-.938-.132.03.206a3.065 3.065 0 0 1-2.608 3.462l-5.975.839a3.065 3.065 0 0 1-3.461-2.607l-.84-5.975a3.065 3.065 0 0 1 2.608-3.462l3.134-.441zm-.517 9.528a1.337 1.337 0 0 0-1.871.263l-1.513 2.007.009.06a1.736 1.736 0 0 0 1.96 1.477l5.45-.767zm3.237-6.443-5.974.838a1.736 1.736 0 0 0-1.477 1.96l.568 4.051.713-.944a2.666 2.666 0 0 1 3.733-.524l4.72 3.557a1.73 1.73 0 0 0 .516-1.487l-.84-5.975a1.735 1.735 0 0 0-1.959-1.476m.557-4.375a1.735 1.735 0 0 0-1.96 1.476l-.252 1.787 1.47-.206a3.066 3.066 0 0 1 3.462 2.61l.617 4.397 1.314.186a1.735 1.735 0 0 0 1.96-1.477l.84-5.975a1.736 1.736 0 0 0-1.478-1.96z"
+                      clip-rule="evenodd"
+                    ></path></svg
+                  ><span data-i18n="motionEditor.text017"
+                    >Ảnh tham chiếu</span
+                  ></span
+                >
+              </div>
+              <label id="characterCountGroup" class="setting-field" hidden
+                ><span class="ratio-field-label"
+                  ><svg
+                    width="16"
+                    height="16"
+                    viewBox="0 0 200 200"
+                    xmlns="http://www.w3.org/2000/svg"
+                    fill="currentColor"
+                    aria-hidden="true"
+                  >
+                    <path
+                      d="M95.5,26.8c38.9,0,70.5,31.5,70.5,70.5c0,0,0,0,0,0V119c0,3-2.4,5.4-5.4,5.4c-3,0-5.4-2.4-5.4-5.4V97.3c0-32.9-26.7-59.6-59.6-59.6S35.8,64.3,35.8,97.3c0,0,0,0,0,0v72.3c-0.1,3-2.6,5.3-5.6,5.2c-2.8-0.1-5.1-2.4-5.2-5.2V97.3C25,58.4,56.5,26.8,95.5,26.8C95.5,26.8,95.5,26.8,95.5,26.8z M136.3,85.3c2.6-1.4,5.9-0.4,7.3,2.2c0.4,0.8,0.6,1.7,0.6,2.6V119c0,3-2.4,5.4-5.4,5.4c-3,0-5.4-2.4-5.4-5.4V99c-23.5,11.6-50.1,15.4-75.9,10.9v16.3c0,21,17,37.9,38,37.9c2.1,0,4.2-0.2,6.3-0.5c3-0.4,5.7,1.7,6.1,4.7c0.4,2.8-1.5,5.4-4.3,6c-26.6,4.5-51.7-13.4-56.2-40c-0.5-2.7-0.7-5.4-0.7-8.1v-22.9l0.1-1.2c0.7-2.9,3.6-4.7,6.5-4.1c0,0,0,0,0,0c26.7,6.1,54.7,2.4,78.8-10.5L136.3,85.3L136.3,85.3z M144.6,130.9c0.4-0.9,1.4-1.3,2.2-0.9c0.4,0.2,0.8,0.5,0.9,0.9l4.6,10.9c1.7,4.1,5,7.4,9.1,9.1l10.9,4.6c0.9,0.4,1.3,1.3,0.9,2.2c-0.2,0.4-0.5,0.8-0.9,0.9l-10.9,4.6c-4.1,1.7-7.4,5-9.1,9.1l-4.6,10.9c-0.4,0.9-1.4,1.3-2.3,0.9c-0.4-0.2-0.7-0.5-0.9-0.9l-4.6-10.9c-1.7-4.1-5-7.4-9.1-9.1l-10.9-4.6c-0.9-0.4-1.3-1.3-0.9-2.2c0.2-0.4,0.5-0.8,0.9-0.9l10.9-4.6c4.1-1.7,7.3-5,9.1-9.1C140,141.8,144.6,130.9,144.6,130.9z"
+                    ></path></svg
+                  ><span data-i18n="motionEditor.characterCount"
+                    >Characters</span
+                  ></span
+                ><select id="characterCount">
+                  <option value="1" data-i18n="motionEditor.oneCharacter">
+                    1 character
+                  </option>
+                  <option value="2" data-i18n="motionEditor.twoCharacters">
+                    2 characters
+                  </option>
+                </select></label
+              >
+              <div
+                id="characterDropZone"
+                class="reference-drop-zone"
+                role="button"
+                tabindex="0"
+                aria-label="Thả ảnh character hoặc mở bộ chọn"
+              >
+                <div
+                  id="characterRefPreview"
+                  class="reference-preview"
+                  aria-hidden="true"
+                >
+                  <span
+                    class="character-reference-icon"
+                    aria-hidden="true"
+                  ></span>
+                </div>
+                <div>
+                  <strong id="characterRefLabel">Character</strong
+                  ><small id="characterRefSummary"
+                    ><span data-i18n="motionEditor.text019"
+                      >Thả ảnh hoặc chọn từ thư viện</span
+                    ></small
+                  >
+                </div>
+              </div>
+              <div id="character2RefGroup" hidden>
+                <div
+                  id="character2DropZone"
+                  class="reference-drop-zone"
+                  role="button"
+                  tabindex="0"
+                  aria-label="Thả ảnh character hoặc mở bộ chọn"
+                >
+                  <div
+                    id="character2RefPreview"
+                    class="reference-preview"
+                    aria-hidden="true"
+                  >
+                    <span
+                      class="character-reference-icon"
+                      aria-hidden="true"
+                    ></span>
+                  </div>
+                  <div>
+                    <strong data-i18n="motionEditor.character2"
+                      >Character 2</strong
+                    ><small id="character2RefSummary"
+                      ><span data-i18n="motionEditor.text019"
+                        >Thả ảnh hoặc chọn từ thư viện</span
+                      ></small
+                    >
+                  </div>
+                </div>
+              </div>
+              <div id="backgroundRefGroup" hidden>
+                <div
+                  id="backgroundDropZone"
+                  class="reference-drop-zone"
+                  role="button"
+                  tabindex="0"
+                  aria-label="Thả ảnh background hoặc mở bộ chọn"
+                >
+                  <div
+                    id="backgroundRefPreview"
+                    class="reference-preview"
+                    aria-hidden="true"
+                  >
+                    <svg
+                      class="ref-btn-icon"
+                      width="18"
+                      height="18"
+                      viewBox="0 0 24 24"
+                      fill="none"
+                      stroke="currentColor"
+                      stroke-width="1.5"
+                      stroke-linecap="round"
+                      stroke-linejoin="round"
+                    >
+                      <path d="M15 8h.01"></path>
+                      <path
+                        d="M12.5 21h-6.5a3 3 0 0 1 -3 -3v-12a3 3 0 0 1 3 -3h12a3 3 0 0 1 3 3v6.5"
+                      ></path>
+                      <path
+                        d="M3 16l5 -5c.928 -.893 2.072 -.893 3 0l3.5 3.5"
+                      ></path>
+                      <path
+                        d="M14 14l1 -1c.679 -.653 1.473 -.829 2.214 -.526"
+                      ></path>
+                      <path d="M19 22v-6"></path>
+                      <path d="M22 19l-3 -3l-3 3"></path>
+                    </svg>
+                  </div>
+                  <div>
+                    <strong>Background</strong
+                    ><small id="backgroundRefSummary"
+                      ><span data-i18n="motionEditor.text019"
+                        >Thả ảnh hoặc chọn từ thư viện</span
+                      ></small
+                    >
+                  </div>
+                </div>
+              </div>
+              <p id="referenceStatus" class="helper-text" role="status"></p>
+            </div>
+            <aside
+              id="motionTemplateGuide"
+              class="motion-template-guide"
+              hidden
+            ></aside>
+            <div
+              id="motionSpeechAgentField"
+              class="setting-field motion-agent-field"
+              hidden
+            >
+              <div class="motion-agent-picker">
+                <span class="motion-agent-label"
+                  ><span class="motion-agent-icon" aria-hidden="true"></span
+                  ><span data-i18n="motionEditor.text022"
+                    >Agent lời thoại</span
+                  ></span
+                >
+                <div
+                  class="motion-agent-choices"
+                  role="group"
+                  aria-label="Chọn agent lời thoại"
+                >
+                  <button
+                    type="button"
+                    data-motion-agent="chatgpt"
+                    aria-pressed="false"
+                  >
+                    <i aria-hidden="true"></i>ChatGPT</button
+                  ><button
+                    type="button"
+                    data-motion-agent="gemini"
+                    aria-pressed="false"
+                  >
+                    <i aria-hidden="true"></i>Gemini
+                  </button>
+                </div>
+              </div>
+              <select
+                id="transcriptionAgent"
+                hidden
+                aria-hidden="true"
+                tabindex="-1"
+              >
+                <option value="chatgpt">ChatGPT</option>
+                <option value="gemini">Gemini</option></select
+              ><span class="agent-status-row"
+                ><small id="transcriptionAgentStatus" role="status"
+                  ><span data-i18n="motionEditor.text023"
+                    >Đang kiểm tra…</span
+                  ></small
+                ><button id="transcriptionAgentOpen" type="button">
+                  <span data-i18n="motionEditor.text024">Connect</span>
+                </button></span
+              >
+            </div>
+            <div class="setting-toggle">
+              <span
+                ><strong class="motion-toggle-label motion-toggle-voice"
+                  ><span data-i18n="motionEditor.text025"
+                    >Đồng bộ lời thoại</span
+                  ></strong
+                ><small
+                  ><span data-i18n="motionEditor.text026"
+                    >Yêu cầu Flow tạo giọng mới</span
+                  ></small
+                ></span
+              ><input
+                id="voiceEnabled"
+                type="checkbox"
+                role="switch"
+                aria-label="Đồng bộ lời thoại"
+              />
+            </div>
+            <div class="setting-toggle">
+              <span
+                ><strong class="motion-toggle-label motion-toggle-subtitle"
+                  ><span data-i18n="motionEditor.text027"
+                    >Hiện phụ đề</span
+                  ></strong
+                ><small
+                  ><span data-i18n="motionEditor.text028"
+                    >Yêu cầu Flow vẽ chữ</span
+                  ></small
+                ></span
+              ><input
+                id="subtitleEnabled"
+                type="checkbox"
+                role="switch"
+                aria-label="Hiện phụ đề"
+              />
+            </div>
+            <div id="reviewSubtitleRow" class="setting-toggle" hidden>
+              <span
+                ><strong class="motion-toggle-label motion-toggle-review"
+                  ><span data-i18n="motionEditor.reviewSubtitle"
+                    >Review sub</span
+                  ></strong
+                ><small data-i18n="motionEditor.reviewSubtitleHint"
+                  >Dừng trước khi tạo video để kiểm tra sub</small
+                ></span
+              ><input
+                id="reviewSubtitle"
+                type="checkbox"
+                role="switch"
+                aria-label="Review sub"
+              />
+            </div>
+            <div id="translateDialogueRow" class="setting-toggle" hidden>
+              <span
+                ><strong class="motion-toggle-label motion-toggle-language"
+                  ><span data-i18n="motionEditor.text029"
+                    >Dịch lời thoại</span
+                  ></strong
+                ><small
+                  ><span data-i18n="motionEditor.text030"
+                    >Dùng bản dịch cho voice/sub</span
+                  ></small
+                ></span
+              ><input
+                id="translateEnabled"
+                type="checkbox"
+                role="switch"
+                disabled
+                aria-label="Dịch lời thoại"
+              />
+            </div>
+            <div id="targetLanguageRow" class="setting-field" hidden>
+              <span id="targetLanguageHeading"
+                ><span data-i18n="motionEditor.text031"
+                  >Ngôn ngữ đích</span
+                ></span
+              ><input
+                id="targetLanguage"
+                type="text"
+                maxlength="80"
+                placeholder="Ví dụ: Vietnamese"
+              />
+            </div>
+            <div class="motion-field-row motion-speech-fields">
+              <label id="voiceModeRow" class="setting-field" hidden
+                ><span class="ratio-field-label"
+                  ><span
+                    class="motion-speech-style-icon"
+                    aria-hidden="true"
+                  ></span
+                  ><span data-i18n="motionEditor.voiceMode"
+                    >Kiểu lời thoại</span
+                  ></span
+                ><select id="motionVoiceMode">
+                  <option
+                    value="lip_sync"
+                    data-i18n="motionEditor.voiceModeLipSync"
+                    selected
+                  >
+                    Lip-sync
+                  </option>
+                  <option
+                    value="character"
+                    data-i18n="motionEditor.voiceModeNormal"
+                  >
+                    Normal dialogue
+                  </option>
+                  <option
+                    value="narration"
+                    data-i18n="motionEditor.voiceModeNarration"
+                  >
+                    Off-screen narration
+                  </option></select
+                ><small
+                  id="voiceModeHint"
+                  data-i18n="motionEditor.voiceStyleUnavailable"
+                  hidden
+                  >Admin cần cấu hình và publish prompt cho chế độ thoại đã
+                  chọn.</small
+                ></label
+              >
+              <div id="voicePickerRow" class="setting-field" hidden>
+                <span id="motionFlowVoiceHeading" class="ratio-field-label"
+                  ><span
+                    id="motionFlowVoiceIcon"
+                    class="motion-flow-voice-icon"
+                    aria-hidden="true"
+                  ></span
+                  ><span data-i18n="motionEditor.text032"
+                    >Giọng đọc Flow</span
+                  ></span
+                ><button
+                  id="motionVoiceTrigger"
+                  aria-labelledby="motionFlowVoiceHeading motionVoiceLabel"
+                  class="motion-voice-trigger"
+                  type="button"
+                >
+                  <span
+                    id="motionVoiceThumb"
+                    class="motion-voice-thumb"
+                    aria-hidden="true"
+                  ></span
+                  ><span id="motionVoiceLabel"
+                    ><span data-i18n="motionEditor.text033"
+                      >Giọng ngẫu nhiên</span
+                    ></span
+                  ><span
+                    class="motion-select-arrow"
+                    aria-hidden="true"
+                  ></span></button
+                ><input id="motionVoiceSlug" type="hidden" value="" />
+              </div>
+            </div>
+            <label id="voiceDescriptionRow" class="setting-field" hidden
+              ><span class="ratio-field-label"
+                ><span
+                  class="motion-voice-description-icon"
+                  aria-hidden="true"
+                ></span
+                ><span data-i18n="motionEditor.text034">Mô tả giọng</span></span
+              ><span class="motion-prompt-input-wrap">
+                <textarea
+                  id="voiceDescription"
+                  aria-describedby="voiceDescriptionCounter voiceDescriptionLimitError"
+                  rows="2"
+                  maxlength="500"
+                  data-i18n-placeholder="motionEditor.voiceDescriptionPlaceholder"
+                  placeholder="Giọng, nhịp, cảm xúc…"
+                ></textarea
+                ><span
+                  id="voiceDescriptionCounter"
+                  class="motion-text-count"
+                ></span></span
+              ><span
+                id="voiceDescriptionLimitError"
+                class="motion-text-limit-error"
+                role="status"
+                aria-live="polite"
+                hidden
+              ></span></label
+            ><label id="customPromptRow" class="setting-field"
+              ><span class="ratio-field-label"
+                ><span
+                  class="motion-custom-prompt-icon"
+                  aria-hidden="true"
+                ></span
+                ><span data-i18n="motionEditor.customPrompt"
+                  >Prompt tùy chỉnh</span
+                ></span
+              ><span class="motion-prompt-input-wrap">
+                <textarea
+                  id="motionCustomPrompt"
+                  aria-describedby="motionCustomPromptCounter motionCustomPromptLimitError"
+                  rows="2"
+                  maxlength="5000"
+                  data-i18n-placeholder="motionEditor.customPromptPlaceholder"
+                  placeholder="Thêm yêu cầu vào cuối prompt tạo video…"
+                ></textarea
+                ><span
+                  id="motionCustomPromptCounter"
+                  class="motion-text-count"
+                ></span></span
+              ><span
+                id="motionCustomPromptLimitError"
+                class="motion-text-limit-error"
+                role="status"
+                aria-live="polite"
+                hidden
+              ></span></label
+            ><button
+              id="saveMotionSettings"
+              hidden
+              class="primary-button"
+              type="button"
+              disabled
+            >
+              <span data-i18n="motionEditor.text035">Lưu Motion</span>
+            </button>
+            <p id="motionSettingsStatus" class="helper-text" role="status"></p>
+          </section>
+          <section class="sidebar-section settings-section">
+            <div class="setting-toggle">
+              <span
+                ><strong
+                  id="continuityLabel"
+                  class="motion-toggle-label motion-toggle-continuity"
+                  data-i18n="motionEditor.continuity"
+                  >Liền mạch giữa các frame</strong
+                ><small
+                  id="continuityHint"
+                  data-i18n="motionEditor.continuityHint"
+                  >Dùng ảnh cuối kết quả trước làm tham chiếu phụ. Video được
+                  tạo lần lượt để giữ ngoại hình nhất quán.</small
+                ></span
+              ><input
+                id="continuityEnabled"
+                type="checkbox"
+                role="switch"
+                aria-labelledby="continuityLabel"
+                aria-describedby="continuityHint"
+              />
+            </div>
+            <div class="setting-toggle">
+              <span
+                ><strong class="motion-download-label"
+                  ><svg
+                    width="16"
+                    height="16"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="1.7"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                    aria-hidden="true"
+                  >
+                    <path d="M11 5 6 9H3v6h3l5 4z" />
+                    <path d="M15 8a6 6 0 0 1 0 8m3-11a10 10 0 0 1 0 14" /></svg
+                  ><span
+                    id="useOriginalAudioLabel"
+                    data-i18n="motionEditor.useOriginalAudio"
+                    >Sử dụng âm thanh gốc</span
+                  ></strong
+                ><small
+                  id="useOriginalAudioHint"
+                  data-i18n="motionEditor.useOriginalAudioHint"
+                  >Thay âm thanh video cuối bằng âm thanh gốc. Khẩu hình do AI
+                  tạo có thể không khớp hoàn toàn.</small
+                ></span
+              ><input
+                id="useOriginalAudio"
+                type="checkbox"
+                role="switch"
+                aria-labelledby="useOriginalAudioLabel"
+                aria-describedby="useOriginalAudioHint"
+              />
+            </div>
+            <div class="setting-toggle">
+              <span
+                ><strong class="motion-download-label"
+                  ><svg
+                    width="16"
+                    height="16"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="1.7"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                    aria-hidden="true"
+                  >
+                    <path d="M12 3v12m-4-4 4 4 4-4" />
+                    <path d="M5 17v3h14v-3" /></svg
+                  ><span data-i18n="motionEditor.text036"
+                    >Tự động tải video cuối</span
+                  ></strong
+                ><small
+                  ><span data-i18n="motionEditor.text037"
+                    >Tải sau khi ghép hoàn tất</span
+                  ></small
+                ></span
+              ><input
+                id="autoDownloadFinal"
+                type="checkbox"
+                role="switch"
+                aria-label="Tự động tải video cuối"
+              />
+            </div>
+            <div
+              id="removeFinalVideoWatermarkRow"
+              class="setting-toggle motion-final-watermark-row"
+              hidden
+            >
+              <span
+                ><strong class="motion-download-label"
+                  ><svg
+                    width="16"
+                    height="16"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    aria-hidden="true"
+                  >
+                    <g fill="currentColor">
+                      <path
+                        d="M2 14.25c.41 0 .75.34.75.75v2.5c0 2.07 1.68 3.75 3.75 3.75H9c.41 0 .75.34.75.75s-.34.75-.75.75H6.5c-2.89 0-5.25-2.35-5.25-5.25V15c0-.41.34-.75.75-.75m20 1c.41 0 .75.34.75.75v1.5c0 2.9-2.36 5.25-5.25 5.25H16c-.41 0-.75-.34-.75-.75s.34-.75.75-.75h1.5c2.07 0 3.75-1.68 3.75-3.75V16c0-.41.34-.75.75-.75"
+                      ></path>
+                      <path
+                        fill-rule="evenodd"
+                        d="M14 5.75c2.42 0 3.75 1.33 3.75 3.75v1.75H19c.41 0 .75.34.75.75s-.34.75-.75.75h-1.25v1.75c0 2.42-1.33 3.75-3.75 3.75h-4c-2.42 0-3.75-1.33-3.75-3.75v-1.75H5c-.41 0-.75-.34-.75-.75s.34-.75.75-.75h1.25V9.5c0-2.42 1.33-3.75 3.75-3.75zm-6.25 7v1.75c0 1.58.67 2.25 2.25 2.25h4c1.58 0 2.25-.67 2.25-2.25v-1.75zM10 7.25c-1.58 0-2.25.67-2.25 2.25v1.75h8.5V9.5c0-1.58-.67-2.25-2.25-2.25z"
+                        clip-rule="evenodd"
+                      ></path>
+                      <path
+                        d="M9 1.25c.41 0 .75.34.75.75s-.34.75-.75.75H6.5c-2.07 0-3.75 1.68-3.75 3.75V9c0 .41-.34.75-.75.75s-.75-.34-.75-.75V6.5c0-2.9 2.36-5.25 5.25-5.25zm8.5 0c2.89 0 5.25 2.35 5.25 5.25V9c0 .41-.34.75-.75.75s-.75-.34-.75-.75V6.5c0-2.07-1.68-3.75-3.75-3.75H15c-.41 0-.75-.34-.75-.75s.34-.75.75-.75z"
+                      ></path>
+                    </g></svg
+                  ><span
+                    id="removeFinalVideoWatermarkLabel"
+                    data-i18n="motionEditor.removeVideoWatermark"
+                    >Remove video watermark</span
+                  ></strong
+                ><small
+                  id="removeFinalVideoWatermarkHint"
+                  data-i18n="motionEditor.removeVideoWatermarkHint"
+                  >Remove Omni watermark on videos download (~68%
+                  Effective)</small
+                ></span
+              ><input
+                id="removeFinalVideoWatermark"
+                type="checkbox"
+                role="switch"
+                aria-labelledby="removeFinalVideoWatermarkLabel"
+                aria-describedby="removeFinalVideoWatermarkHint"
+              />
+            </div>
+            <button
+              id="savePreferences"
+              hidden
+              class="primary-button"
+              type="button"
+              disabled
+            >
+              <span data-i18n="motionEditor.text038">Lưu thiết lập</span>
+            </button>
+          </section>
+        </div>
+        <p
+          id="motionSettingsLockNote"
+          class="helper-text motion-settings-lock-note"
+          role="status"
+          hidden
+        ></p>
+        <section class="sidebar-section control-section">
+          <p id="preferencesStatus" class="helper-text" role="status"></p>
+          <button id="pauseBtn" class="wide-button" type="button" disabled>
+            <span data-i18n="motionEditor.text039">Tạm dừng</span>
+          </button>
+          <p id="pauseStatus" class="helper-text" role="status"></p>
+        </section>
+      </aside>
+      <div class="studio-main">
+        <section class="viewer-grid" aria-label="Màn xem video">
+          <article class="viewer-panel">
+            <div class="viewer-heading">
+              <div>
+                <h2><span data-i18n="motionEditor.text008">Video gốc</span></h2>
+              </div>
+              <span id="sourceMeta" class="viewer-meta"
+                ><span data-i18n="motionEditor.text041"
+                  >Chưa chọn video</span
+                ></span
+              >
+            </div>
+            <div
+              id="sourceDropZone"
+              class="viewer-screen source-drop-zone"
+              role="button"
+              tabindex="0"
+              aria-label="Thả video nguồn hoặc chọn video"
+            >
+              <video id="sourceStageVideo" controls playsinline hidden></video>
+              <div id="sourcePlaceholder" class="viewer-placeholder">
+                <span class="source-upload-icon" aria-hidden="true"></span
+                ><strong
+                  ><span data-i18n="motionEditor.text042"
+                    >Thả video vào đây</span
+                  ></strong
+                ><span class="source-drop-or"
+                  ><span data-i18n="motionEditor.text043">hoặc</span></span
+                ><span class="source-pick-button"
+                  ><span data-i18n="motionEditor.text044"
+                    >Chọn video</span
+                  ></span
+                ><small data-i18n="motionEditor.sourceUploadHint"
+                  >MP4, MOV hoặc WebM · Tránh tải video có người nổi
+                  tiếng.</small
+                >
+              </div>
+            </div>
+            <div class="viewer-footer">
+              <input
+                id="sourceInput"
+                type="file"
+                accept="video/mp4,video/quicktime,video/webm"
+                aria-label="Chọn video gốc"
+              /><button id="motionTemplateBtn" type="button">
+                <span
+                  class="motion-template-trigger-icon"
+                  aria-hidden="true"
+                ></span
+                ><span data-i18n="motionTemplates.title">Motion Templates</span
+                ><span class="template-subtab-badge" aria-hidden="true"
+                  >HOT</span
+                ></button
+              ><button id="replaceSourceBtn" type="button">
+                <span data-i18n="motionEditor.text045"
+                  >Chọn / thay video</span
+                ></button
+              ><label class="motion-speed-picker"
+                ><span class="motion-speed-icon" aria-hidden="true"></span
+                ><select id="slowSourceBtn" aria-label="Speed" disabled>
+                  <option value="" selected disabled>Speed</option>
+                  <option value="0.7">0.7×</option>
+                  <option value="0.6">0.6×</option>
+                  <option value="0.5">0.5×</option>
+                  <option value="0.4">0.4×</option>
+                </select></label
+              ><button
+                id="splitBtn"
+                class="primary-button"
+                type="button"
+                disabled
+              >
+                <span data-i18n="motionEditor.text046">Cắt và lưu</span>
+              </button>
+            </div>
+          </article>
+          <article class="viewer-panel">
+            <div class="viewer-heading">
+              <div>
+                <h2>
+                  <span data-i18n="motionEditor.text040">Video hoàn chỉnh</span>
+                </h2>
+              </div>
+              <span id="finalState" class="viewer-meta"
+                ><span data-i18n="motionEditor.text047"
+                  >Chưa có video</span
+                ></span
+              >
+            </div>
+            <div class="viewer-screen">
+              <video id="resultStageVideo" controls playsinline hidden></video>
+              <div
+                id="resultMergeLoading"
+                class="result-merge-loading"
+                role="status"
+                aria-live="polite"
+                hidden
+              >
+                <span class="result-merge-spinner" aria-hidden="true"></span
+                ><strong
+                  ><span data-i18n="motionEditor.text048"
+                    >Đang ghép video…</span
+                  ></strong
+                >
+              </div>
+              <div id="resultPlaceholder" class="viewer-placeholder">
+                <span
+                  class="placeholder-icon result-icon"
+                  aria-hidden="true"
+                ></span
+                ><strong
+                  ><span data-i18n="motionEditor.text049"
+                    >Video kết quả sẽ xuất hiện tại đây</span
+                  ></strong
+                ><small
+                  ><span data-i18n="motionEditor.text050"
+                    >Ghép sau khi mọi frame đã có kết quả Flow</span
+                  ></small
+                >
+              </div>
+            </div>
+            <p
+              id="finalSpeedHint"
+              class="motion-speed-hint"
+              role="status"
+              hidden
+            ></p>
+            <div class="viewer-footer">
+              <button id="mergeBtn" type="button" disabled>
+                <span data-i18n="motionEditor.text051">Ghép frame</span></button
+              ><label class="motion-speed-picker"
+                ><span class="motion-speed-icon" aria-hidden="true"></span
+                ><select
+                  id="finalSpeedBtn"
+                  aria-label="Final video Speed"
+                  disabled
+                >
+                  <option value="" selected disabled>Speed</option>
+                  <option value="0.7">1.43× (0.7×)</option>
+                  <option value="0.6">1.67× (0.6×)</option>
+                  <option value="0.5">2× (0.5×)</option>
+                  <option value="0.4">2.5× (0.4×)</option>
+                </select></label
+              ><button id="playFinal" type="button" disabled>
+                <span data-i18n="videoSplit.preview">Xem video</span></button
+              ><button id="downloadFinal" type="button" disabled>
+                <span data-i18n="motionEditor.text052">Tải video</span>
+              </button>
+            </div>
+          </article>
+          <button
+            id="playBothVideos"
+            class="motion-compare-play"
+            type="button"
+            hidden
+            disabled
+            aria-label="Play videos"
+            data-i18n-title="videoSplit.preview"
+          >
+            <svg
+              class="motion-compare-play-icon"
+              viewBox="0 0 24 24"
+              fill="currentColor"
+              aria-hidden="true"
+            >
+              <path d="M8 5v14l11-7z" /></svg
+            ><svg
+              class="motion-compare-pause-icon"
+              viewBox="0 0 24 24"
+              fill="currentColor"
+              aria-hidden="true"
+            >
+              <path d="M6 5h4v14H6zm8 0h4v14h-4z" />
+            </svg>
+          </button>
+        </section>
+        <section class="activity-bar" aria-label="Tiến độ">
+          <div class="activity-copy">
+            <span class="activity-pulse" aria-hidden="true"></span>
+            <p id="status" role="status">
+              <span data-i18n="motionEditor.text053">Đang mở project…</span>
+            </p>
+          </div>
+          <button id="cancelBtn" type="button" disabled>
+            <span data-i18n="motionEditor.text054">Hủy tác vụ</span></button
+          ><progress id="progress" value="0" max="100"></progress>
+        </section>
+        <section class="timeline-section" aria-label="Timeline frame">
+          <div
+            id="timelineResizeHandle"
+            class="timeline-resize-handle"
+            role="separator"
+            tabindex="0"
+            aria-label="Timeline"
+            aria-orientation="horizontal"
+          ></div>
+          <div class="timeline-toolbar">
+            <div>
+              <div class="timeline-heading">
+                <h2>Frame video</h2>
+                <small id="motionFrameLimitHint" hidden></small>
+              </div>
+              <button
+                id="clearFramesBtn"
+                type="button"
+                class="clear-frames-btn"
+                disabled
+              >
+                <svg
+                  width="15"
+                  height="15"
+                  viewBox="0 0 24 24"
+                  fill="none"
+                  stroke="currentColor"
+                  stroke-width="1.7"
+                  stroke-linecap="round"
+                  stroke-linejoin="round"
+                  aria-hidden="true"
+                >
+                  <path d="M3 6h18M8 6V4h8v2m3 0-1 14H6L5 6m5 4v6m4-6v6" /></svg
+                ><span data-i18n="motionEditor.text055"
+                  >Xóa tất cả frame</span
+                ></button
+              ><small id="motionSplitSummary" aria-live="polite"></small>
+            </div>
+            <div class="timeline-legend">
+              <span
+                ><i class="legend-dot ready"></i>
+                <span data-i18n="common.ready">Sẵn sàng</span></span
+              ><span
+                ><i class="legend-dot running"></i>
+                <span data-i18n="videoSplit.working">Đang xử lý</span></span
+              ><span
+                ><i class="legend-dot failed"></i>
+                <span data-i18n="common.error">Lỗi</span></span
+              >
+            </div>
+          </div>
+          <div
+            class="timeline-scroll"
+            tabindex="0"
+            role="region"
+            aria-label="Timeline, cuộn ngang để xem các frame"
+          >
+            <div id="timelineRuler" class="timeline-ruler"></div>
+            <div class="timeline-track">
+              <div class="track-label track-source">
+                <strong
+                  ><span data-i18n="motionEditor.text058">NGUỒN</span></strong
+                ><small
+                  ><span data-i18n="motionEditor.text008"
+                    >Video gốc</span
+                  ></small
+                >
+              </div>
+              <div id="sourceTrack" class="track-clips"></div>
+            </div>
+            <div class="timeline-track result-track">
+              <div class="track-label track-flow">
+                <strong>FLOW</strong
+                ><small
+                  ><span data-i18n="motionEditor.text059"
+                    >Kết quả gen</span
+                  ></small
+                >
+              </div>
+              <div id="resultTrack" class="track-clips"></div>
+            </div>
+          </div>
+          <div id="frames" class="sr-only" aria-hidden="true"></div>
+        </section>
+      </div>
+    </main>
+    <dialog
+      id="frameDialog"
+      class="frame-dialog"
+      aria-labelledby="frameDialogTitle"
+    >
+      <div class="dialog-top">
+        <div>
+          <span id="frameDialogKicker" class="eyebrow">FRAME</span>
+          <h2 id="frameDialogTitle">
+            <span data-i18n="motionEditor.text060">Chi tiết frame</span>
+          </h2>
+        </div>
+        <button
+          id="closeFrameDialog"
+          class="icon-button"
+          type="button"
+          aria-label="Đóng chi tiết frame"
+        ></button>
+      </div>
+      <div class="frame-dialog-content">
+        <div class="frame-dialog-body">
+          <div class="frame-preview-column">
+            <div id="frameVideoGrid" class="frame-video-grid">
+              <div id="frameCompareSource" class="frame-video-cell" hidden>
+                <span class="frame-video-label"
+                  ><span data-i18n="motionEditor.text008">Video gốc</span></span
+                >
+                <div class="frame-video-wrap">
+                  <video id="frameCompareSourceVideo" muted playsinline></video>
+                  <div id="frameCompareSourceEmpty" class="dialog-empty" hidden>
+                    <span data-i18n="motionEditor.text061"
+                      >Chưa có video gốc</span
+                    >
+                  </div>
+                </div>
+              </div>
+              <div class="frame-video-cell">
+                <span id="frameResultLabel" class="frame-video-label"
+                  ><span data-i18n="motionEditor.text008">Video gốc</span></span
+                >
+                <div class="frame-video-wrap">
+                  <video id="frameDialogVideo" controls playsinline></video>
+                  <div id="frameDialogVideoEmpty" class="dialog-empty" hidden>
+                    <span data-i18n="motionEditor.text062"
+                      >Chưa có video cho frame này</span
+                    >
+                  </div>
+                </div>
+              </div>
+            </div>
+            <div class="frame-audio-controls">
+              <audio
+                id="frameDialogAudio"
+                controls
+                preload="metadata"
+                aria-label="Âm thanh frame"
+                hidden
+              ></audio>
+            </div>
+          </div>
+          <div class="frame-info">
+            <div class="frame-info-row" hidden>
+              <strong
+                ><span data-i18n="motionEditor.text063"
+                  >Trạng thái</span
+                ></strong
+              ><span id="frameDialogStatus"></span>
+            </div>
+            <div class="frame-info-row">
+              <strong class="frame-time-label"
+                ><span class="motion-speed-icon" aria-hidden="true"></span
+                ><span data-i18n="motionEditor.text064">Thời gian</span></strong
+              ><span id="frameDialogTime"></span>
+            </div>
+            <div id="frameDialogError" class="frame-error" hidden></div>
+            <div class="frame-transcript" id="frameTranscriptPanel">
+              <div class="frame-transcript-heading">
+                <div class="frame-transcript-title">
+                  <strong
+                    ><span data-i18n="motionEditor.text065"
+                      >Lời thoại / phụ đề</span
+                    ></strong
+                  >
+                  <div id="frameSubEmpty" class="frame-sub-empty" hidden>
+                    <span class="frame-sub-empty-message"
+                      >(<span data-i18n="motionEditor.frameSpeechMissing"
+                        >Chưa có lời thoại</span
+                      >)</span
+                    ><small id="frameSubHint" hidden></small>
+                  </div>
+                </div>
+                <label class="speech-check" for="frameHasSpeech"
+                  ><span
+                    ><span data-i18n="motionEditor.text068"
+                      >Frame có lời nói</span
+                    ></span
+                  ><input
+                    id="frameHasSpeech"
+                    type="checkbox"
+                    role="switch"
+                    checked
+                    aria-controls="frameTranscriptInput frameTranslationInput"
+                    aria-describedby="frameSpeechUsage"
+                /></label>
+              </div>
+              <p
+                id="frameSpeechUsage"
+                class="frame-speech-usage"
+                role="status"
+                hidden
+              ></p>
+              <div
+                id="frameTranscriptError"
+                class="frame-transcript-error"
+                role="status"
+                hidden
+              >
+                <span class="motion-sub-status-dot" aria-hidden="true"></span>
+                <div class="frame-transcript-error-copy">
+                  <strong id="frameTranscriptErrorTitle"></strong
+                  ><span id="frameTranscriptErrorReason" hidden></span
+                  ><code id="frameTranscriptErrorCode" hidden></code>
+                </div>
+              </div>
+              <div class="transcript-field">
+                <label
+                  for="frameTranscriptInput"
+                  class="transcript-label transcript-original"
+                  ><span data-i18n="motionEditor.text069">Lời gốc</span></label
+                >
+                <div class="transcript-input-wrap">
+                  <textarea
+                    id="frameTranscriptInput"
+                    rows="3"
+                    maxlength="12000"
+                    placeholder="Nhập hoặc sửa lời thoại của frame"
+                  ></textarea>
+                </div>
+              </div>
+              <label class="transcript-field"
+                ><span class="transcript-label transcript-translation"
+                  ><span data-i18n="motionEditor.text070"
+                    >Bản dịch (nếu có)</span
+                  ></span
+                ><textarea
+                  id="frameTranslationInput"
+                  rows="2"
+                  maxlength="12000"
+                  placeholder="Để trống nếu dùng lời gốc"
+                ></textarea>
+              </label>
+              <details
+                id="frameSpeechTimeline"
+                class="frame-speech-timeline"
+                hidden
+              >
+                <summary data-i18n="motionEditor.speechTimeline">
+                  Nhịp thoại
+                </summary>
+                <pre id="frameSpeechTimelineText"></pre>
+                <small data-i18n="motionEditor.speechTimelineHint"
+                  >Thời gian tính từ đầu frame. Sửa lời thoại sẽ xóa timeline
+                  cũ; lấy Sub lại để cập nhật.</small
+                >
+              </details>
+              <div class="frame-transcript-actions">
+                <button id="frameSaveTranscript" type="button">
+                  <svg
+                    width="15"
+                    height="15"
+                    viewBox="0 0 24 24"
+                    fill="none"
+                    stroke="currentColor"
+                    stroke-width="1.8"
+                    stroke-linecap="round"
+                    stroke-linejoin="round"
+                    aria-hidden="true"
+                  >
+                    <path
+                      d="M19 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h11l5 5v11a2 2 0 0 1-2 2Z"
+                    />
+                    <path d="M17 21v-8H7v8M7 3v5h8" /></svg
+                  ><span
+                    ><span data-i18n="motionEditor.text071"
+                      >Lưu lời thoại</span
+                    ></span
+                  ></button
+                ><button id="frameResub" type="button" disabled>
+                  <span data-i18n="motionEditor.text067">Tạo Sub</span>
+                </button>
+              </div>
+            </div>
+          </div>
+        </div>
+        <div
+          id="frameDialogSteps"
+          class="motion-frame-steps"
+          role="status"
+          aria-live="polite"
+        ></div>
+      </div>
+      <footer class="dialog-actions frame-dialog-footer">
+        <button id="framePlaySource" type="button">
+          <span data-i18n="motionEditor.text008">Video gốc</span></button
+        ><button id="framePlayResult" type="button">
+          <span data-i18n="motionEditor.text072">Kết quả</span></button
+        ><button id="frameUploadClip" type="button" disabled>
+          Upload clip Flow</button
+        ><button id="frameRegen" type="button">
+          <span data-i18n="motionEditor.text073">Chạy lại frame</span></button
+        ><button id="frameDownload" type="button">
+          <span data-i18n="motionEditor.text074">Tải video local</span>
+        </button>
+      </footer>
+    </dialog>
+    <dialog
+      id="flowDownloadDialog"
+      class="preview-dialog"
+      aria-labelledby="flowDownloadTitle"
+    >
+      <div class="dialog-top">
+        <strong id="flowDownloadTitle"
+          ><span data-i18n="motionEditor.text075">Tải video Flow</span></strong
+        ><button
+          id="closeFlowDownload"
+          class="icon-button"
+          type="button"
+          aria-label="Đóng tải video"
+        ></button>
+      </div>
+      <div class="frame-info">
+        <label class="transcript-field"
+          ><span data-i18n="motionEditor.text076">Độ phân giải</span
+          ><select id="frameFlowResolution"></select
+        ></label>
+        <p id="flowDownloadStatus" role="status"></p>
+        <button id="confirmFlowDownload" type="button">
+          <span data-i18n="motionEditor.text077">Tải và lưu frame</span>
+        </button>
+      </div>
+    </dialog>
+    <dialog
+      id="previewDialog"
+      class="preview-dialog"
+      aria-labelledby="previewTitle"
+    >
+      <div class="dialog-top">
+        <strong id="previewTitle"></strong
+        ><button
+          id="closePreview"
+          class="icon-button"
+          type="button"
+          aria-label="Đóng preview"
+        ></button>
+      </div>
+      <video id="previewVideo" controls playsinline></video>
+    </dialog>
+    <script src="src/core/Diag566.js"></script>
+    <script src="src/core/EventBus.js"></script>
+    <script src="src/core/LocalFetchShim.js"></script>
+    <script src="src/core/ApiBaseConfig.js"></script>
+    <script src="src/core/AuthManager.js"></script>
+    <script src="src/core/ExtensionDeviceManager.js"></script>
+    <script src="src/core/RequestSigner.js"></script>
+    <script src="src/core/I18n.js"></script>
+    <script src="src/core/ProviderConfigManager.js"></script>
+    <script src="src/core/ModelRegistry.js"></script>
+    <script src="src/core/providers/AIProviderAdapter.js"></script>
+    <script src="src/core/providers/FlowAdapter.js"></script>
+    <script src="src/core/providers/ProviderRegistry.js"></script>
+    <script src="src/core/AlbumStore.js"></script>
+    <script src="src/core/ImageStore.js"></script>
+    <script src="src/shared/ImagePickerModal.js"></script>
+    <script src="src/core/flow/FlowDriverRegistry.js"></script>
+    <script src="src/core/FlowUuidGateway.js"></script>
+    <script src="src/core/MessageBridge.js"></script>
+    <script src="src/core/VoiceRegistry.js"></script>
+    <script src="src/shared/VoiceSelectModal.js"></script>
+    <script src="src/core/VoicePicker.js"></script>
+    <script src="src/core/errors/ConfigRequiredError.js"></script>
+    <script src="src/core/SystemConfig.js"></script>
+    <script src="src/core/ExecutionConfig.js"></script>
+    <script src="src/core/FeatureGate.js"></script>
+    <script src="src/core/ChatGPTSession.js"></script>
+    <script src="src/core/GeminiSession.js"></script>
+    <script src="src/settings/StorageSettings.js"></script>
+    <script src="src/core/BridgeClient.js"></script>
+    <script src="src/core/providers/FlowApiAdapter.js"></script>
+    <script src="src/core/flow-api/FlowApiDriverError.js"></script>
+    <script src="src/core/flow-api/FlowApiV1Driver.js"></script>
+    <script src="src/core/flow-api/FlowApiV2CheckpointStore.js"></script>
+    <script src="src/core/flow-api/FlowApiV2Driver.js"></script>
+    <script src="src/core/flow-api/FlowApiDriverResolver.js"></script>
+    <script src="src/core/flow-api/FlowApiDownloadRetry.js"></script>
+    <script src="src/core/flow-api/FlowApiFacade.js"></script>
+    <script src="src/core/flow-api/FlowApiSessionCoordinator.js"></script>
+    <script src="src/core/MotionArtifactStore.js"></script>
+    <script src="src/motion/MotionResolutionPolicy.js"></script>
+    <script src="src/motion/MotionFlowUpload.js"></script>
+    <script src="src/motion/MotionFlowDownload.js"></script>
+    <script src="src/motion/MotionRunJournal.js"></script>
+    <script src="src/motion/MotionFrameResultActions.js"></script>
+    <script src="src/motion/MotionMergeTask.js"></script>
+    <script src="src/core/VideoWmClient.js"></script>
+    <script src="src/shared/CustomDialog.js"></script>
+    <script src="src/core/errors/ConfigErrorHandler.js"></script>
+    <script src="src/core/ConfigAccessUI.js"></script>
+    <script src="src/motion/MotionEditorTheme.js"></script>
+    <script src="src/motion/MotionTimelineScroll.js"></script>
+    <script src="src/core/ValidationRules.js"></script>
+    <script src="src/core/ExecutionGate.js"></script>
+    <script src="src/core/errors/QuotaErrorHandler.js"></script>
+    <script src="src/core/WatermarkClient.js"></script>
+    <script src="src/shared/DownloadHelper.js"></script>
+    <script src="src/core/flow-api/FlowApiTelemetry.js"></script>
+    <script src="src/core/ExecutionLock.js"></script>
+    <script src="src/core/QueueItem.js"></script>
+    <script src="src/core/Job.js"></script>
+    <script src="src/core/MentionParser.js"></script>
+    <script src="src/core/FlowV2CorrelationProtocol.js"></script>
+    <script src="src/core/FlowV2CorrelationBroker.js"></script>
+    <script src="src/core/PendingUploadStore.js"></script>
+    <script src="src/motion/MotionLocalReferences.js"></script>
+    <script src="src/core/MediaRegistry.js"></script>
+    <script src="src/core/FileUploader.js"></script>
+    <script src="src/core/EditorExecutor.js"></script>
+    <script src="src/core/TileMonitor.js"></script>
+    <script src="src/core/FlowWebRecovery.js"></script>
+    <script src="src/core/RefImageAssignment.js"></script>
+    <script src="src/core/PromptQueue.js"></script>
+    <script src="src/motion/MotionCharacterReferences.js"></script>
+    <script src="src/motion/MotionPromptComposer.js"></script>
+    <script src="src/motion/MotionTranscriptContract.js"></script>
+    <script src="src/motion/MotionFullAudioTranscript.js"></script>
+    <script src="src/motion/MotionOriginalAudio.js"></script>
+    <script src="src/motion/MotionTranscriptCommit.js"></script>
+    <script src="src/core/VideoFrameExtractor.js"></script>
+    <script src="src/motion/MotionContinuity.js"></script>
+    <script src="src/motion/MotionFlowQueueRequest.js"></script>
+    <script src="src/shared/ProviderBrandIcons.js"></script>
+    <script src="src/history/GenerationHistory.js"></script>
+    <script src="src/motion/MotionSplitPolicy.js"></script>
+    <script src="src/motion/MotionSplitSettingsDialog.js"></script>
+    <script src="src/motion/MotionAudioRegenerator.js"></script>
+    <script src="src/motion/MotionFailureNotice.js"></script>
+    <script src="src/motion/MotionFrameSteps.js"></script>
+    <script src="src/motion/MotionTextFieldLimits.js"></script>
+    <script src="src/motion/MotionTemplateLibrary.js"></script>
+    <script src="src/motion/MotionEditor.js"></script>
+  </body>
+</html>

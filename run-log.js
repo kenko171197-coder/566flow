@@ -1,1 +1,51 @@
-(async function(){const query=new URLSearchParams(location.search),workflowId=query.get("logWorkflow"),userId=query.get("logUser");const title=document.getElementById("rwTitle"),progress=document.getElementById("rwProgress"),box=document.getElementById("rwLog");let epoch=0;WorkflowRunLogUI.bindCopyButton(()=>userId);async function render(){const current=++epoch;if(!workflowId||!userId||!await WorkflowRunLogStore.authorized(userId)){box.textContent="";progress.textContent="Sign in with the workflow account to view this log.";WorkflowRunLogUI.refresh();return}const record=await WorkflowRunLogStore.read(userId,workflowId);if(current!==epoch)return;title.textContent=`Workflow ${workflowId}`;box.textContent="";for(const text of record?.lines||[]){const line=document.createElement("div");line.className="rw-log-line";line.textContent=text;box.appendChild(line)}progress.textContent=record?.lines?.length?"Saved log from this Chrome session.":"No saved log for this workflow in this Chrome session.";WorkflowRunLogUI.refresh();box.scrollTop=box.scrollHeight}chrome.storage.onChanged.addListener((changes,area)=>{if(area==="session"&&changes[WorkflowRunLogStore.key(userId,workflowId)]||area==="local"&&changes.af_auth)void render()});await render()})().catch(()=>{document.getElementById("rwProgress").textContent="Could not load the workflow log."});
+(async function () {
+  const query = new URLSearchParams(location.search),
+    workflowId = query.get("logWorkflow"),
+    userId = query.get("logUser");
+  const title = document.getElementById("rwTitle"),
+    progress = document.getElementById("rwProgress"),
+    box = document.getElementById("rwLog");
+  let epoch = 0;
+  WorkflowRunLogUI.bindCopyButton(() => userId);
+  async function render() {
+    const current = ++epoch;
+    if (
+      !workflowId ||
+      !userId ||
+      !(await WorkflowRunLogStore.authorized(userId))
+    ) {
+      box.textContent = "";
+      progress.textContent =
+        "Sign in with the workflow account to view this log.";
+      WorkflowRunLogUI.refresh();
+      return;
+    }
+    const record = await WorkflowRunLogStore.read(userId, workflowId);
+    if (current !== epoch) return;
+    title.textContent = `Workflow ${workflowId}`;
+    box.textContent = "";
+    for (const text of record?.lines || []) {
+      const line = document.createElement("div");
+      line.className = "rw-log-line";
+      line.textContent = text;
+      box.appendChild(line);
+    }
+    progress.textContent = record?.lines?.length
+      ? "Saved log from this Chrome session."
+      : "No saved log for this workflow in this Chrome session.";
+    WorkflowRunLogUI.refresh();
+    box.scrollTop = box.scrollHeight;
+  }
+  chrome.storage.onChanged.addListener((changes, area) => {
+    if (
+      (area === "session" &&
+        changes[WorkflowRunLogStore.key(userId, workflowId)]) ||
+      (area === "local" && changes.af_auth)
+    )
+      void render();
+  });
+  await render();
+})().catch(() => {
+  document.getElementById("rwProgress").textContent =
+    "Could not load the workflow log.";
+});

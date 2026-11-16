@@ -1,1 +1,829 @@
-class MotionTranscriptWorkerDriver{static async _waitForWorkerReady(session,workerContext,startupMs,shouldStop){if(shouldStop())throw new Error("MOTION_CANCELLED");let timer,deadlineTimer;const stopped=new Promise(resolve=>{const check=()=>{if(shouldStop())return resolve(null);timer=setTimeout(check,200)};check()});const deadline=new Promise((_,reject)=>{deadlineTimer=setTimeout(()=>reject(new Error("EDITOR_NOT_FOUND")),startupMs)});try{const ready=await Promise.race([session.ensureReady({workerContext,waitForEditorMs:startupMs}),stopped,deadline]);if(shouldStop()||!ready)throw new Error("MOTION_CANCELLED");return ready}finally{clearTimeout(timer);clearTimeout(deadlineTimer)}}static async _acquireDomTurn(shouldStop=()=>false){if(!navigator.locks?.request)throw new Error("PROVIDER_DOM_LOCK_UNAVAILABLE");if(shouldStop())throw new Error("MOTION_CANCELLED");const controller=new AbortController;let grant,rejectGrant,finish,timer;const granted=new Promise((resolve,reject)=>{grant=resolve;rejectGrant=reject});const held=new Promise(resolve=>{finish=resolve});const task=navigator.locks.request("tobyflow-provider-web-dom",{signal:controller.signal},async lock=>{if(!lock)throw new Error("PROVIDER_DOM_LOCK_UNAVAILABLE");if(shouldStop())throw new Error("MOTION_CANCELLED");let done=false;grant(()=>{if(!done){done=true;finish()}});await held});Promise.resolve(task).catch(error=>rejectGrant(controller.signal.aborted?new Error("MOTION_CANCELLED"):error));const check=()=>{if(shouldStop()){controller.abort();return}timer=setTimeout(check,200)};check();try{return await granted}finally{clearTimeout(timer)}}static async run({attempt,journal,reservationId,hostEpoch,flowTabId,accountTabId=null,frame,profile,preferences,model=null,deleteAfter=false,api,assertScope,waitForSlot,waitBeforeRetry=waitForSlot,shouldStop,screen={},onStage=()=>{},fullAudio=null}){if(!attempt||!journal||!frame||!profile||!preferences||typeof api!=="function"||[assertScope,waitForSlot,waitBeforeRetry,shouldStop].some(fn=>typeof fn!=="function")){throw new Error("MOTION_WORKER_DRIVER_INVALID")}await assertScope();const run=await journal.get(attempt);await assertScope();if(!run||run.runId!==attempt.runId||typeof run.retryEnabled!=="boolean"||!Number.isSafeInteger(run.transcriptMaxRetries)||run.transcriptMaxRetries<0||!["chatgpt","gemini"].includes(run.transcriptionProvider)||profile.revision!==run.profileRevision||frame.run_id!==attempt.frameRunId||frame.input_revision!==attempt.inputRevision||run.transcriptSettings?.transcription_provider!==run.transcriptionProvider||run.transcriptSettings?.translate_enabled!==(preferences.translate_enabled===true)||run.transcriptSettings?.translate_enabled&&run.transcriptSettings.target_language!==(preferences.target_language||null)||frame.stages?.split?.audio_state!=="audio_present")throw new Error("MOTION_WORKER_SCOPE_INVALID");if(fullAudio&&(run.fullAudioTranscription!==true||!attempt.fullAudioFrames||JSON.stringify(fullAudio.members)!==JSON.stringify(attempt.fullAudioFrames)))throw new Error("MOTION_FULL_AUDIO_SCOPE_INVALID");const provider=run.transcriptionProvider;const cleanupTimeoutMs=1e4;const translate=preferences.translate_enabled===true;const preserveOriginal=translate&&frame.transcript?.has_speech===true;let startupMs=null,rawResponse=null,reservation=null,fullDispatchStarted=false;let fullSendObserved=false,failureDiagnostic=null;const ownerMessage=worker=>({hostEpoch,workerId:worker.workerId,tabId:worker.tabId,epoch:worker.epoch,runId:worker.runId,toolProjectId:worker.toolProjectId,attemptId:worker.attemptId});const rpc=async(action,data)=>{const response=await chrome.runtime.sendMessage({action,...data});if(!response?.success)throw new Error(response?.error||"MOTION_WORKER_RPC_FAILED");return response};const flush=()=>MotionTranscriptOutbox.flush({userId:attempt.userId,toolProjectId:attempt.toolProjectId,flowProjectId:run.flowProjectId,frameId:fullAudio?null:attempt.frameId,api,assertScope});const settle=async status=>{const retries=run.retryEnabled?run.transcriptMaxRetries:0;for(let index=0;;index++){try{return await MotionTranscriptReservation.settle({attempt,status,journal,api,assertScope,flush,onDiagnostic:apiDiagnostic=>onStage({frameId:attempt.frameId,stage:"transcript",apiDiagnostic})})}catch(error){if(index>=retries)throw error;await waitBeforeRetry({frameId:attempt.frameId,retryCount:index+1,stage:"transcript_settlement"})}}};const attemptJournal=fullAudio?{markSubmitted:input=>journal.markSubmitted(input),get:input=>journal.get(input),failTranscript:input=>{const unknown=fullDispatchStarted&&rawResponse?.success!==true&&rawResponse?.resultConfirmed!==true;if(unknown){failureDiagnostic={stage:fullSendObserved?"monitor":"provider_task",code:/^[A-Za-z][A-Za-z0-9_:-]{0,99}$/.test(String(input.reason||""))?input.reason:"MOTION_TRANSCRIPTION_FAILED"};console.warn("[MotionFullAudioFailure]",JSON.stringify({runId:attempt.runId,attemptId:attempt.operationId,...failureDiagnostic,sendObserved:fullSendObserved,resultConfirmed:false}));try{onStage({frameId:attempt.frameId,stage:"transcript",apiDiagnostic:{phase:"transcript_result",operation:failureDiagnostic.stage,eventState:"unconfirmed",code:failureDiagnostic.code}})}catch(_){}}return journal.failTranscript({...input,...unknown&&{reason:"MOTION_FULL_AUDIO_OUTCOME_UNKNOWN",diagnostic:failureDiagnostic}})},storeTranscript:input=>journal.storeFullAudioTranscript({...input,transcripts:input.transcript})}:journal;const outcome=await MotionTranscriptWorkerAttempt.run({attempt,journal:attemptJournal,cleanupTimeoutMs,onSaved:()=>onStage({frameId:attempt.frameId,stage:"transcript",detail:"saved",sourceRevision:run.sourceRevision}),flush,reserve:async()=>{reservation=await MotionTranscriptReservation.reserve({attempt,reservationId,journal,api,assertScope});return reservation},openWorker:async()=>{for(;;){await assertScope();if(shouldStop())throw new Error("MOTION_CANCELLED");const opened=await chrome.runtime.sendMessage({action:"motionWorker:create",hostEpoch,toolProjectId:attempt.toolProjectId,runId:attempt.runId,attemptId:attempt.operationId,epoch:attempt.epoch,workerId:attempt.workerId,provider,flowTabId,accountTabId,...screen});if(opened?.success){startupMs=opened.waitForEditorMs;console.info("[MotionTranscriptWorker]",JSON.stringify({runId:attempt.runId,frameId:attempt.frameId,attemptId:attempt.operationId,workerId:opened.worker?.workerId,tabId:opened.worker?.tabId,provider,stage:"opened",waitForEditorMs:startupMs}));return opened.worker}if(opened?.error!=="WORKER_CAPACITY_FULL")throw new Error(opened?.error||"MOTION_WORKER_CREATE_FAILED");await waitForSlot()}},authorize:async worker=>{const session=provider==="chatgpt"?window.ChatGPTSession:window.GeminiSession;if(typeof session?.ensureReady!=="function")throw new Error("MOTION_AGENT_NOT_READY");const ready=await this._waitForWorkerReady(session,{...worker,...ownerMessage(worker),motionWorker:true},startupMs,shouldStop);if(ready?.ready!==true||ready.tabId!==worker.tabId)throw new Error(ready?.error||"EDITOR_NOT_FOUND");await assertScope();if(shouldStop())throw new Error("MOTION_CANCELLED");return MotionTranscriptReservation.intent({attempt,journal,api,assertScope})},dispatch:async worker=>{await assertScope();if(fullAudio)await fullAudio.assertCurrent();const audio=fullAudio?{blob:await fullAudio.audio(),flowProjectId:run.flowProjectId}:await MotionArtifactStore.get({userId:attempt.userId,toolProjectId:attempt.toolProjectId,sourceRevision:run.sourceRevision,frameId:attempt.frameId,kind:"source_audio"});if(!audio?.blob)throw new Error("MOTION_AUDIO_NOT_AVAILABLE");if(audio.flowProjectId!==run.flowProjectId)throw new Error("MOTION_AUDIO_SCOPE_MISMATCH");const uploadAudio=await MotionTranscriptContract.prepareAudio(audio.blob,{shouldStop});console.info("[MotionTranscriptUpload]",JSON.stringify({runId:attempt.runId,operationId:attempt.operationId,frameId:attempt.frameId,fullSound:!!fullAudio,inputBytes:audio.blob.size,uploadBytes:uploadAudio.size}));const manifest=fullAudio?[{name:"frame_full_source.wav",mime:"audio/wav",order:1}]:MotionTranscriptContract.buildBatches([{frameId:attempt.frameId,blob:uploadAudio,duration:frame.end-frame.start}],{maxFiles:1,maxBytes:uploadAudio.size})[0];const entry=manifest[0];const manifestPayload=fullAudio?fullAudio.manifest.audio_files:[{frame_id:attempt.frameId,order:entry.order,file_name:entry.name,duration_seconds:entry.duration}];const rendered=MotionPromptComposer.render(profile.prompts?.[fullAudio?translate?"transcribe_translate_full_audio":"transcribe_full_audio":translate?"transcribe_translate":"transcribe"],{audio_manifest:JSON.stringify(fullAudio?fullAudio.manifest:manifestPayload),target_language:preferences.target_language||""});const text=fullAudio?rendered:MotionTranscriptContract.composePrompt(rendered,{translate});const base64=await new Promise((resolve,reject)=>{const reader=new FileReader;reader.onerror=()=>reject(reader.error||new Error("MOTION_AUDIO_READ_FAILED"));reader.onload=()=>resolve(String(reader.result).split(",")[1]);reader.readAsDataURL(uploadAudio)});await assertScope();if(shouldStop())throw new Error("MOTION_CANCELLED");const release=await this._acquireDomTurn(shouldStop);let finished=null,focused=false;const releaseFocus=()=>{if(!finished)finished=(async()=>{try{if(focused)await rpc("motionWorker:restoreFocus",ownerMessage(worker))}catch(error){console.warn("[MotionWorker] focus restore failed",{code:error?.message})}finally{release()}})();return finished};const listener=(message,sender)=>{if(message?.operationId!==attempt.operationId||sender?.id!==chrome.runtime.id||sender?.tab?.id!==worker.tabId)return false;if(message.action==="motionWorker:submitted"){fullSendObserved=true;void releaseFocus().catch(()=>{})}if(message.action==="motionWorker:textProgress"&&["streaming","stable","settling"].includes(message.eventState)){const metrics=Object.fromEntries(["elapsedMs","pollingGapMs","stableMs","textLength"].filter(key=>Number.isSafeInteger(message[key])&&message[key]>=0).map(key=>[key,message[key]]));try{onStage({frameId:attempt.frameId,stage:"transcript",apiDiagnostic:{phase:"text_monitor",eventState:message.eventState,...metrics}})}catch(_){}}return false};chrome.runtime.onMessage.addListener(listener);try{await assertScope();if(shouldStop())throw new Error("MOTION_CANCELLED");await rpc("motionWorker:focus",ownerMessage(worker));focused=true;if(fullAudio){await fullAudio.assertCurrent();fullDispatchStarted=true}const promptContract={runId:attempt.runId,frameId:attempt.frameId,attemptId:attempt.operationId,provider,profileRevision:profile.revision,promptVariant:profile.prompt_variant||null,fullSound:!!fullAudio,audioFiles:manifestPayload.length,verbatimNumberWords:text.includes("MOTION_VERBATIM_NUMBERS_V1"),boundaryAlignment:text.includes("MOTION_FULL_AUDIO_BOUNDARY_ALIGNMENT_V1"),phraseTimeline:text.includes("MOTION_SPEECH_TIMELINE_V1")};console.info("[MotionTranscriptPrompt]",JSON.stringify(promptContract));try{onStage({frameId:attempt.frameId,stage:"transcript",apiDiagnostic:{phase:"prompt_contract",operation:fullAudio?"full_audio":"frame",eventState:promptContract.verbatimNumberWords?promptContract.boundaryAlignment?"numbers_and_alignment":"numbers_only":promptContract.boundaryAlignment?"alignment_only":"base"}})}catch(_){}const response=await chrome.tabs.sendMessage(worker.tabId,{action:"provider:textTask",motionWorker:true,motionAudio:true,motionOperationId:attempt.operationId,waitForEditorMs:startupMs,newChat:true,timeout:reservation.textTimeoutMs,tabFreshlyCreated:true,text,images:[{base64,name:entry.name,type:entry.mime}],motionAudioManifest:manifestPayload,deleteAfter,deferCleanup:true,model:model||void 0});rawResponse=response||null;if(!response?.success)throw new Error(response?.error||"MOTION_TRANSCRIPTION_FAILED");return{response,manifest}}finally{chrome.runtime.onMessage.removeListener(listener);await releaseFocus()}},validate:async({response,manifest})=>{if(fullAudio){await fullAudio.assertCurrent();let data;try{data=MotionFullAudioTranscript.validate(response,fullAudio.manifest,translate,{requireTimeline:String(profile.prompts?.[translate?"transcribe_translate_full_audio":"transcribe_full_audio"]||"").includes("MOTION_SPEECH_TIMELINE_V1")})}catch(error){const info=error.validationDiagnostic||{};const metrics=Object.fromEntries(["textLength","beginMarkers","endMarkers"].filter(key=>Number.isSafeInteger(info[key])&&info[key]>=0).map(key=>[key,info[key]]));const code=/^[A-Za-z][A-Za-z0-9_:-]{0,99}$/.test(String(error?.message||""))?error.message:"FULL_AUDIO_RESPONSE_INVALID";const operation=["transport_invalid"].includes(info.operation)?info.operation:"response_invalid";const apiDiagnostic={phase:"transcript_validation",eventState:"failed",operation,code,...metrics};console.warn("[MotionFullAudioValidation]",JSON.stringify({runId:attempt.runId,attemptId:attempt.operationId,...apiDiagnostic}));try{onStage({frameId:attempt.frameId,stage:"transcript",apiDiagnostic})}catch(_){}throw error}return fullAudio.members.map(member=>{const result=data.frames.find(f=>f.frame_id===member.frameId);return{frameId:member.frameId,hasSpeech:result.has_speech,transcript:result.transcript,detectedLanguage:result.detected_language,translatedText:result.translated_text||null,...result.speech_timeline!=null&&{speechTimeline:result.speech_timeline}}})}let transcript=MotionTranscriptContract.validateSingleResponse(response,manifest,{frameId:attempt.frameId,translate,preserveOriginalSpeech:preserveOriginal,requireTimeline:String(profile.prompts?.[translate?"transcribe_translate":"transcribe"]||"").includes("MOTION_SPEECH_TIMELINE_V1")});if(!translate&&transcript.hasSpeech&&frame.transcript?.translated_text){transcript.translatedText=frame.transcript.translated_text;transcript.speechTimeline=null}if(preserveOriginal)transcript={...transcript,hasSpeech:true,transcript:frame.transcript.text||"",detectedLanguage:frame.transcript.detected_language||"",speechTimeline:transcript.transcript.trim()===(frame.transcript.text||"").trim()?transcript.speechTimeline:null};return transcript},cleanup:async worker=>{const requestedAt=Date.now();const report=(eventState,code=null)=>{try{onStage({frameId:attempt.frameId,stage:"transcript",apiDiagnostic:{phase:"transcript_cleanup",operation:provider,eventState,elapsedMs:Date.now()-requestedAt,...code&&{code:/^[A-Za-z][A-Za-z0-9_:-]{0,99}$/.test(String(code))?code:"MOTION_CLEANUP_UNCONFIRMED"}}})}catch(_){}};if(!deleteAfter){report("skipped","CLEANUP_DISABLED");return}if(!rawResponse?.cleanupEligible||!rawResponse.cleanupConversationUrl){report("skipped","CLEANUP_RECEIPT_MISSING");return}report("requested");try{const result=provider==="chatgpt"?await chrome.runtime.sendMessage({action:"chatgpt:deleteConversationWithReloadFallback",tabId:worker.tabId,expectedConversationUrl:rawResponse.cleanupConversationUrl,focusWindow:false,skipReload:true,requestedAt}):await chrome.tabs.sendMessage(worker.tabId,{action:"gemini:deleteCurrentConversation",expectedConversationUrl:rawResponse.cleanupConversationUrl,cleanupDeadline:requestedAt+cleanupTimeoutMs,requestedAt});report(result?.success===true?"verified":"unconfirmed",result?.error);return result||{success:false,error:"MOTION_CLEANUP_UNCONFIRMED"}}catch(error){report("failed",error?.code||error?.message);throw error}},close:async worker=>{const retries=run.retryEnabled===true?run.transcriptMaxRetries:0;let result;for(let attemptIndex=0;attemptIndex<=retries;attemptIndex++){try{await assertScope();result=await chrome.runtime.sendMessage({action:"motionWorker:close",...ownerMessage(worker)});if(result?.success===true)return result}catch(error){result={success:false,error:error?.code||error?.message||"MOTION_WORKER_CLOSE_FAILED"}}if(attemptIndex<retries){await waitBeforeRetry({frameId:attempt.frameId,retryCount:attemptIndex+1,stage:"worker_close"})}}return result||{success:false,error:"MOTION_WORKER_CLOSE_FAILED"}}});if(fullAudio&&fullDispatchStarted&&rawResponse?.success!==true&&rawResponse?.resultConfirmed!==true){outcome.terminal=true;outcome.error="MOTION_FULL_AUDIO_OUTCOME_UNKNOWN";if(failureDiagnostic)outcome.failureDiagnostic=failureDiagnostic}if(outcome.state==="persistence_error"){outcome.terminal=true;if(typeof outcome.retryPersistence==="function"){const retry=outcome.retryPersistence;Object.defineProperty(outcome,"retryPersistence",{enumerable:false,configurable:true,value:async()=>{const recovered=await retry();if(recovered?.state==="ready"){try{await settle("success");recovered.synced=true;recovered.settlementPending=false}catch(error){recovered.settlementPending=true;recovered.settlementError=error?.message||"MOTION_SETTLEMENT_UNCONFIRMED"}}return recovered}})}}if(outcome.state==="ready"||outcome.state==="failed"){const current=await journal.get(attempt);const failures=Object.values(current?.failedOperations||{}).filter(item=>item.frameId===attempt.frameId&&item.frameRunId===attempt.frameRunId&&item.inputRevision===attempt.inputRevision&&!item.resolved).length;const terminal=outcome.state==="ready"||outcome.state==="failed"&&(!run.retryEnabled||failures>run.transcriptMaxRetries);if(terminal){if(outcome.state==="failed")outcome.terminal=true;try{await settle(outcome.state==="ready"?"success":"failed");outcome.synced=true;outcome.settlementPending=false}catch(error){outcome.settlementPending=true;outcome.settlementError=error?.message||"MOTION_SETTLEMENT_UNCONFIRMED"}}}return outcome}}globalThis.MotionTranscriptWorkerDriver=MotionTranscriptWorkerDriver;
+class MotionTranscriptWorkerDriver {
+  static async _waitForWorkerReady(
+    session,
+    workerContext,
+    startupMs,
+    shouldStop,
+  ) {
+    if (shouldStop()) throw new Error("MOTION_CANCELLED");
+    let timer, deadlineTimer;
+    const stopped = new Promise((resolve) => {
+      const check = () => {
+        if (shouldStop()) return resolve(null);
+        timer = setTimeout(check, 200);
+      };
+      check();
+    });
+    const deadline = new Promise((_, reject) => {
+      deadlineTimer = setTimeout(
+        () => reject(new Error("EDITOR_NOT_FOUND")),
+        startupMs,
+      );
+    });
+    try {
+      const ready = await Promise.race([
+        session.ensureReady({ workerContext, waitForEditorMs: startupMs }),
+        stopped,
+        deadline,
+      ]);
+      if (shouldStop() || !ready) throw new Error("MOTION_CANCELLED");
+      return ready;
+    } finally {
+      clearTimeout(timer);
+      clearTimeout(deadlineTimer);
+    }
+  }
+  static async _acquireDomTurn(shouldStop = () => false) {
+    if (!navigator.locks?.request)
+      throw new Error("PROVIDER_DOM_LOCK_UNAVAILABLE");
+    if (shouldStop()) throw new Error("MOTION_CANCELLED");
+    const controller = new AbortController();
+    let grant, rejectGrant, finish, timer;
+    const granted = new Promise((resolve, reject) => {
+      grant = resolve;
+      rejectGrant = reject;
+    });
+    const held = new Promise((resolve) => {
+      finish = resolve;
+    });
+    const task = navigator.locks.request(
+      "tobyflow-provider-web-dom",
+      { signal: controller.signal },
+      async (lock) => {
+        if (!lock) throw new Error("PROVIDER_DOM_LOCK_UNAVAILABLE");
+        if (shouldStop()) throw new Error("MOTION_CANCELLED");
+        let done = false;
+        grant(() => {
+          if (!done) {
+            done = true;
+            finish();
+          }
+        });
+        await held;
+      },
+    );
+    Promise.resolve(task).catch((error) =>
+      rejectGrant(
+        controller.signal.aborted ? new Error("MOTION_CANCELLED") : error,
+      ),
+    );
+    const check = () => {
+      if (shouldStop()) {
+        controller.abort();
+        return;
+      }
+      timer = setTimeout(check, 200);
+    };
+    check();
+    try {
+      return await granted;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+  static async run({
+    attempt,
+    journal,
+    reservationId,
+    hostEpoch,
+    flowTabId,
+    accountTabId = null,
+    frame,
+    profile,
+    preferences,
+    model = null,
+    deleteAfter = false,
+    api,
+    assertScope,
+    waitForSlot,
+    waitBeforeRetry = waitForSlot,
+    shouldStop,
+    screen = {},
+    onStage = () => {},
+    fullAudio = null,
+  }) {
+    if (
+      !attempt ||
+      !journal ||
+      !frame ||
+      !profile ||
+      !preferences ||
+      typeof api !== "function" ||
+      [assertScope, waitForSlot, waitBeforeRetry, shouldStop].some(
+        (fn) => typeof fn !== "function",
+      )
+    ) {
+      throw new Error("MOTION_WORKER_DRIVER_INVALID");
+    }
+    await assertScope();
+    const run = await journal.get(attempt);
+    await assertScope();
+    if (
+      !run ||
+      run.runId !== attempt.runId ||
+      typeof run.retryEnabled !== "boolean" ||
+      !Number.isSafeInteger(run.transcriptMaxRetries) ||
+      run.transcriptMaxRetries < 0 ||
+      !["chatgpt", "gemini"].includes(run.transcriptionProvider) ||
+      profile.revision !== run.profileRevision ||
+      frame.run_id !== attempt.frameRunId ||
+      frame.input_revision !== attempt.inputRevision ||
+      run.transcriptSettings?.transcription_provider !==
+        run.transcriptionProvider ||
+      run.transcriptSettings?.translate_enabled !==
+        (preferences.translate_enabled === true) ||
+      (run.transcriptSettings?.translate_enabled &&
+        run.transcriptSettings.target_language !==
+          (preferences.target_language || null)) ||
+      frame.stages?.split?.audio_state !== "audio_present"
+    )
+      throw new Error("MOTION_WORKER_SCOPE_INVALID");
+    if (
+      fullAudio &&
+      (run.fullAudioTranscription !== true ||
+        !attempt.fullAudioFrames ||
+        JSON.stringify(fullAudio.members) !==
+          JSON.stringify(attempt.fullAudioFrames))
+    )
+      throw new Error("MOTION_FULL_AUDIO_SCOPE_INVALID");
+    const provider = run.transcriptionProvider;
+    const cleanupTimeoutMs = 1e4;
+    const translate = preferences.translate_enabled === true;
+    const preserveOriginal = translate && frame.transcript?.has_speech === true;
+    let startupMs = null,
+      rawResponse = null,
+      reservation = null,
+      fullDispatchStarted = false;
+    let fullSendObserved = false,
+      failureDiagnostic = null;
+    const ownerMessage = (worker) => ({
+      hostEpoch,
+      workerId: worker.workerId,
+      tabId: worker.tabId,
+      epoch: worker.epoch,
+      runId: worker.runId,
+      toolProjectId: worker.toolProjectId,
+      attemptId: worker.attemptId,
+    });
+    const rpc = async (action, data) => {
+      const response = await chrome.runtime.sendMessage({ action, ...data });
+      if (!response?.success)
+        throw new Error(response?.error || "MOTION_WORKER_RPC_FAILED");
+      return response;
+    };
+    const flush = () =>
+      MotionTranscriptOutbox.flush({
+        userId: attempt.userId,
+        toolProjectId: attempt.toolProjectId,
+        flowProjectId: run.flowProjectId,
+        frameId: fullAudio ? null : attempt.frameId,
+        api,
+        assertScope,
+      });
+    const settle = async (status) => {
+      const retries = run.retryEnabled ? run.transcriptMaxRetries : 0;
+      for (let index = 0; ; index++) {
+        try {
+          return await MotionTranscriptReservation.settle({
+            attempt,
+            status,
+            journal,
+            api,
+            assertScope,
+            flush,
+            onDiagnostic: (apiDiagnostic) =>
+              onStage({
+                frameId: attempt.frameId,
+                stage: "transcript",
+                apiDiagnostic,
+              }),
+          });
+        } catch (error) {
+          if (index >= retries) throw error;
+          await waitBeforeRetry({
+            frameId: attempt.frameId,
+            retryCount: index + 1,
+            stage: "transcript_settlement",
+          });
+        }
+      }
+    };
+    const attemptJournal = fullAudio
+      ? {
+          markSubmitted: (input) => journal.markSubmitted(input),
+          get: (input) => journal.get(input),
+          failTranscript: (input) => {
+            const unknown =
+              fullDispatchStarted &&
+              rawResponse?.success !== true &&
+              rawResponse?.resultConfirmed !== true;
+            if (unknown) {
+              failureDiagnostic = {
+                stage: fullSendObserved ? "monitor" : "provider_task",
+                code: /^[A-Za-z][A-Za-z0-9_:-]{0,99}$/.test(
+                  String(input.reason || ""),
+                )
+                  ? input.reason
+                  : "MOTION_TRANSCRIPTION_FAILED",
+              };
+              console.warn(
+                "[MotionFullAudioFailure]",
+                JSON.stringify({
+                  runId: attempt.runId,
+                  attemptId: attempt.operationId,
+                  ...failureDiagnostic,
+                  sendObserved: fullSendObserved,
+                  resultConfirmed: false,
+                }),
+              );
+              try {
+                onStage({
+                  frameId: attempt.frameId,
+                  stage: "transcript",
+                  apiDiagnostic: {
+                    phase: "transcript_result",
+                    operation: failureDiagnostic.stage,
+                    eventState: "unconfirmed",
+                    code: failureDiagnostic.code,
+                  },
+                });
+              } catch (_) {}
+            }
+            return journal.failTranscript({
+              ...input,
+              ...(unknown && {
+                reason: "MOTION_FULL_AUDIO_OUTCOME_UNKNOWN",
+                diagnostic: failureDiagnostic,
+              }),
+            });
+          },
+          storeTranscript: (input) =>
+            journal.storeFullAudioTranscript({
+              ...input,
+              transcripts: input.transcript,
+            }),
+        }
+      : journal;
+    const outcome = await MotionTranscriptWorkerAttempt.run({
+      attempt,
+      journal: attemptJournal,
+      cleanupTimeoutMs,
+      onSaved: () =>
+        onStage({
+          frameId: attempt.frameId,
+          stage: "transcript",
+          detail: "saved",
+          sourceRevision: run.sourceRevision,
+        }),
+      flush,
+      reserve: async () => {
+        reservation = await MotionTranscriptReservation.reserve({
+          attempt,
+          reservationId,
+          journal,
+          api,
+          assertScope,
+        });
+        return reservation;
+      },
+      openWorker: async () => {
+        for (;;) {
+          await assertScope();
+          if (shouldStop()) throw new Error("MOTION_CANCELLED");
+          const opened = await chrome.runtime.sendMessage({
+            action: "motionWorker:create",
+            hostEpoch,
+            toolProjectId: attempt.toolProjectId,
+            runId: attempt.runId,
+            attemptId: attempt.operationId,
+            epoch: attempt.epoch,
+            workerId: attempt.workerId,
+            provider,
+            flowTabId,
+            accountTabId,
+            ...screen,
+          });
+          if (opened?.success) {
+            startupMs = opened.waitForEditorMs;
+            console.info(
+              "[MotionTranscriptWorker]",
+              JSON.stringify({
+                runId: attempt.runId,
+                frameId: attempt.frameId,
+                attemptId: attempt.operationId,
+                workerId: opened.worker?.workerId,
+                tabId: opened.worker?.tabId,
+                provider,
+                stage: "opened",
+                waitForEditorMs: startupMs,
+              }),
+            );
+            return opened.worker;
+          }
+          if (opened?.error !== "WORKER_CAPACITY_FULL")
+            throw new Error(opened?.error || "MOTION_WORKER_CREATE_FAILED");
+          await waitForSlot();
+        }
+      },
+      authorize: async (worker) => {
+        const session =
+          provider === "chatgpt" ? window.ChatGPTSession : window.GeminiSession;
+        if (typeof session?.ensureReady !== "function")
+          throw new Error("MOTION_AGENT_NOT_READY");
+        const ready = await this._waitForWorkerReady(
+          session,
+          { ...worker, ...ownerMessage(worker), motionWorker: true },
+          startupMs,
+          shouldStop,
+        );
+        if (ready?.ready !== true || ready.tabId !== worker.tabId)
+          throw new Error(ready?.error || "EDITOR_NOT_FOUND");
+        await assertScope();
+        if (shouldStop()) throw new Error("MOTION_CANCELLED");
+        return MotionTranscriptReservation.intent({
+          attempt,
+          journal,
+          api,
+          assertScope,
+        });
+      },
+      dispatch: async (worker) => {
+        await assertScope();
+        if (fullAudio) await fullAudio.assertCurrent();
+        const audio = fullAudio
+          ? { blob: await fullAudio.audio(), flowProjectId: run.flowProjectId }
+          : await MotionArtifactStore.get({
+              userId: attempt.userId,
+              toolProjectId: attempt.toolProjectId,
+              sourceRevision: run.sourceRevision,
+              frameId: attempt.frameId,
+              kind: "source_audio",
+            });
+        if (!audio?.blob) throw new Error("MOTION_AUDIO_NOT_AVAILABLE");
+        if (audio.flowProjectId !== run.flowProjectId)
+          throw new Error("MOTION_AUDIO_SCOPE_MISMATCH");
+        const uploadAudio = await MotionTranscriptContract.prepareAudio(
+          audio.blob,
+          { shouldStop },
+        );
+        console.info(
+          "[MotionTranscriptUpload]",
+          JSON.stringify({
+            runId: attempt.runId,
+            operationId: attempt.operationId,
+            frameId: attempt.frameId,
+            fullSound: !!fullAudio,
+            inputBytes: audio.blob.size,
+            uploadBytes: uploadAudio.size,
+          }),
+        );
+        const manifest = fullAudio
+          ? [{ name: "frame_full_source.wav", mime: "audio/wav", order: 1 }]
+          : MotionTranscriptContract.buildBatches(
+              [
+                {
+                  frameId: attempt.frameId,
+                  blob: uploadAudio,
+                  duration: frame.end - frame.start,
+                },
+              ],
+              { maxFiles: 1, maxBytes: uploadAudio.size },
+            )[0];
+        const entry = manifest[0];
+        const manifestPayload = fullAudio
+          ? fullAudio.manifest.audio_files
+          : [
+              {
+                frame_id: attempt.frameId,
+                order: entry.order,
+                file_name: entry.name,
+                duration_seconds: entry.duration,
+              },
+            ];
+        const rendered = MotionPromptComposer.render(
+          profile.prompts?.[
+            fullAudio
+              ? translate
+                ? "transcribe_translate_full_audio"
+                : "transcribe_full_audio"
+              : translate
+                ? "transcribe_translate"
+                : "transcribe"
+          ],
+          {
+            audio_manifest: JSON.stringify(
+              fullAudio ? fullAudio.manifest : manifestPayload,
+            ),
+            target_language: preferences.target_language || "",
+          },
+        );
+        const text = fullAudio
+          ? rendered
+          : MotionTranscriptContract.composePrompt(rendered, { translate });
+        const base64 = await new Promise((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onerror = () =>
+            reject(reader.error || new Error("MOTION_AUDIO_READ_FAILED"));
+          reader.onload = () => resolve(String(reader.result).split(",")[1]);
+          reader.readAsDataURL(uploadAudio);
+        });
+        await assertScope();
+        if (shouldStop()) throw new Error("MOTION_CANCELLED");
+        const release = await this._acquireDomTurn(shouldStop);
+        let finished = null,
+          focused = false;
+        const releaseFocus = () => {
+          if (!finished)
+            finished = (async () => {
+              try {
+                if (focused)
+                  await rpc("motionWorker:restoreFocus", ownerMessage(worker));
+              } catch (error) {
+                console.warn("[MotionWorker] focus restore failed", {
+                  code: error?.message,
+                });
+              } finally {
+                release();
+              }
+            })();
+          return finished;
+        };
+        const listener = (message, sender) => {
+          if (
+            message?.operationId !== attempt.operationId ||
+            sender?.id !== chrome.runtime.id ||
+            sender?.tab?.id !== worker.tabId
+          )
+            return false;
+          if (message.action === "motionWorker:submitted") {
+            fullSendObserved = true;
+            void releaseFocus().catch(() => {});
+          }
+          if (
+            message.action === "motionWorker:textProgress" &&
+            ["streaming", "stable", "settling"].includes(message.eventState)
+          ) {
+            const metrics = Object.fromEntries(
+              ["elapsedMs", "pollingGapMs", "stableMs", "textLength"]
+                .filter(
+                  (key) =>
+                    Number.isSafeInteger(message[key]) && message[key] >= 0,
+                )
+                .map((key) => [key, message[key]]),
+            );
+            try {
+              onStage({
+                frameId: attempt.frameId,
+                stage: "transcript",
+                apiDiagnostic: {
+                  phase: "text_monitor",
+                  eventState: message.eventState,
+                  ...metrics,
+                },
+              });
+            } catch (_) {}
+          }
+          return false;
+        };
+        chrome.runtime.onMessage.addListener(listener);
+        try {
+          await assertScope();
+          if (shouldStop()) throw new Error("MOTION_CANCELLED");
+          await rpc("motionWorker:focus", ownerMessage(worker));
+          focused = true;
+          if (fullAudio) {
+            await fullAudio.assertCurrent();
+            fullDispatchStarted = true;
+          }
+          const promptContract = {
+            runId: attempt.runId,
+            frameId: attempt.frameId,
+            attemptId: attempt.operationId,
+            provider,
+            profileRevision: profile.revision,
+            promptVariant: profile.prompt_variant || null,
+            fullSound: !!fullAudio,
+            audioFiles: manifestPayload.length,
+            verbatimNumberWords: text.includes("MOTION_VERBATIM_NUMBERS_V1"),
+            boundaryAlignment: text.includes(
+              "MOTION_FULL_AUDIO_BOUNDARY_ALIGNMENT_V1",
+            ),
+            phraseTimeline: text.includes("MOTION_SPEECH_TIMELINE_V1"),
+          };
+          console.info(
+            "[MotionTranscriptPrompt]",
+            JSON.stringify(promptContract),
+          );
+          try {
+            onStage({
+              frameId: attempt.frameId,
+              stage: "transcript",
+              apiDiagnostic: {
+                phase: "prompt_contract",
+                operation: fullAudio ? "full_audio" : "frame",
+                eventState: promptContract.verbatimNumberWords
+                  ? promptContract.boundaryAlignment
+                    ? "numbers_and_alignment"
+                    : "numbers_only"
+                  : promptContract.boundaryAlignment
+                    ? "alignment_only"
+                    : "base",
+              },
+            });
+          } catch (_) {}
+          const response = await chrome.tabs.sendMessage(worker.tabId, {
+            action: "provider:textTask",
+            motionWorker: true,
+            motionAudio: true,
+            motionOperationId: attempt.operationId,
+            waitForEditorMs: startupMs,
+            newChat: true,
+            timeout: reservation.textTimeoutMs,
+            tabFreshlyCreated: true,
+            text,
+            images: [{ base64, name: entry.name, type: entry.mime }],
+            motionAudioManifest: manifestPayload,
+            deleteAfter,
+            deferCleanup: true,
+            model: model || void 0,
+          });
+          rawResponse = response || null;
+          if (!response?.success)
+            throw new Error(response?.error || "MOTION_TRANSCRIPTION_FAILED");
+          return { response, manifest };
+        } finally {
+          chrome.runtime.onMessage.removeListener(listener);
+          await releaseFocus();
+        }
+      },
+      validate: async ({ response, manifest }) => {
+        if (fullAudio) {
+          await fullAudio.assertCurrent();
+          let data;
+          try {
+            data = MotionFullAudioTranscript.validate(
+              response,
+              fullAudio.manifest,
+              translate,
+              {
+                requireTimeline: String(
+                  profile.prompts?.[
+                    translate
+                      ? "transcribe_translate_full_audio"
+                      : "transcribe_full_audio"
+                  ] || "",
+                ).includes("MOTION_SPEECH_TIMELINE_V1"),
+              },
+            );
+          } catch (error) {
+            const info = error.validationDiagnostic || {};
+            const metrics = Object.fromEntries(
+              ["textLength", "beginMarkers", "endMarkers"]
+                .filter(
+                  (key) => Number.isSafeInteger(info[key]) && info[key] >= 0,
+                )
+                .map((key) => [key, info[key]]),
+            );
+            const code = /^[A-Za-z][A-Za-z0-9_:-]{0,99}$/.test(
+              String(error?.message || ""),
+            )
+              ? error.message
+              : "FULL_AUDIO_RESPONSE_INVALID";
+            const operation = ["transport_invalid"].includes(info.operation)
+              ? info.operation
+              : "response_invalid";
+            const apiDiagnostic = {
+              phase: "transcript_validation",
+              eventState: "failed",
+              operation,
+              code,
+              ...metrics,
+            };
+            console.warn(
+              "[MotionFullAudioValidation]",
+              JSON.stringify({
+                runId: attempt.runId,
+                attemptId: attempt.operationId,
+                ...apiDiagnostic,
+              }),
+            );
+            try {
+              onStage({
+                frameId: attempt.frameId,
+                stage: "transcript",
+                apiDiagnostic,
+              });
+            } catch (_) {}
+            throw error;
+          }
+          return fullAudio.members.map((member) => {
+            const result = data.frames.find(
+              (f) => f.frame_id === member.frameId,
+            );
+            return {
+              frameId: member.frameId,
+              hasSpeech: result.has_speech,
+              transcript: result.transcript,
+              detectedLanguage: result.detected_language,
+              translatedText: result.translated_text || null,
+              ...(result.speech_timeline != null && {
+                speechTimeline: result.speech_timeline,
+              }),
+            };
+          });
+        }
+        let transcript = MotionTranscriptContract.validateSingleResponse(
+          response,
+          manifest,
+          {
+            frameId: attempt.frameId,
+            translate,
+            preserveOriginalSpeech: preserveOriginal,
+            requireTimeline: String(
+              profile.prompts?.[
+                translate ? "transcribe_translate" : "transcribe"
+              ] || "",
+            ).includes("MOTION_SPEECH_TIMELINE_V1"),
+          },
+        );
+        if (
+          !translate &&
+          transcript.hasSpeech &&
+          frame.transcript?.translated_text
+        ) {
+          transcript.translatedText = frame.transcript.translated_text;
+          transcript.speechTimeline = null;
+        }
+        if (preserveOriginal)
+          transcript = {
+            ...transcript,
+            hasSpeech: true,
+            transcript: frame.transcript.text || "",
+            detectedLanguage: frame.transcript.detected_language || "",
+            speechTimeline:
+              transcript.transcript.trim() ===
+              (frame.transcript.text || "").trim()
+                ? transcript.speechTimeline
+                : null,
+          };
+        return transcript;
+      },
+      cleanup: async (worker) => {
+        const requestedAt = Date.now();
+        const report = (eventState, code = null) => {
+          try {
+            onStage({
+              frameId: attempt.frameId,
+              stage: "transcript",
+              apiDiagnostic: {
+                phase: "transcript_cleanup",
+                operation: provider,
+                eventState,
+                elapsedMs: Date.now() - requestedAt,
+                ...(code && {
+                  code: /^[A-Za-z][A-Za-z0-9_:-]{0,99}$/.test(String(code))
+                    ? code
+                    : "MOTION_CLEANUP_UNCONFIRMED",
+                }),
+              },
+            });
+          } catch (_) {}
+        };
+        if (!deleteAfter) {
+          report("skipped", "CLEANUP_DISABLED");
+          return;
+        }
+        if (
+          !rawResponse?.cleanupEligible ||
+          !rawResponse.cleanupConversationUrl
+        ) {
+          report("skipped", "CLEANUP_RECEIPT_MISSING");
+          return;
+        }
+        report("requested");
+        try {
+          const result =
+            provider === "chatgpt"
+              ? await chrome.runtime.sendMessage({
+                  action: "chatgpt:deleteConversationWithReloadFallback",
+                  tabId: worker.tabId,
+                  expectedConversationUrl: rawResponse.cleanupConversationUrl,
+                  focusWindow: false,
+                  skipReload: true,
+                  requestedAt,
+                })
+              : await chrome.tabs.sendMessage(worker.tabId, {
+                  action: "gemini:deleteCurrentConversation",
+                  expectedConversationUrl: rawResponse.cleanupConversationUrl,
+                  cleanupDeadline: requestedAt + cleanupTimeoutMs,
+                  requestedAt,
+                });
+          report(
+            result?.success === true ? "verified" : "unconfirmed",
+            result?.error,
+          );
+          return (
+            result || { success: false, error: "MOTION_CLEANUP_UNCONFIRMED" }
+          );
+        } catch (error) {
+          report("failed", error?.code || error?.message);
+          throw error;
+        }
+      },
+      close: async (worker) => {
+        const retries =
+          run.retryEnabled === true ? run.transcriptMaxRetries : 0;
+        let result;
+        for (let attemptIndex = 0; attemptIndex <= retries; attemptIndex++) {
+          try {
+            await assertScope();
+            result = await chrome.runtime.sendMessage({
+              action: "motionWorker:close",
+              ...ownerMessage(worker),
+            });
+            if (result?.success === true) return result;
+          } catch (error) {
+            result = {
+              success: false,
+              error:
+                error?.code || error?.message || "MOTION_WORKER_CLOSE_FAILED",
+            };
+          }
+          if (attemptIndex < retries) {
+            await waitBeforeRetry({
+              frameId: attempt.frameId,
+              retryCount: attemptIndex + 1,
+              stage: "worker_close",
+            });
+          }
+        }
+        return (
+          result || { success: false, error: "MOTION_WORKER_CLOSE_FAILED" }
+        );
+      },
+    });
+    if (
+      fullAudio &&
+      fullDispatchStarted &&
+      rawResponse?.success !== true &&
+      rawResponse?.resultConfirmed !== true
+    ) {
+      outcome.terminal = true;
+      outcome.error = "MOTION_FULL_AUDIO_OUTCOME_UNKNOWN";
+      if (failureDiagnostic) outcome.failureDiagnostic = failureDiagnostic;
+    }
+    if (outcome.state === "persistence_error") {
+      outcome.terminal = true;
+      if (typeof outcome.retryPersistence === "function") {
+        const retry = outcome.retryPersistence;
+        Object.defineProperty(outcome, "retryPersistence", {
+          enumerable: false,
+          configurable: true,
+          value: async () => {
+            const recovered = await retry();
+            if (recovered?.state === "ready") {
+              try {
+                await settle("success");
+                recovered.synced = true;
+                recovered.settlementPending = false;
+              } catch (error) {
+                recovered.settlementPending = true;
+                recovered.settlementError =
+                  error?.message || "MOTION_SETTLEMENT_UNCONFIRMED";
+              }
+            }
+            return recovered;
+          },
+        });
+      }
+    }
+    if (outcome.state === "ready" || outcome.state === "failed") {
+      const current = await journal.get(attempt);
+      const failures = Object.values(current?.failedOperations || {}).filter(
+        (item) =>
+          item.frameId === attempt.frameId &&
+          item.frameRunId === attempt.frameRunId &&
+          item.inputRevision === attempt.inputRevision &&
+          !item.resolved,
+      ).length;
+      const terminal =
+        outcome.state === "ready" ||
+        (outcome.state === "failed" &&
+          (!run.retryEnabled || failures > run.transcriptMaxRetries));
+      if (terminal) {
+        if (outcome.state === "failed") outcome.terminal = true;
+        try {
+          await settle(outcome.state === "ready" ? "success" : "failed");
+          outcome.synced = true;
+          outcome.settlementPending = false;
+        } catch (error) {
+          outcome.settlementPending = true;
+          outcome.settlementError =
+            error?.message || "MOTION_SETTLEMENT_UNCONFIRMED";
+        }
+      }
+    }
+    return outcome;
+  }
+}
+globalThis.MotionTranscriptWorkerDriver = MotionTranscriptWorkerDriver;

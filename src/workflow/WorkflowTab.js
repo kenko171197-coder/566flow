@@ -1,10 +1,474 @@
-class WorkflowTab{static async showMyWorkflows(){const parentTab=document.querySelector('.tobyflow-tab[data-tab="tab-workflow"]');const pane=document.getElementById("tab-workflow");if(!parentTab||!pane)return false;if(!parentTab.classList.contains("active")||!pane.__tobyflowTab)parentTab.click();for(let attempt=0;attempt<100;attempt++){const tab=pane.__tobyflowTab;if(tab?.isInitialized){if(tab._currentSubtab!=="workflows")tab._switchSubtab("workflows");else{try{await tab.workflowList?.loadWorkflows?.()}catch(error){console.warn("[WorkflowTab] Cannot refresh cloned workflow list:",error?.message||error)}}return tab.workflowList}await new Promise(resolve=>setTimeout(resolve,100))}console.warn("[WorkflowTab] Workflow tab did not finish initializing after clone");return false}static async openClonedWorkflow(workflow){if(!workflow?.wf_id)return;let list=null;try{list=await this.showMyWorkflows()}catch(error){console.warn("[WorkflowTab] clone list refresh failed:",error?.message)}const failed=()=>window.showNotification?.(window.I18n?.t("workflow.openWebFailed")||"Could not open web editor","error");try{if(list?._editWorkflow){await list._editWorkflow(workflow.wf_id);return}if(await window.SystemConfig?.getBoolReady?.("workflow_web_mode")){chrome.runtime.sendMessage({action:"openWebSpaces",wfId:workflow.wf_id},response=>{if(chrome.runtime.lastError||!response?.ok)failed()});return}window.eventBus?.emit("workflow:open_editor",{mode:"edit",workflow})}catch(error){console.warn("[WorkflowTab] cloned workflow editor open failed:",error?.message);failed()}}constructor(container){this.container=container;this.workflowList=null;this.workflowTemplateList=null;this.isInitialized=false;this._currentSubtab="templates"}async init(){if(this.isInitialized)return;console.log("[WorkflowTab] Initializing...");if(window.storageManager&&!window.storageManager.storage){await window.storageManager.init()}this._renderSubtabs();const workflowContent=this.container.querySelector('[data-content="workflows"]');const listSection=workflowContent||this.container.querySelector("#workflowListSection")||this.container;this.workflowList=new WorkflowList(listSection);this.workflowList._runWorkflowAndWait=(workflow,options)=>this.runWorkflow(workflow,void 0,options);this._bindSubtabEvents();if(window.eventBus){window.eventBus.on("workflow:open_editor",data=>{this.openEditor(data.mode,data.workflow)});window.eventBus.on("workflow:run",data=>{this.runWorkflow(data.workflow,data.manualSubmitMode)});window.eventBus.on("execution:started",()=>{this.workflowList?._debouncedLoadWorkflows?.()||this.workflowList?.loadWorkflows()});window.eventBus.on("execution:progress",()=>{this.workflowList?._debouncedLoadWorkflows?.()||this.workflowList?.loadWorkflows()});window.eventBus.on("execution:completed",async data=>{this.workflowList?._debouncedLoadWorkflows?.()||this.workflowList?.loadWorkflows();if(!data?.error&&!data?.stopped&&window.featureGate){try{await window.featureGate.recordPendingWorkflowRun()}catch(error){console.warn("[WorkflowTab] Post-run usage refresh failed:",error?.message||error)}}});window.eventBus.on("workflow:reset",()=>{this.workflowList?._debouncedLoadWorkflows?.()||this.workflowList?.loadWorkflows()});window.eventBus.on("featuregate:refreshed",()=>{this._applySubtabFeatureGate(this._currentSubtab)});window.eventBus.on("node:completed",()=>{this.workflowList?._debouncedLoadWorkflows?.()||this.workflowList?.loadWorkflows()});window.eventBus.on("auth:login",()=>this._updateMyTemplatesSubtab(true));window.eventBus.on("auth:restored",()=>this._updateMyTemplatesSubtab(true));window.eventBus.on("auth:logout",()=>this._updateMyTemplatesSubtab(true));window.eventBus.on("affiliate:updated",()=>this._updateMyTemplatesSubtab(true));window.eventBus.on("sse:entitlements_changed",()=>this._updateMyTemplatesSubtab(true));window.eventBus.on("workflow:subtab_changed",data=>{const subtab=data?.subtab;if(subtab&&subtab!==this._currentSubtab){this._switchSubtab(subtab)}});window.eventBus.on("workflow:imported",()=>{this.workflowList?.loadWorkflows()});window.eventBus.on("sse:workflows_updated",data=>{this.workflowList?._debouncedLoadWorkflows?.()||this.workflowList?.loadWorkflows?.();if(data?.toast)window.showNotification?.(data.toast,"info",5e3)});try{chrome.runtime.onMessage.addListener(msg=>{if(msg?.action==="creatorTemplateUpdated"&&this._currentSubtab==="mytemplates"){this._loadMyTemplates()}})}catch(_){}}try{const hasWorkflows=await this._checkUserHasWorkflows();if(hasWorkflows){console.log("[WorkflowTab] User has workflows, auto-switching to workflows subtab");this._switchSubtab("workflows")}else{this._loadWorkflowTemplateList()}}catch(e){console.warn("[WorkflowTab] Error checking workflows, defaulting to templates:",e?.message);this._loadWorkflowTemplateList()}this.isInitialized=true;console.log("[WorkflowTab] Initialized")}async _checkUserHasWorkflows(){try{if(window.storageManager?.getWorkflows){const result=await window.storageManager.getWorkflows({limit:1});const workflows=result?.data||result||[];return workflows.length>0}return false}catch(e){console.warn("[WorkflowTab] _checkUserHasWorkflows error:",e?.message);return false}}async openEditor(mode="create",workflow=null){if(this._openEditorPromise)return this._openEditorPromise;const opening=this._openEditorOnce(mode,workflow);this._openEditorPromise=opening;try{return await opening}finally{if(this._openEditorPromise===opening)this._openEditorPromise=null}}async _openEditorOnce(mode,workflow){console.log("[WorkflowTab] openEditor called, mode:",mode,"wfId:",workflow?.wf_id);try{const ready=window.ProjectHelper?.isFlowProjectOpen?await window.ProjectHelper.isFlowProjectOpen():await window.ProjectHelper?.isFlowProjectReady?.();if(!ready){console.warn("[WorkflowTab] openEditor b\u1ECB ch\u1EB7n \u2014 kh\xF4ng c\xF3 Flow project h\u1EE3p l\u1EC7 (homepage / project l\u1ED7i-\u0111\xE3 xo\xE1)");if(typeof window.showNotification==="function"){window.showNotification(window.I18n?.t("workflow.projectNotReady")||"Flow project not ready (no project open or the project was deleted). Open/select a project and try again.","warning")}if(typeof window._showProjectSelectOverlay==="function"){window._showProjectSelectOverlay(true)}else{window.ProjectHelper?.warnNoProjectForUpload?.(null)}return}}catch(e){console.warn("[WorkflowTab] openEditor readiness check failed, fail-open:",e?.message)}return await new Promise(resolve=>{try{chrome.runtime.sendMessage({action:"openWorkflowEditor",data:{mode,workflow,projectId:window._currentProjectId||null,projectName:window._currentProjectName||null}},response=>{const runtimeError=chrome.runtime.lastError;console.log("[WorkflowTab] openWorkflowEditor response:",response,runtimeError?.message||"");if(response?.ok===false&&response.error==="PROJECT_NOT_READY"){console.warn("[WorkflowTab] editor b\u1ECB ch\u1EB7n \u1EDF background re-gate \u2014 Flow project ch\u01B0a s\u1EB5n s\xE0ng");if(typeof window.showNotification==="function"){window.showNotification(window.I18n?.t("workflow.projectNotReady")||"Flow project not ready (no project open or the project was deleted). Open/select a project and try again.","warning")}if(typeof window._showProjectSelectOverlay==="function")window._showProjectSelectOverlay(true)}resolve(response?.ok===true&&!runtimeError)})}catch(error){console.warn("[WorkflowTab] openWorkflowEditor send failed:",error?.message);resolve(false)}})}async runWorkflow(workflow,manualSubmitMode=void 0,options={}){const cancelled=()=>options.shouldStop?.()===true;if(!workflow?.wf_id||cancelled())return false;if(window.featureGate){const quota=await window.featureGate.checkQuotaAsync("workflows_run_max");if(cancelled())return false;if(!quota.allowed){const isLoggedIn=window.authManager?.isLoggedIn();if(isLoggedIn){const limitText=quota.limit==="unlimited"?window.I18n?.t("common.unlimited")||"Unlimited":`${quota.limit} ${window.I18n?.t("workflow.runsPerDay")||"runs/day"}`;const shouldUpgrade=await window.customDialog?.confirm(window.I18n?.t("workflow.runQuotaExhausted",{limitText,used:quota.used})||`Workflow runs exhausted today.
+class WorkflowTab {
+  static async showMyWorkflows() {
+    const parentTab = document.querySelector(
+      '.tobyflow-tab[data-tab="tab-workflow"]',
+    );
+    const pane = document.getElementById("tab-workflow");
+    if (!parentTab || !pane) return false;
+    if (!parentTab.classList.contains("active") || !pane.__tobyflowTab)
+      parentTab.click();
+    for (let attempt = 0; attempt < 100; attempt++) {
+      const tab = pane.__tobyflowTab;
+      if (tab?.isInitialized) {
+        if (tab._currentSubtab !== "workflows") tab._switchSubtab("workflows");
+        else {
+          try {
+            await tab.workflowList?.loadWorkflows?.();
+          } catch (error) {
+            console.warn(
+              "[WorkflowTab] Cannot refresh cloned workflow list:",
+              error?.message || error,
+            );
+          }
+        }
+        return tab.workflowList;
+      }
+      await new Promise((resolve) => setTimeout(resolve, 100));
+    }
+    console.warn(
+      "[WorkflowTab] Workflow tab did not finish initializing after clone",
+    );
+    return false;
+  }
+  static async openClonedWorkflow(workflow) {
+    if (!workflow?.wf_id) return;
+    let list = null;
+    try {
+      list = await this.showMyWorkflows();
+    } catch (error) {
+      console.warn("[WorkflowTab] clone list refresh failed:", error?.message);
+    }
+    const failed = () =>
+      window.showNotification?.(
+        window.I18n?.t("workflow.openWebFailed") || "Could not open web editor",
+        "error",
+      );
+    try {
+      if (list?._editWorkflow) {
+        await list._editWorkflow(workflow.wf_id);
+        return;
+      }
+      if (await window.SystemConfig?.getBoolReady?.("workflow_web_mode")) {
+        chrome.runtime.sendMessage(
+          { action: "openWebSpaces", wfId: workflow.wf_id },
+          (response) => {
+            if (chrome.runtime.lastError || !response?.ok) failed();
+          },
+        );
+        return;
+      }
+      window.eventBus?.emit("workflow:open_editor", { mode: "edit", workflow });
+    } catch (error) {
+      console.warn(
+        "[WorkflowTab] cloned workflow editor open failed:",
+        error?.message,
+      );
+      failed();
+    }
+  }
+  constructor(container) {
+    this.container = container;
+    this.workflowList = null;
+    this.workflowTemplateList = null;
+    this.isInitialized = false;
+    this._currentSubtab = "templates";
+  }
+  async init() {
+    if (this.isInitialized) return;
+    console.log("[WorkflowTab] Initializing...");
+    if (window.storageManager && !window.storageManager.storage) {
+      await window.storageManager.init();
+    }
+    this._renderSubtabs();
+    const workflowContent = this.container.querySelector(
+      '[data-content="workflows"]',
+    );
+    const listSection =
+      workflowContent ||
+      this.container.querySelector("#workflowListSection") ||
+      this.container;
+    this.workflowList = new WorkflowList(listSection);
+    this.workflowList._runWorkflowAndWait = (workflow, options) =>
+      this.runWorkflow(workflow, void 0, options);
+    this._bindSubtabEvents();
+    if (window.eventBus) {
+      window.eventBus.on("workflow:open_editor", (data) => {
+        this.openEditor(data.mode, data.workflow);
+      });
+      window.eventBus.on("workflow:run", (data) => {
+        this.runWorkflow(data.workflow, data.manualSubmitMode);
+      });
+      window.eventBus.on("execution:started", () => {
+        this.workflowList?._debouncedLoadWorkflows?.() ||
+          this.workflowList?.loadWorkflows();
+      });
+      window.eventBus.on("execution:progress", () => {
+        this.workflowList?._debouncedLoadWorkflows?.() ||
+          this.workflowList?.loadWorkflows();
+      });
+      window.eventBus.on("execution:completed", async (data) => {
+        this.workflowList?._debouncedLoadWorkflows?.() ||
+          this.workflowList?.loadWorkflows();
+        if (!data?.error && !data?.stopped && window.featureGate) {
+          try {
+            await window.featureGate.recordPendingWorkflowRun();
+          } catch (error) {
+            console.warn(
+              "[WorkflowTab] Post-run usage refresh failed:",
+              error?.message || error,
+            );
+          }
+        }
+      });
+      window.eventBus.on("workflow:reset", () => {
+        this.workflowList?._debouncedLoadWorkflows?.() ||
+          this.workflowList?.loadWorkflows();
+      });
+      window.eventBus.on("featuregate:refreshed", () => {
+        this._applySubtabFeatureGate(this._currentSubtab);
+      });
+      window.eventBus.on("node:completed", () => {
+        this.workflowList?._debouncedLoadWorkflows?.() ||
+          this.workflowList?.loadWorkflows();
+      });
+      window.eventBus.on("auth:login", () =>
+        this._updateMyTemplatesSubtab(true),
+      );
+      window.eventBus.on("auth:restored", () =>
+        this._updateMyTemplatesSubtab(true),
+      );
+      window.eventBus.on("auth:logout", () =>
+        this._updateMyTemplatesSubtab(true),
+      );
+      window.eventBus.on("affiliate:updated", () =>
+        this._updateMyTemplatesSubtab(true),
+      );
+      window.eventBus.on("sse:entitlements_changed", () =>
+        this._updateMyTemplatesSubtab(true),
+      );
+      window.eventBus.on("workflow:subtab_changed", (data) => {
+        const subtab = data?.subtab;
+        if (subtab && subtab !== this._currentSubtab) {
+          this._switchSubtab(subtab);
+        }
+      });
+      window.eventBus.on("workflow:imported", () => {
+        this.workflowList?.loadWorkflows();
+      });
+      window.eventBus.on("sse:workflows_updated", (data) => {
+        this.workflowList?._debouncedLoadWorkflows?.() ||
+          this.workflowList?.loadWorkflows?.();
+        if (data?.toast) window.showNotification?.(data.toast, "info", 5e3);
+      });
+      try {
+        chrome.runtime.onMessage.addListener((msg) => {
+          if (
+            msg?.action === "creatorTemplateUpdated" &&
+            this._currentSubtab === "mytemplates"
+          ) {
+            this._loadMyTemplates();
+          }
+        });
+      } catch (_) {}
+    }
+    try {
+      const hasWorkflows = await this._checkUserHasWorkflows();
+      if (hasWorkflows) {
+        console.log(
+          "[WorkflowTab] User has workflows, auto-switching to workflows subtab",
+        );
+        this._switchSubtab("workflows");
+      } else {
+        this._loadWorkflowTemplateList();
+      }
+    } catch (e) {
+      console.warn(
+        "[WorkflowTab] Error checking workflows, defaulting to templates:",
+        e?.message,
+      );
+      this._loadWorkflowTemplateList();
+    }
+    this.isInitialized = true;
+    console.log("[WorkflowTab] Initialized");
+  }
+  async _checkUserHasWorkflows() {
+    try {
+      if (window.storageManager?.getWorkflows) {
+        const result = await window.storageManager.getWorkflows({ limit: 1 });
+        const workflows = result?.data || result || [];
+        return workflows.length > 0;
+      }
+      return false;
+    } catch (e) {
+      console.warn("[WorkflowTab] _checkUserHasWorkflows error:", e?.message);
+      return false;
+    }
+  }
+  async openEditor(mode = "create", workflow = null) {
+    if (this._openEditorPromise) return this._openEditorPromise;
+    const opening = this._openEditorOnce(mode, workflow);
+    this._openEditorPromise = opening;
+    try {
+      return await opening;
+    } finally {
+      if (this._openEditorPromise === opening) this._openEditorPromise = null;
+    }
+  }
+  async _openEditorOnce(mode, workflow) {
+    console.log(
+      "[WorkflowTab] openEditor called, mode:",
+      mode,
+      "wfId:",
+      workflow?.wf_id,
+    );
+    try {
+      const ready = window.ProjectHelper?.isFlowProjectOpen
+        ? await window.ProjectHelper.isFlowProjectOpen()
+        : await window.ProjectHelper?.isFlowProjectReady?.();
+      if (!ready) {
+        console.warn(
+          "[WorkflowTab] openEditor b\u1ECB ch\u1EB7n \u2014 kh\xF4ng c\xF3 Flow project h\u1EE3p l\u1EC7 (homepage / project l\u1ED7i-\u0111\xE3 xo\xE1)",
+        );
+        if (typeof window.showNotification === "function") {
+          window.showNotification(
+            window.I18n?.t("workflow.projectNotReady") ||
+              "Flow project not ready (no project open or the project was deleted). Open/select a project and try again.",
+            "warning",
+          );
+        }
+        if (typeof window._showProjectSelectOverlay === "function") {
+          window._showProjectSelectOverlay(true);
+        } else {
+          window.ProjectHelper?.warnNoProjectForUpload?.(null);
+        }
+        return;
+      }
+    } catch (e) {
+      console.warn(
+        "[WorkflowTab] openEditor readiness check failed, fail-open:",
+        e?.message,
+      );
+    }
+    return await new Promise((resolve) => {
+      try {
+        chrome.runtime.sendMessage(
+          {
+            action: "openWorkflowEditor",
+            data: {
+              mode,
+              workflow,
+              projectId: window._currentProjectId || null,
+              projectName: window._currentProjectName || null,
+            },
+          },
+          (response) => {
+            const runtimeError = chrome.runtime.lastError;
+            console.log(
+              "[WorkflowTab] openWorkflowEditor response:",
+              response,
+              runtimeError?.message || "",
+            );
+            if (
+              response?.ok === false &&
+              response.error === "PROJECT_NOT_READY"
+            ) {
+              console.warn(
+                "[WorkflowTab] editor b\u1ECB ch\u1EB7n \u1EDF background re-gate \u2014 Flow project ch\u01B0a s\u1EB5n s\xE0ng",
+              );
+              if (typeof window.showNotification === "function") {
+                window.showNotification(
+                  window.I18n?.t("workflow.projectNotReady") ||
+                    "Flow project not ready (no project open or the project was deleted). Open/select a project and try again.",
+                  "warning",
+                );
+              }
+              if (typeof window._showProjectSelectOverlay === "function")
+                window._showProjectSelectOverlay(true);
+            }
+            resolve(response?.ok === true && !runtimeError);
+          },
+        );
+      } catch (error) {
+        console.warn(
+          "[WorkflowTab] openWorkflowEditor send failed:",
+          error?.message,
+        );
+        resolve(false);
+      }
+    });
+  }
+  async runWorkflow(workflow, manualSubmitMode = void 0, options = {}) {
+    const cancelled = () => options.shouldStop?.() === true;
+    if (!workflow?.wf_id || cancelled()) return false;
+    if (window.featureGate) {
+      const quota =
+        await window.featureGate.checkQuotaAsync("workflows_run_max");
+      if (cancelled()) return false;
+      if (!quota.allowed) {
+        const isLoggedIn = window.authManager?.isLoggedIn();
+        if (isLoggedIn) {
+          const limitText =
+            quota.limit === "unlimited"
+              ? window.I18n?.t("common.unlimited") || "Unlimited"
+              : `${quota.limit} ${window.I18n?.t("workflow.runsPerDay") || "runs/day"}`;
+          const shouldUpgrade = await window.customDialog?.confirm(
+            window.I18n?.t("workflow.runQuotaExhausted", {
+              limitText,
+              used: quota.used,
+            }) ||
+              `Workflow runs exhausted today.
 
 Limit: ${limitText}
 Used: ${quota.used} runs
 
-Upgrade plan to increase limit.`,{title:window.I18n?.t("workflow.runQuotaTitle")||"Workflow runs exhausted",confirmText:window.I18n?.t("common.upgrade")||"Upgrade",cancelText:window.I18n?.t("common.later")||"Later"});if(shouldUpgrade){if(typeof window.openUpgradeModal==="function"){window.openUpgradeModal()}}}else{window.featureGate.showLoginPrompt(window.I18n?.t("workflow.trialRunExhausted")||"You have used all workflow runs in trial.")}return false}const quotaCheck=window.featureGate.checkGlobalQuotaWarning("Workflow");if(quotaCheck.exhausted){return false}}if(window.workflowExecutor?.isRunning){window.customDialog.alert(window.I18n?.t("workflow.alreadyRunning")||"Another workflow is currently running. Please wait or stop it first.",{type:"warning"});return false}try{const running=await window.WorkflowExecutor?.getCrossContextRunning?.();if(cancelled())return false;if(running?.wf_id){const runningName=running.wf_name||"Workflow";window.customDialog.alert(window.I18n?.t("workflow.anotherRunningCrossContext",{name:runningName})||`"${runningName}" \u0111ang ch\u1EA1y \u1EDF c\u1EEDa s\u1ED5 kh\xE1c. Vui l\xF2ng \u0111\u1EE3i ho\u1EB7c d\u1EEBng tr\u01B0\u1EDBc.`,{type:"warning"});return false}}catch(e){console.warn("[WorkflowTab] Cross-context running check failed:",e.message)}const fullWorkflow=await window.storageManager?.getWorkflow(workflow.wf_id);if(cancelled())return false;const hasCompleted=fullWorkflow?.nodes?.some(n=>n.status==="completed");if(hasCompleted){const choice=await window.customDialog.confirmResumeOrRerun(window.I18n?.t("workflow.resumeOrRerun",{name:workflow.wf_name})||`Workflow "${workflow.wf_name}" has completed nodes.
-Click "Resume" to continue from unfinished nodes, or "Run again" to reset.`,{title:window.I18n?.t("workflow.resumeOrRerunTitle")||"Continue or re-run?"});if(choice===null||cancelled())return false;if(choice==="rerun"){if(options.beforeDispatch){await options.beforeDispatch(fullWorkflow||workflow);if(cancelled())return false}await window.workflowExecutor.reset(workflow.wf_id);if(cancelled())return false}}let _msMode=manualSubmitMode===true;if(this.workflowList?._preflightCheck){const preflight=await this.workflowList._preflightCheck(fullWorkflow||workflow);if(!preflight||!preflight.ready||cancelled()){console.log("[WorkflowTab] runWorkflow aborted - preflight failed/cancelled");return false}_msMode=preflight.manualSubmitMode===true}console.log("[WorkflowTab] Running workflow:",workflow.wf_id);if(cancelled())return false;if(options.beforeDispatch){await options.beforeDispatch(fullWorkflow||workflow);if(cancelled())return false}if(window.featureGate){window.featureGate.setPendingWorkflowRun()}try{const result=await window.workflowExecutor.execute(workflow.wf_id,{manualSubmitMode:_msMode});if(result===false){console.warn("[WorkflowTab] Workflow execution aborted before start");const msg=window.I18n?.t("workflow.executionAborted")||"Could not start the workflow. Please check the log for details.";if(window.showNotification){window.showNotification(msg,"error")}}return result!==false}catch(error){console.error("[WorkflowTab] Workflow execution failed:",error);window.customDialog.alert((window.I18n?.t("workflow.executionError")||"Workflow execution error")+": "+error.message,{type:"error"});return false}}stopWorkflow(){if(window.workflowExecutor?.isRunning){window.workflowExecutor.stop(true,false,"WORKFLOW_TAB_STOP")}}destroy(){this.isInitialized=false}_renderSubtabs(){const t=key=>window.I18n?.t(key)||key;if(this.container.querySelector(".tobyflow-workflow-subtabs")){return}const existingSection=this.container.querySelector("#workflowListSection");const subtabsHtml=`
+Upgrade plan to increase limit.`,
+            {
+              title:
+                window.I18n?.t("workflow.runQuotaTitle") ||
+                "Workflow runs exhausted",
+              confirmText: window.I18n?.t("common.upgrade") || "Upgrade",
+              cancelText: window.I18n?.t("common.later") || "Later",
+            },
+          );
+          if (shouldUpgrade) {
+            if (typeof window.openUpgradeModal === "function") {
+              window.openUpgradeModal();
+            }
+          }
+        } else {
+          window.featureGate.showLoginPrompt(
+            window.I18n?.t("workflow.trialRunExhausted") ||
+              "You have used all workflow runs in trial.",
+          );
+        }
+        return false;
+      }
+      const quotaCheck = window.featureGate.checkGlobalQuotaWarning("Workflow");
+      if (quotaCheck.exhausted) {
+        return false;
+      }
+    }
+    if (window.workflowExecutor?.isRunning) {
+      window.customDialog.alert(
+        window.I18n?.t("workflow.alreadyRunning") ||
+          "Another workflow is currently running. Please wait or stop it first.",
+        { type: "warning" },
+      );
+      return false;
+    }
+    try {
+      const running = await window.WorkflowExecutor?.getCrossContextRunning?.();
+      if (cancelled()) return false;
+      if (running?.wf_id) {
+        const runningName = running.wf_name || "Workflow";
+        window.customDialog.alert(
+          window.I18n?.t("workflow.anotherRunningCrossContext", {
+            name: runningName,
+          }) ||
+            `"${runningName}" \u0111ang ch\u1EA1y \u1EDF c\u1EEDa s\u1ED5 kh\xE1c. Vui l\xF2ng \u0111\u1EE3i ho\u1EB7c d\u1EEBng tr\u01B0\u1EDBc.`,
+          { type: "warning" },
+        );
+        return false;
+      }
+    } catch (e) {
+      console.warn(
+        "[WorkflowTab] Cross-context running check failed:",
+        e.message,
+      );
+    }
+    const fullWorkflow = await window.storageManager?.getWorkflow(
+      workflow.wf_id,
+    );
+    if (cancelled()) return false;
+    const hasCompleted = fullWorkflow?.nodes?.some(
+      (n) => n.status === "completed",
+    );
+    if (hasCompleted) {
+      const choice = await window.customDialog.confirmResumeOrRerun(
+        window.I18n?.t("workflow.resumeOrRerun", { name: workflow.wf_name }) ||
+          `Workflow "${workflow.wf_name}" has completed nodes.
+Click "Resume" to continue from unfinished nodes, or "Run again" to reset.`,
+        {
+          title:
+            window.I18n?.t("workflow.resumeOrRerunTitle") ||
+            "Continue or re-run?",
+        },
+      );
+      if (choice === null || cancelled()) return false;
+      if (choice === "rerun") {
+        if (options.beforeDispatch) {
+          await options.beforeDispatch(fullWorkflow || workflow);
+          if (cancelled()) return false;
+        }
+        await window.workflowExecutor.reset(workflow.wf_id);
+        if (cancelled()) return false;
+      }
+    }
+    let _msMode = manualSubmitMode === true;
+    if (this.workflowList?._preflightCheck) {
+      const preflight = await this.workflowList._preflightCheck(
+        fullWorkflow || workflow,
+      );
+      if (!preflight || !preflight.ready || cancelled()) {
+        console.log(
+          "[WorkflowTab] runWorkflow aborted - preflight failed/cancelled",
+        );
+        return false;
+      }
+      _msMode = preflight.manualSubmitMode === true;
+    }
+    console.log("[WorkflowTab] Running workflow:", workflow.wf_id);
+    if (cancelled()) return false;
+    if (options.beforeDispatch) {
+      await options.beforeDispatch(fullWorkflow || workflow);
+      if (cancelled()) return false;
+    }
+    if (window.featureGate) {
+      window.featureGate.setPendingWorkflowRun();
+    }
+    try {
+      const result = await window.workflowExecutor.execute(workflow.wf_id, {
+        manualSubmitMode: _msMode,
+      });
+      if (result === false) {
+        console.warn("[WorkflowTab] Workflow execution aborted before start");
+        const msg =
+          window.I18n?.t("workflow.executionAborted") ||
+          "Could not start the workflow. Please check the log for details.";
+        if (window.showNotification) {
+          window.showNotification(msg, "error");
+        }
+      }
+      return result !== false;
+    } catch (error) {
+      console.error("[WorkflowTab] Workflow execution failed:", error);
+      window.customDialog.alert(
+        (window.I18n?.t("workflow.executionError") ||
+          "Workflow execution error") +
+          ": " +
+          error.message,
+        { type: "error" },
+      );
+      return false;
+    }
+  }
+  stopWorkflow() {
+    if (window.workflowExecutor?.isRunning) {
+      window.workflowExecutor.stop(true, false, "WORKFLOW_TAB_STOP");
+    }
+  }
+  destroy() {
+    this.isInitialized = false;
+  }
+  _renderSubtabs() {
+    const t = (key) => window.I18n?.t(key) || key;
+    if (this.container.querySelector(".tobyflow-workflow-subtabs")) {
+      return;
+    }
+    const existingSection = this.container.querySelector(
+      "#workflowListSection",
+    );
+    const subtabsHtml = `
       <div class="tobyflow-workflow-subtabs">
         <button class="tobyflow-workflow-subtab active" data-subtab="templates">
           <svg width="18" height="18" viewBox="0 0 20 20" fill="none" xmlns="http://www.w3.org/2000/svg" aria-hidden="true"><path d="M15.392 12.3211C15.3975 12.2942 15.4359 12.2942 15.4414 12.3211C15.7266 13.7165 16.8171 14.807 18.2125 15.0922C18.2394 15.0977 18.2394 15.1361 18.2125 15.1416C16.8171 15.4268 15.7266 16.5173 15.4414 17.9127C15.4359 17.9396 15.3975 17.9396 15.392 17.9127C15.1068 16.5173 14.0163 15.4268 12.6209 15.1416C12.594 15.1361 12.594 15.0977 12.6209 15.0922C14.0163 14.807 15.1068 13.7165 15.392 12.3211Z" stroke="currentColor" stroke-opacity="0.8"></path><path d="M2.49994 7.91643V7.41643H1.99994V7.91643H2.49994ZM17.8333 10.8331C17.8333 11.1092 18.0571 11.3331 18.3333 11.3331C18.6094 11.3331 18.8333 11.1092 18.8333 10.8331H18.3333H17.8333ZM10.6249 17.9998C10.9011 17.9998 11.1249 17.7759 11.1249 17.4998C11.1249 17.2236 10.9011 16.9998 10.6249 16.9998V17.4998V17.9998ZM2.86326 15.6797L2.41775 15.9067L2.86326 15.6797ZM4.31998 17.1364L4.54697 16.6909V16.6909L4.31998 17.1364ZM17.4233 8.09808L17.6503 7.65258V7.65258L17.4233 8.09808ZM18.1516 8.82644L17.7061 9.05344V9.05344L18.1516 8.82644ZM13.4423 2.07005C13.5089 1.80207 13.3457 1.53081 13.0777 1.46418C12.8097 1.39755 12.5384 1.56078 12.4718 1.82876L12.957 1.94941L13.4423 2.07005ZM11.4816 5.8112C11.415 6.07919 11.5782 6.35045 11.8462 6.41708C12.1142 6.4837 12.3855 6.32048 12.4521 6.05249L11.9669 5.93185L11.4816 5.8112ZM8.51822 2.93829C8.58484 2.67031 8.42162 2.39905 8.15363 2.33242C7.88565 2.26579 7.61439 2.42902 7.54776 2.697L8.03299 2.81765L8.51822 2.93829ZM6.5576 6.67945C6.49097 6.94743 6.6542 7.21869 6.92218 7.28532C7.19016 7.35195 7.46142 7.18872 7.52805 6.92073L7.04282 6.80009L6.5576 6.67945ZM2.52901 7.59605L2.0366 7.68288L2.12343 8.17528L2.61583 8.08846L2.52901 7.59605ZM16.8908 5.06368L16.804 4.57128L16.8908 5.06368ZM15.0086 1.58772L15.0954 2.08012L15.0086 1.58772ZM5.57085 3.25184L5.48403 2.75944L5.57085 3.25184ZM3.43072 3.82244L3.16207 3.40075L3.43072 3.82244ZM2.33322 5.38982L2.82137 5.49804L2.33322 5.38982ZM2.49994 7.91643V8.41643H15.6666V7.91643V7.41643H2.49994V7.91643ZM2.49994 12.1664H2.99994V7.91643H2.49994H1.99994V12.1664H2.49994ZM18.3333 10.5831H17.8333V10.8331H18.3333H18.8333V10.5831H18.3333ZM10.6249 17.4998V16.9998H7.83328V17.4998V17.9998H10.6249V17.4998ZM2.49994 12.1664H1.99994C1.99994 13.0916 1.99956 13.8155 2.04702 14.3965C2.09496 14.9832 2.1942 15.468 2.41775 15.9067L2.86326 15.6797L3.30876 15.4527C3.169 15.1784 3.08659 14.84 3.0437 14.315C3.00033 13.7843 2.99994 13.1081 2.99994 12.1664H2.49994ZM7.83328 17.4998V16.9998C6.89161 16.9998 6.21542 16.9994 5.68467 16.956C5.15975 16.9131 4.82126 16.8307 4.54697 16.6909L4.31998 17.1364L4.09298 17.582C4.53173 17.8055 5.01647 17.9047 5.60323 17.9527C6.18416 18.0001 6.90811 17.9998 7.83328 17.9998V17.4998ZM2.86326 15.6797L2.41775 15.9067C2.78527 16.628 3.37169 17.2144 4.09298 17.582L4.31998 17.1364L4.54697 16.6909C4.01385 16.4193 3.5804 15.9859 3.30876 15.4527L2.86326 15.6797ZM15.6666 7.91643V8.41643C16.1416 8.41643 16.4677 8.41682 16.7206 8.43747C16.9676 8.45765 17.1002 8.49466 17.1963 8.54359L17.4233 8.09808L17.6503 7.65258C17.3898 7.51985 17.1108 7.46603 16.802 7.44079C16.499 7.41604 16.1251 7.41643 15.6666 7.41643V7.91643ZM18.3333 10.5831H18.8333C18.8333 10.1246 18.8337 9.75072 18.8089 9.44771C18.7837 9.13887 18.7299 8.85994 18.5971 8.59945L18.1516 8.82644L17.7061 9.05344C17.755 9.14946 17.7921 9.28215 17.8122 9.52915C17.8329 9.78198 17.8333 10.1081 17.8333 10.5831H18.3333ZM17.4233 8.09808L17.1963 8.54359C17.4158 8.65544 17.5943 8.83392 17.7061 9.05344L18.1516 8.82644L18.5971 8.59945C18.3894 8.19176 18.0579 7.86031 17.6503 7.65258L17.4233 8.09808ZM12.957 1.94941L12.4718 1.82876L11.4816 5.8112L11.9669 5.93185L12.4521 6.05249L13.4423 2.07005L12.957 1.94941ZM8.03299 2.81765L7.54776 2.697L6.5576 6.67945L7.04282 6.80009L7.52805 6.92073L8.51822 2.93829L8.03299 2.81765ZM5.57085 3.25184L5.65768 3.74425L15.0954 2.08012L15.0086 1.58772L14.9218 1.09531L5.48403 2.75944L5.57085 3.25184ZM16.8908 5.06368L16.804 4.57128L2.44218 7.10365L2.52901 7.59605L2.61583 8.08846L16.9776 5.55609L16.8908 5.06368ZM17.9047 3.61561L17.4123 3.70244C17.4843 4.11036 17.2119 4.49935 16.804 4.57128L16.8908 5.06368L16.9776 5.55609C17.9294 5.38826 18.565 4.4806 18.3971 3.52879L17.9047 3.61561ZM15.0086 1.58772L15.0954 2.08012C16.1832 1.88831 17.2205 2.61465 17.4123 3.70244L17.9047 3.61561L18.3971 3.52879C18.1094 1.89711 16.5535 0.807601 14.9218 1.09531L15.0086 1.58772ZM5.57085 3.25184L5.48403 2.75944C4.91719 2.85939 4.46735 2.93843 4.10774 3.02745C3.74375 3.11755 3.43665 3.22582 3.16207 3.40075L3.43072 3.82244L3.69937 4.24414C3.84418 4.15188 4.03357 4.07599 4.34802 3.99815C4.66683 3.91923 5.07736 3.84657 5.65768 3.74425L5.57085 3.25184ZM2.52901 7.59605L3.02141 7.50923C2.91908 6.92891 2.84695 6.51829 2.81207 6.19171C2.77767 5.86961 2.78421 5.66568 2.82137 5.49804L2.33322 5.38982L1.84508 5.2816C1.77461 5.59946 1.7779 5.92507 1.81773 6.29792C1.85707 6.66629 1.93665 7.11604 2.0366 7.68288L2.52901 7.59605ZM3.43072 3.82244L3.16207 3.40075C2.49102 3.82825 2.01729 4.50481 1.84508 5.2816L2.33322 5.38982L2.82137 5.49804C2.93618 4.98018 3.252 4.52914 3.69937 4.24414L3.43072 3.82244Z" fill="currentColor" fill-opacity="0.8"></path></svg>
@@ -17,7 +481,7 @@ Click "Resume" to continue from unfinished nodes, or "Run again" to reset.`,{tit
         </button>
         <button class="tobyflow-workflow-subtab" data-subtab="mytemplates" data-creator-only style="display: none;">
           <svg width="15" height="15" viewBox="0 0 18 18" fill="none" xmlns="http://www.w3.org/2000/svg"><path fill="currentColor" d="M13.5 6.188h-9c-1.813 0-2.812.999-2.812 2.812v5.25c0 1.814.999 2.813 2.812 2.813h9c1.813 0 2.813-1 2.813-2.813V9c0-1.814-1-2.812-2.813-2.812m1.688 8.062c0 1.183-.505 1.688-1.688 1.688h-9c-1.183 0-1.687-.505-1.687-1.688V9c0-1.183.504-1.687 1.687-1.687h9c1.183 0 1.688.504 1.688 1.687zM3.938 4.5c0-.31.251-.562.562-.562h9a.563.563 0 0 1 0 1.124h-9a.563.563 0 0 1-.562-.562m1.5-2.25c0-.31.252-.562.562-.562h6a.563.563 0 0 1 0 1.125H6a.563.563 0 0 1-.562-.563m5.792 8.336L8.869 9.141a1.27 1.27 0 0 0-1.93 1.08v2.809c0 .464.24.877.647 1.104a1.27 1.27 0 0 0 1.283-.025l2.36-1.444a1.21 1.21 0 0 0 .584-1.04 1.21 1.21 0 0 0-.583-1.039m-.588 1.118L8.28 13.15a.14.14 0 0 1-.146.003.14.14 0 0 1-.072-.123v-2.81c0-.067.04-.104.072-.123a.14.14 0 0 1 .072-.02q.033 0 .074.023l2.361 1.446h.001q.045.028.045.078a.09.09 0 0 1-.046.08"></path></svg>
-          <span>${t("workflow.subtabMyTemplates")||"My Templates"}</span>
+          <span>${t("workflow.subtabMyTemplates") || "My Templates"}</span>
         </button>
         <button class="tobyflow-workflow-subtab" data-subtab="shared">
           <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
@@ -41,7 +505,176 @@ Click "Resume" to continue from unfinished nodes, or "Run again" to reset.`,{tit
       <div class="tobyflow-workflow-content" data-content="mytemplates" style="display: none; flex-direction: column; flex: 1; min-height: 0; overflow: auto;">
         <!-- [Affiliate Creator Page] Template c\u1EE7a t\xF4i \u2014 render b\u1EDFi MyTemplatesList.renderInto() -->
       </div>
-    `;this.container.insertAdjacentHTML("afterbegin",subtabsHtml);window.ProviderTabScroll?.bind(this.container.querySelector(".tobyflow-workflow-subtabs"));this._updateMyTemplatesSubtab();if(existingSection){const workflowsContent=this.container.querySelector('[data-content="workflows"]');if(workflowsContent){workflowsContent.appendChild(existingSection)}}}_updateMyTemplatesSubtab(force=false){const btn=this.container?.querySelector('.tobyflow-workflow-subtab[data-subtab="mytemplates"]');if(!btn)return;const pane=this.container?.querySelector('[data-content="mytemplates"]');if(!window.authManager?.isLoggedIn?.()){btn.style.display="none";if(pane)pane.innerHTML="";if(this._currentSubtab==="mytemplates")this._switchSubtab("workflows");return}if(force)window.CreatorTemplatePublish?.invalidateEligible?.();window.CreatorTemplatePublish?.isEligible?.().then(ok=>{btn.style.display=ok?"":"none";if(ok){if(this._currentSubtab==="mytemplates")this._loadMyTemplates()}else{if(pane)pane.innerHTML="";if(this._currentSubtab==="mytemplates")this._switchSubtab("workflows")}}).catch(()=>{})}_bindSubtabEvents(){const subtabBtns=this.container.querySelectorAll(".tobyflow-workflow-subtab");subtabBtns.forEach(btn=>{btn.addEventListener("click",()=>{const subtab=btn.dataset.subtab;if(!subtab)return;if(subtab===this._currentSubtab){this._refreshCurrentSubtab(subtab)}else{this._switchSubtab(subtab)}})})}_refreshCurrentSubtab(subtab){console.log("[WorkflowTab] Refreshing current subtab:",subtab);const blocked=this._applySubtabFeatureGate(subtab);if(blocked)return;if(subtab==="workflows"){this.workflowList?._debouncedLoadWorkflows?.()||this.workflowList?.loadWorkflows?.()}else if(subtab==="templates"){this.workflowTemplateList?.loadTemplates?.()}else if(subtab==="shared"){this.workflowList?.loadSharedWorkflows?.()}else if(subtab==="mytemplates"){this._loadMyTemplates()}}_switchSubtab(subtab){console.log("[WorkflowTab] Switching to subtab:",subtab);const subtabBtns=this.container.querySelectorAll(".tobyflow-workflow-subtab");subtabBtns.forEach(btn=>{btn.classList.toggle("active",btn.dataset.subtab===subtab)});const contentPanes=this.container.querySelectorAll(".tobyflow-workflow-content");contentPanes.forEach(pane=>{const isActive=pane.dataset.content===subtab;pane.style.display=isActive?"flex":"none";if(isActive){pane.style.flexDirection="column";pane.style.flex="1";pane.style.minHeight="0";pane.style.overflow="hidden"}});this._currentSubtab=subtab;if(window.eventBus){window.eventBus.emit("workflow:subtab_changed",{subtab})}const blocked=this._applySubtabFeatureGate(subtab);if(blocked)return;if(subtab==="workflows"){this.workflowList?.loadWorkflows?.()}else if(subtab==="templates"){if(!this.workflowTemplateList){this._loadWorkflowTemplateList()}else{this.workflowTemplateList._loadTemplates?.(false)}}else if(subtab==="shared"){const sharedContent=this.container.querySelector('[data-content="shared"]');if(sharedContent&&this.workflowList){this.workflowList.showSharedLoadingSkeleton(sharedContent);this.workflowList.loadSharedWorkflows().then(()=>{this.workflowList.renderSharedTab(sharedContent)})}}else if(subtab==="mytemplates"){this._loadMyTemplates()}}_loadMyTemplates(){const pane=this.container.querySelector('[data-content="mytemplates"]');if(pane&&window.MyTemplatesList?.renderInto){window.MyTemplatesList.renderInto(pane)}}_applySubtabFeatureGate(subtab){if(subtab==="mytemplates")return false;const featureKey=subtab==="templates"?"workflow_templates_enabled":"workflows_enabled";const fg=window.featureGate;const pane=this.container.querySelector(`[data-content="${subtab}"]`);if(!pane)return false;const oldOverlay=pane.querySelector(".wf-subtab-blocked-overlay");if(oldOverlay)oldOverlay.remove();if(!fg||fg.canUse(featureKey)){pane.classList.remove("wf-subtab-blocked");return false}const isLoggedIn=!!window.authManager?.isLoggedIn?.();const t=(key,fallback)=>window.I18n?.t(key)||fallback;const moduleNameMap={workflows_enabled:t("workflow.title","Workflow"),workflow_templates_enabled:t("workflow.subtabTemplates","Templates")};const moduleName=moduleNameMap[featureKey]||"Feature";const title=isLoggedIn?t("featuregate.featureLockedTitle","Feature Locked"):t("featuregate.loginRequiredTitle","Login Required");const message=isLoggedIn?t("featuregate.featureLockedPaid",`G\xF3i hi\u1EC7n t\u1EA1i c\u1EE7a b\u1EA1n kh\xF4ng bao g\u1ED3m ${moduleName}. Vui l\xF2ng n\xE2ng c\u1EA5p \u0111\u1EC3 s\u1EED d\u1EE5ng.`).replace("{module}",moduleName):t("featuregate.loginRequiredFeature",`T\xEDnh n\u0103ng ${moduleName} y\xEAu c\u1EA7u \u0111\u0103ng nh\u1EADp.`).replace("{module}",moduleName);const ctaLabel=isLoggedIn?t("common.upgrade","Upgrade"):t("auth.login","Login");pane.classList.add("wf-subtab-blocked");const ctaBtnClass=isLoggedIn?"wf-subtab-blocked-cta wf-subtab-blocked-cta--upgrade":"wf-subtab-blocked-cta";const overlayHtml=`
+    `;
+    this.container.insertAdjacentHTML("afterbegin", subtabsHtml);
+    window.ProviderTabScroll?.bind(
+      this.container.querySelector(".tobyflow-workflow-subtabs"),
+    );
+    this._updateMyTemplatesSubtab();
+    if (existingSection) {
+      const workflowsContent = this.container.querySelector(
+        '[data-content="workflows"]',
+      );
+      if (workflowsContent) {
+        workflowsContent.appendChild(existingSection);
+      }
+    }
+  }
+  _updateMyTemplatesSubtab(force = false) {
+    const btn = this.container?.querySelector(
+      '.tobyflow-workflow-subtab[data-subtab="mytemplates"]',
+    );
+    if (!btn) return;
+    const pane = this.container?.querySelector('[data-content="mytemplates"]');
+    if (!window.authManager?.isLoggedIn?.()) {
+      btn.style.display = "none";
+      if (pane) pane.innerHTML = "";
+      if (this._currentSubtab === "mytemplates")
+        this._switchSubtab("workflows");
+      return;
+    }
+    if (force) window.CreatorTemplatePublish?.invalidateEligible?.();
+    window.CreatorTemplatePublish?.isEligible?.()
+      .then((ok) => {
+        btn.style.display = ok ? "" : "none";
+        if (ok) {
+          if (this._currentSubtab === "mytemplates") this._loadMyTemplates();
+        } else {
+          if (pane) pane.innerHTML = "";
+          if (this._currentSubtab === "mytemplates")
+            this._switchSubtab("workflows");
+        }
+      })
+      .catch(() => {});
+  }
+  _bindSubtabEvents() {
+    const subtabBtns = this.container.querySelectorAll(
+      ".tobyflow-workflow-subtab",
+    );
+    subtabBtns.forEach((btn) => {
+      btn.addEventListener("click", () => {
+        const subtab = btn.dataset.subtab;
+        if (!subtab) return;
+        if (subtab === this._currentSubtab) {
+          this._refreshCurrentSubtab(subtab);
+        } else {
+          this._switchSubtab(subtab);
+        }
+      });
+    });
+  }
+  _refreshCurrentSubtab(subtab) {
+    console.log("[WorkflowTab] Refreshing current subtab:", subtab);
+    const blocked = this._applySubtabFeatureGate(subtab);
+    if (blocked) return;
+    if (subtab === "workflows") {
+      this.workflowList?._debouncedLoadWorkflows?.() ||
+        this.workflowList?.loadWorkflows?.();
+    } else if (subtab === "templates") {
+      this.workflowTemplateList?.loadTemplates?.();
+    } else if (subtab === "shared") {
+      this.workflowList?.loadSharedWorkflows?.();
+    } else if (subtab === "mytemplates") {
+      this._loadMyTemplates();
+    }
+  }
+  _switchSubtab(subtab) {
+    console.log("[WorkflowTab] Switching to subtab:", subtab);
+    const subtabBtns = this.container.querySelectorAll(
+      ".tobyflow-workflow-subtab",
+    );
+    subtabBtns.forEach((btn) => {
+      btn.classList.toggle("active", btn.dataset.subtab === subtab);
+    });
+    const contentPanes = this.container.querySelectorAll(
+      ".tobyflow-workflow-content",
+    );
+    contentPanes.forEach((pane) => {
+      const isActive = pane.dataset.content === subtab;
+      pane.style.display = isActive ? "flex" : "none";
+      if (isActive) {
+        pane.style.flexDirection = "column";
+        pane.style.flex = "1";
+        pane.style.minHeight = "0";
+        pane.style.overflow = "hidden";
+      }
+    });
+    this._currentSubtab = subtab;
+    if (window.eventBus) {
+      window.eventBus.emit("workflow:subtab_changed", { subtab });
+    }
+    const blocked = this._applySubtabFeatureGate(subtab);
+    if (blocked) return;
+    if (subtab === "workflows") {
+      this.workflowList?.loadWorkflows?.();
+    } else if (subtab === "templates") {
+      if (!this.workflowTemplateList) {
+        this._loadWorkflowTemplateList();
+      } else {
+        this.workflowTemplateList._loadTemplates?.(false);
+      }
+    } else if (subtab === "shared") {
+      const sharedContent = this.container.querySelector(
+        '[data-content="shared"]',
+      );
+      if (sharedContent && this.workflowList) {
+        this.workflowList.showSharedLoadingSkeleton(sharedContent);
+        this.workflowList.loadSharedWorkflows().then(() => {
+          this.workflowList.renderSharedTab(sharedContent);
+        });
+      }
+    } else if (subtab === "mytemplates") {
+      this._loadMyTemplates();
+    }
+  }
+  _loadMyTemplates() {
+    const pane = this.container.querySelector('[data-content="mytemplates"]');
+    if (pane && window.MyTemplatesList?.renderInto) {
+      window.MyTemplatesList.renderInto(pane);
+    }
+  }
+  _applySubtabFeatureGate(subtab) {
+    if (subtab === "mytemplates") return false;
+    const featureKey =
+      subtab === "templates"
+        ? "workflow_templates_enabled"
+        : "workflows_enabled";
+    const fg = window.featureGate;
+    const pane = this.container.querySelector(`[data-content="${subtab}"]`);
+    if (!pane) return false;
+    const oldOverlay = pane.querySelector(".wf-subtab-blocked-overlay");
+    if (oldOverlay) oldOverlay.remove();
+    if (!fg || fg.canUse(featureKey)) {
+      pane.classList.remove("wf-subtab-blocked");
+      return false;
+    }
+    const isLoggedIn = !!window.authManager?.isLoggedIn?.();
+    const t = (key, fallback) => window.I18n?.t(key) || fallback;
+    const moduleNameMap = {
+      workflows_enabled: t("workflow.title", "Workflow"),
+      workflow_templates_enabled: t("workflow.subtabTemplates", "Templates"),
+    };
+    const moduleName = moduleNameMap[featureKey] || "Feature";
+    const title = isLoggedIn
+      ? t("featuregate.featureLockedTitle", "Feature Locked")
+      : t("featuregate.loginRequiredTitle", "Login Required");
+    const message = isLoggedIn
+      ? t(
+          "featuregate.featureLockedPaid",
+          `G\xF3i hi\u1EC7n t\u1EA1i c\u1EE7a b\u1EA1n kh\xF4ng bao g\u1ED3m ${moduleName}. Vui l\xF2ng n\xE2ng c\u1EA5p \u0111\u1EC3 s\u1EED d\u1EE5ng.`,
+        ).replace("{module}", moduleName)
+      : t(
+          "featuregate.loginRequiredFeature",
+          `T\xEDnh n\u0103ng ${moduleName} y\xEAu c\u1EA7u \u0111\u0103ng nh\u1EADp.`,
+        ).replace("{module}", moduleName);
+    const ctaLabel = isLoggedIn
+      ? t("common.upgrade", "Upgrade")
+      : t("auth.login", "Login");
+    pane.classList.add("wf-subtab-blocked");
+    const ctaBtnClass = isLoggedIn
+      ? "wf-subtab-blocked-cta wf-subtab-blocked-cta--upgrade"
+      : "wf-subtab-blocked-cta";
+    const overlayHtml = `
       <div class="wf-subtab-blocked-overlay">
         <div class="wf-subtab-blocked-card">
           <svg class="wf-subtab-blocked-icon" width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
@@ -50,12 +683,48 @@ Click "Resume" to continue from unfinished nodes, or "Run again" to reset.`,{tit
           </svg>
           <h3 class="wf-subtab-blocked-title">${this._escapeHtml(title)}</h3>
           <p class="wf-subtab-blocked-msg">${this._escapeHtml(message)}</p>
-          <button class="${ctaBtnClass}" data-action="${isLoggedIn?"upgrade":"login"}">
+          <button class="${ctaBtnClass}" data-action="${isLoggedIn ? "upgrade" : "login"}">
             ${this._escapeHtml(ctaLabel)}
           </button>
         </div>
       </div>
-    `;pane.insertAdjacentHTML("afterbegin",overlayHtml);const ctaBtn=pane.querySelector(".wf-subtab-blocked-cta");ctaBtn?.addEventListener("click",()=>{if(isLoggedIn){if(typeof window.openUpgradeModal==="function"){window.openUpgradeModal()}else{try{chrome.runtime.sendMessage({action:"showUpgradeModal"})}catch(e){}}}else{const loginOverlay=document.getElementById("loginOverlay");if(loginOverlay)loginOverlay.classList.remove("hidden")}});return true}_escapeHtml(str){const div=document.createElement("div");div.textContent=String(str??"");return div.innerHTML}_loadWorkflowTemplateList(){const templatesContent=this.container.querySelector('[data-content="templates"]');if(!templatesContent)return;if(typeof window.WorkflowTemplateList==="function"){this.workflowTemplateList=new window.WorkflowTemplateList(templatesContent);window.workflowTemplateList=this.workflowTemplateList;console.log("[WorkflowTab] WorkflowTemplateList loaded")}else{templatesContent.innerHTML=`
+    `;
+    pane.insertAdjacentHTML("afterbegin", overlayHtml);
+    const ctaBtn = pane.querySelector(".wf-subtab-blocked-cta");
+    ctaBtn?.addEventListener("click", () => {
+      if (isLoggedIn) {
+        if (typeof window.openUpgradeModal === "function") {
+          window.openUpgradeModal();
+        } else {
+          try {
+            chrome.runtime.sendMessage({ action: "showUpgradeModal" });
+          } catch (e) {}
+        }
+      } else {
+        const loginOverlay = document.getElementById("loginOverlay");
+        if (loginOverlay) loginOverlay.classList.remove("hidden");
+      }
+    });
+    return true;
+  }
+  _escapeHtml(str) {
+    const div = document.createElement("div");
+    div.textContent = String(str ?? "");
+    return div.innerHTML;
+  }
+  _loadWorkflowTemplateList() {
+    const templatesContent = this.container.querySelector(
+      '[data-content="templates"]',
+    );
+    if (!templatesContent) return;
+    if (typeof window.WorkflowTemplateList === "function") {
+      this.workflowTemplateList = new window.WorkflowTemplateList(
+        templatesContent,
+      );
+      window.workflowTemplateList = this.workflowTemplateList;
+      console.log("[WorkflowTab] WorkflowTemplateList loaded");
+    } else {
+      templatesContent.innerHTML = `
         <div class="workflow-empty-state">
           <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
             <rect x="3" y="3" width="7" height="7" rx="1"/>
@@ -63,6 +732,10 @@ Click "Resume" to continue from unfinished nodes, or "Run again" to reset.`,{tit
             <rect x="3" y="14" width="7" height="7" rx="1"/>
             <rect x="14" y="14" width="7" height="7" rx="1"/>
           </svg>
-          <p>${window.I18n?.t("workflow.templatesComingSoon")||"Workflow Templates coming soon"}</p>
+          <p>${window.I18n?.t("workflow.templatesComingSoon") || "Workflow Templates coming soon"}</p>
         </div>
-      `}}}window.WorkflowTab=WorkflowTab;
+      `;
+    }
+  }
+}
+window.WorkflowTab = WorkflowTab;

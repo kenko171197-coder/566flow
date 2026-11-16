@@ -1,1 +1,1798 @@
-(function(){const $=id=>document.getElementById(id);const MAX_LOG_LINES=400;function setStatus(text,cls){const el=$("rwStatus");if(!el)return;el.textContent=text;el.className="rw-status"+(cls?` rw-status--${cls}`:"")}function setTitle(text){const el=$("rwTitle");if(el){el.textContent=text;el.title=text}}function setProgress(text){const el=$("rwProgress");if(el)el.textContent=text}function addLog(msg,level){const box=$("rwLog");if(!box)return;if(level==="error")$("rwLogWrap")?.classList.add("rw-log-wrap--open");const line=document.createElement("div");line.className="rw-log-line"+(level?` rw-log-line--${level}`:"");line.textContent=`[${new Date().toLocaleTimeString(window.I18n?.getLocale?.()||navigator.language)}] ${msg}`;box.appendChild(line);while(box.childNodes.length>MAX_LOG_LINES)box.removeChild(box.firstChild);box.scrollTop=box.scrollHeight;queueRunLogSnapshot()}let _running=false;const _failedNodeIds=new Set;let _currentWfId=null;let _runLogUserId=null,_runLogSnapshot=null,_runLogSaveFlight=null;function queueRunLogSnapshot(){window.WorkflowRunLogUI?.refresh();if(!_currentWfId||!_runLogUserId)return;_runLogSnapshot={userId:_runLogUserId,workflowId:_currentWfId,lines:Array.from(document.querySelectorAll("#rwLog .rw-log-line"),el=>el.textContent)};if(_runLogSaveFlight)return;_runLogSaveFlight=Promise.resolve().then(async()=>{while(_runLogSnapshot){const value=_runLogSnapshot;_runLogSnapshot=null;await WorkflowRunLogStore.write(value.userId,value.workflowId,value.lines)}}).catch(()=>{console.info("[WorkflowRunLog]",{stage:"snapshot_failed"})}).finally(()=>{_runLogSaveFlight=null;if(_runLogSnapshot)queueRunLogSnapshot()})}function bindRunLogControls(){window.WorkflowRunLogUI?.bindCopyButton(()=>_runLogUserId);let documentId=null;chrome.runtime.sendMessage({action:"workflowSpaceHealthIdentify"}).then(value=>{documentId=value?.documentId||null}).catch(()=>{});chrome.runtime.onMessage.addListener((message,sender,sendResponse)=>{if(message?.action!=="workflowSpaceShowRunLog"||sender.id!==chrome.runtime.id||!documentId||message.documentId!==documentId)return;(async()=>{if(message.workflowId!==_currentWfId||String(message.userId)!==String(_runLogUserId)||!await WorkflowRunLogStore.authorized(_runLogUserId))return{ok:false};_hostInspecting=true;$("rwLogWrap")?.classList.add("rw-log-wrap--open");return{ok:true}})().then(sendResponse,()=>sendResponse({ok:false}));return true});chrome.storage.onChanged.addListener((changes,area)=>{if(area==="local"&&changes.af_auth&&(!changes.af_auth.newValue?.token||String(changes.af_auth.newValue?.user?.id)!==String(_runLogUserId))){_runLogUserId=null;_runLogSnapshot=null;if($("rwLog"))$("rwLog").textContent="";window.WorkflowRunLogUI?.refresh()}})}let _runHostDialogCount=0;let _hostRunEpoch=0,_hostSettled=false,_hostCompleted=false,_hostInspecting=false;let _hostPostWorkWait=null;const _hostResultReceipts=new Map;let _hostReceiptRevision=0,_hostDurability=null;function recordRunHostResult(data){const node=data?.node,result=data?.result||{};if(!node?.node_id||node.wf_id&&node.wf_id!==_currentWfId)return;const receipt={status:"completed"};if(Array.isArray(result.fileIds))receipt.result_file_ids=result.fileIds.join(",");else if(Object.hasOwn(node,"result_file_ids"))receipt.result_file_ids=node.result_file_ids;if(typeof node.result_text==="string")receipt.result_text=node.result_text;for(const key of["result_frame_file_ids","result_clean_file_ids"])if(Object.hasOwn(node,key))receipt[key]=node[key];if(JSON.stringify(_hostResultReceipts.get(node.node_id))!==JSON.stringify(receipt)){_hostResultReceipts.set(node.node_id,receipt);_hostReceiptRevision++}}function recordRunHostMetadata(data){const id=data?.node?.node_id||data?.nodeId,previous=_hostResultReceipts.get(id);if(!previous||data.workflowId&&data.workflowId!==_currentWfId)return;const source=data.result||{},receipt={...previous};for(const[key,field]of[["fileIds","result_file_ids"],["frameFileIds","result_frame_file_ids"],["cleanFileIds","result_clean_file_ids"]]){if(Object.hasOwn(source,key))receipt[field]=Array.isArray(source[key])?source[key].join(","):source[key]}if(Object.hasOwn(data,"resultFileIds"))receipt.result_file_ids=data.resultFileIds;if(JSON.stringify(previous)!==JSON.stringify(receipt)){_hostResultReceipts.set(id,receipt);_hostReceiptRevision++}}function verifyRunHostResults(scope){const key=`${scope.runEpoch}:${_hostReceiptRevision}`;if(_hostDurability?.key===key)return _hostDurability.promise;const receipts=[..._hostResultReceipts.entries()];const promise=(async()=>{if(!receipts.length)return true;const storage=window.storageManager?.storage;if(typeof window.ApiStorage!=="function"||!(storage instanceof window.ApiStorage))return false;const nodes=await storage.getNodes(scope.workflowId);if(!Array.isArray(nodes))return false;return receipts.every(([id,receipt])=>{const node=nodes.find(entry=>entry.node_id===id);if(!node||node.status!=="completed")return false;return Object.entries(receipt).every(([field,expected])=>{const normalize=value=>field.endsWith("_file_ids")?String(value??"").split(",").map(part=>part.trim()).filter(Boolean).join(","):String(value??"");return normalize(node[field])===normalize(expected)})})})().catch(()=>false);_hostDurability={key,promise};return promise}function runHostState(){const executor=window.workflowExecutor;const queue=window.PromptQueue?._instance;return{workflowId:_currentWfId,userId:String(window.authManager?.getUser?.()?.id||""),runEpoch:_hostRunEpoch,completed:_hostCompleted,settled:_hostSettled,receiptRevision:_hostReceiptRevision,dialogs:_runHostDialogCount,inspecting:_hostInspecting,busy:_running||_consuming||!!executor?.isRunning||!!executor?._executionTask||!!executor?._executionInProgress||!!executor?._singleNodeSession?.records?.size||!!queue?._apiRefreshFlushPromise||!!queue?.getActiveReloadPromise?.()||window.WorkflowSpaceHealthLifecycle?.isBusy?.()!==false}}function requestRunHostAutoClose(){const queue=window.PromptQueue?._instance,epoch=_hostRunEpoch;const work=[queue?._apiRefreshFlushPromise,queue?.getActiveReloadPromise?.()].filter(Boolean);if(!work.length){void window.workflowRunHostLifecycle?.maybeClose();return}if(_hostPostWorkWait?.epoch===epoch)return;if(_hostCompleted)setProgress("Workflow completed. Waiting for Google Flow synchronization\u2026");const wait={epoch,promise:null};_hostPostWorkWait=wait;wait.promise=Promise.allSettled(work).then(()=>{if(_hostRunEpoch===epoch){if(_hostCompleted)renderRunOutcome();void window.workflowRunHostLifecycle?.maybeClose()}}).finally(()=>{if(_hostPostWorkWait===wait)_hostPostWorkWait=null})}function bindRunHostLifecycle(){const retained=new Set;let retainedEpoch=null;window.workflowRunHostLifecycle=new WorkflowRunHostLifecycle({readState:runHostState,verifyResults:verifyRunHostResults,persistLog:async()=>{queueRunLogSnapshot();if(_runLogSaveFlight)await _runLogSaveFlight;return WorkflowRunLogStore.write(_runLogUserId,_currentWfId,Array.from(document.querySelectorAll("#rwLog .rw-log-line"),el=>el.textContent)).catch(()=>false)},onRetain:reason=>{if(retainedEpoch!==_hostRunEpoch){retained.clear();retainedEpoch=_hostRunEpoch}const key=`${_hostRunEpoch}:${reason}`;if(reason==="results_not_saved")setStatus("Save unconfirmed","warning");else if(reason==="log_not_saved")setStatus("Log not saved","warning");else if(["HOST_RECEIPT_PENDING","HOST_NOT_SETTLED","EXECUTION_STILL_ACTIVE"].includes(reason))setStatus("Syncing","syncing");if(reason==="native_context_required")setProgress("Workflow completed. Open the TobyFlow sidebar to close this run window automatically.");else if(reason==="native_context_not_ready")setProgress("Workflow completed. Waiting for the TobyFlow sidebar/editor to be ready.");else if(reason==="log_not_saved")setProgress("Workflow completed. The log could not be saved, so this window stays open.");else if(reason==="results_not_saved")setProgress("Workflow completed. Saved results are not confirmed, so this window stays open.");else if(["HOST_RECEIPT_PENDING","HOST_NOT_SETTLED","EXECUTION_STILL_ACTIVE"].includes(reason))setProgress("Workflow completed. Waiting for pending operations to finish.");if(retained.has(key))return;retained.add(key);addLog(`[RunHostLifecycle] retained: ${reason}`)}});window.workflowRunHostNotice=options=>{if(!window.workflowRunHostLifecycle.seenWarnings.has(options.code))addLog(`[RunHostNotice] ${options.code}`,"warn");return window.workflowRunHostLifecycle.showWarning(options)};for(const id of["rwLogToggle","rwCopyLog"])$(id)?.addEventListener("click",()=>{_hostInspecting=true});let documentId=null;chrome.runtime.sendMessage({action:"workflowSpaceHealthIdentify"}).then(reply=>{documentId=reply?.documentId||null}).catch(()=>{});chrome.runtime.onMessage.addListener((message,sender,reply)=>{if(message?.action!=="workflowRunHostCloseProbe"||sender.id!==chrome.runtime.id||!documentId||message.documentId!==documentId)return;const scope=runHostState();reply({ok:window.workflowRunHostLifecycle.current(message)&&scope.workflowId===message.workflowId&&scope.userId===String(message.userId)});return false})}function bindVisibleHostDialogs(){const dialog=window.customDialog;if(!dialog||dialog._spaceVisibleHostBound)return;dialog._spaceVisibleHostBound=true;for(const method of["confirm","alert","confirmResumeOrRerun"]){if(typeof dialog[method]!=="function")continue;const original=dialog[method].bind(dialog);dialog[method]=function(...args){_runHostDialogCount++;console.info("[WorkflowRunHostDialog]",{method,workflowId:_currentWfId,executing:window.workflowExecutor?.isRunning===true,status:$("rwStatus")?.textContent||null});let previous=null,hostId=null;const reveal=(async()=>{try{const prior=await chrome.windows.getLastFocused();const host=await chrome.windows.getCurrent();hostId=host?.id;if(!Number.isInteger(hostId)||!_runHostDialogCount||prior?.id===hostId)return;const current=await chrome.windows.getLastFocused();if(current?.id!==prior?.id||current?.focused!==true)return;await chrome.windows.update(hostId,{focused:true});previous=prior.id}catch(_){}})();let result;try{result=original(...args)}catch(error){_runHostDialogCount--;throw error}return Promise.resolve(result).finally(async()=>{_runHostDialogCount--;await reveal;try{if(!_runHostDialogCount&&Number.isInteger(previous)){const current=await chrome.windows.getLastFocused();if(current?.id===hostId&&current?.focused===true)await chrome.windows.update(previous,{focused:true})}}catch(_){}requestRunHostAutoClose()})}}}let _spaceHealthWorkflow=null,_spaceHealthNodes=[],_preflightFlowApiMode=false;let _groupPreparationDisposed=false;window.addEventListener("pagehide",()=>{_groupPreparationDisposed=true},{once:true});async function spaceFlowApiHealth(nodes,projectId){await window.ExecutionConfig?.getConfig?.(false);const flowNodes=(nodes||[]).filter(node=>node.enabled!==false&&["image","generate","flow"].includes(node.node_type));const webOnly=flowNodes.some(node=>!(node.media_type==="Video"&&node.video_input_type==="Frames")&&(node.voice_search_value||node.character_search_value||window.MentionParser?.hasComponents?.(window.workflowExecutor?._resolveEffectivePrompt?.(node,_spaceHealthWorkflow||{nodes,edges:[]})?.text||node.prompt||"")));const apiMode=!webOnly&&window.FlowApiAdapter?.isApiModeIntended?.({forWorkflow:true})===true;const required=apiMode&&window.FlowApiAdapter?.isApiModeRequired?.({forWorkflow:true})===true;if(!apiMode)return{apiMode:false,required:false,ready:false,error:null};const mediaTypes=[...new Set(flowNodes.map(node=>/video/i.test(node.media_type||"")?"video":"image"))];const status=await window.FlowApiSessionCoordinator?.checkScopes?.({surfaces:["workflow"],mediaTypes,projectId:projectId||void 0,passive:true,force:false});return{apiMode,required,ready:status?.ready===true,driver:status?.driver||null,checking:status?.connecting===true,error:status?.reason||(status?.ready===true?null:"FLOW_API_HEALTH_UNAVAILABLE")}}chrome.runtime.onMessage.addListener((message,sender,sendResponse)=>{if(message?.action!=="workflowSpaceHealthProbe")return;if(sender.id!==chrome.runtime.id||!_spaceHealthWorkflow||message.workflowId!==_currentWfId)return;spaceFlowApiHealth(Array.isArray(message.nodeIds)&&message.nodeIds.length?_spaceHealthWorkflow.nodes.filter(node=>message.nodeIds.includes(node.node_id)):_spaceHealthWorkflow.nodes,_spaceHealthWorkflow.project_id).then(health=>sendResponse({ok:true,health})).catch(()=>sendResponse({ok:false,error:"FLOW_API_HEALTH_UNAVAILABLE"}));return true});let _totalNodes=0;let _doneNodes=0;const NODE_BADGE_LABEL={pending:"Pending",queued:"Queued",running:"Running",retrying:"Retrying",paused:"Paused",waiting:"Needs attention",stopping:"Stopping",completed:"Done",failed:"Failed",skipped:"Skipped",cancelled:"Stopped",review:"Needs review",off:"Off",outside:"Not selected"};const _hostNodeStates=new Map,_hostReviewNodeIds=new Set,_hostPausedJobIds=new Set;let _hostOutcome=null,_hostOnlyNodeId=null,_hostProviderNotice="",_hostFlowSyncStage=null,_hostSyncWarning=false;function renderNodeList(nodes,onlyNodeId=null){const box=$("rwNodes");if(!box)return;box.textContent="";_hostNodeStates.clear();_hostReviewNodeIds.clear();_hostPausedJobIds.clear();_hostOnlyNodeId=onlyNodeId;_hostOutcome=null;_hostProviderNotice="";_hostFlowSyncStage=null;_hostSyncWarning=false;(nodes||[]).filter(n=>n.node_type!=="note").forEach((n,i)=>{const selected=!onlyNodeId||n.node_id===onlyNodeId;const included=selected&&(!!onlyNodeId||n.enabled!==false);const state=!selected?"outside":!included?"off":!onlyNodeId&&n.status==="completed"?"completed":"pending";if(included)_hostNodeStates.set(n.node_id,state);const row=document.createElement("div");row.className=`rw-node rw-node--${state}`;row.id=`rw-node-${n.node_id}`;if(!included)row.classList.add("rw-node--disabled");const idx=document.createElement("span");idx.className="rw-node-idx";idx.textContent=String(i+1);const label=document.createElement("span");label.className="rw-node-label";const name=document.createElement("span");name.className="rw-node-name";name.textContent=n.node_name||n.node_type;const phase=document.createElement("span");phase.className="rw-node-phase";phase.hidden=true;label.append(name,phase);const type=document.createElement("span");type.className="rw-node-type";type.textContent=n.node_type;const badge=document.createElement("span");badge.className=`rw-node-badge rw-node-badge--${state}`;badge.dataset.badge="1";badge.textContent=NODE_BADGE_LABEL[state];row.append(idx,label,type,badge);box.appendChild(row)});updateBar()}function setNodeBadge(nodeId,status){const row=document.getElementById(`rw-node-${nodeId}`);if(!row)return;_hostNodeStates.set(nodeId,status);row.className="rw-node rw-node--"+status;const badge=row.querySelector("[data-badge]");if(badge){badge.className=`rw-node-badge rw-node-badge--${status}`;badge.textContent=NODE_BADGE_LABEL[status]||status}if(status==="running"){try{row.scrollIntoView({block:"nearest"})}catch(_){}}}function setNodePhase(nodeId,text){const row=document.getElementById(`rw-node-${nodeId}`),el=row?.querySelector(".rw-node-phase");if(!el)return;el.textContent=String(text||"");el.title=String(text||"");el.hidden=!text}function runProgressSummary(){const counts={total:_hostNodeStates.size,settled:0,completed:0,failed:0,skipped:0,cancelled:0,review:0,active:0,queued:0};for(const state of _hostNodeStates.values()){if(["completed","failed","skipped","cancelled","review"].includes(state)){counts.settled++;counts[state]++}else if(["running","retrying","paused","waiting","stopping"].includes(state))counts.active++;else if(["pending","queued"].includes(state))counts.queued++}return counts}function updateBar(error=false){const counts=runProgressSummary();_totalNodes=counts.total;_doneNodes=counts.settled;const fill=$("rwBarFill");if(!fill)return;const pct=counts.total?Math.round(counts.settled/counts.total*100):0;fill.style.width=`${Math.min(100,pct)}%`;fill.className="rw-bar-fill"+(error||counts.failed||_failedNodeIds.size?" rw-bar-fill--error":counts.review||counts.skipped?" rw-bar-fill--warning":"");fill.parentElement?.setAttribute("role","progressbar");fill.parentElement?.setAttribute("aria-valuemin","0");fill.parentElement?.setAttribute("aria-valuemax","100");fill.parentElement?.setAttribute("aria-valuenow",String(pct))}function refreshRunProgress(){if(_hostOutcome){renderRunOutcome();if(_hostSettled)requestRunHostAutoClose();return}updateBar();const c=runProgressSummary();if(_running&&_hostFlowSyncStage&&!c.active)setStatus("Syncing","syncing");else if(_running&&!_hostFlowSyncStage&&$("rwStatus")?.textContent==="Syncing")setStatus("Running","running");setProgress(`${c.settled}/${c.total} processed \xB7 ${c.completed} done \xB7 ${c.failed} failed \xB7 ${c.skipped} skipped \xB7 ${c.active} active \xB7 ${c.queued} waiting${_hostFlowSyncStage?" \xB7 Flow synchronization: "+_hostFlowSyncStage:""}`)}function renderRunOutcome(){if(!_hostOutcome)return;const c=runProgressSummary(),notice=_hostProviderNotice?` Last provider notice: ${_hostProviderNotice}`:"";_hostCompleted=!_hostOutcome.error&&!_hostOutcome.stopped&&!_failedNodeIds.size&&!_hostReviewNodeIds.size&&!c.cancelled&&!_hostSyncWarning&&c.settled===c.total;if(_hostReviewNodeIds.size){setStatus("Needs review","review");setProgress(`${_hostReviewNodeIds.size} node(s) need review \xB7 ${c.completed} done \xB7 ${c.failed} failed \xB7 ${c.skipped} skipped. Check the log before running again.`+notice)}else if(_hostOutcome.error){setStatus("Failed","failed");setProgress(`Finished with an error: ${_hostOutcome.error.message||_hostOutcome.error}`+notice)}else if(_hostOutcome.stopped||c.cancelled){setStatus("Stopped","stopped");setProgress(`Workflow stopped \xB7 ${c.completed} done \xB7 ${c.skipped} skipped.`+notice)}else if(_failedNodeIds.size||c.failed){setStatus("Failed","failed");setProgress(`${Math.max(_failedNodeIds.size,c.failed)} node(s) failed. See the log below.`+notice)}else{const queue=window.PromptQueue?._instance;if(!_hostSettled||queue?._apiRefreshFlushPromise||queue?.getActiveReloadPromise?.()){setStatus("Syncing","syncing");setProgress("Execution finished. Waiting for result synchronization and cleanup\u2026")}else if(c.settled<c.total){_hostCompleted=false;setStatus("Needs review","review");setProgress(`Execution ended, but ${c.total-c.settled} node(s) have no terminal update. Check the log; no retry was sent.`)}else{setStatus(_hostSyncWarning?"Completed with warnings":c.skipped?"Completed with skips":"Completed",c.skipped||_hostSyncWarning?"warning":"completed");setProgress(`Workflow completed \xB7 ${c.completed} done \xB7 ${c.skipped} skipped. ${_hostSyncWarning?"Flow synchronization failed; check the log before closing.":"You can close this window."}`)}}updateBar()}function runOwnsProviderEvent(data){const job=window.PromptQueue?._instance?.getJob?.(data?.jobId);return!!_running&&job?.owner==="workflow"&&job.workflowId===_currentWfId&&job.workflowRunId===window.workflowExecutor?._flowRunId?job:null}async function bootstrap(){const startedAt=Date.now();let previousAt=startedAt;const trace=stage=>{const at=Date.now();console.info?.("[RunHostPreparation]",JSON.stringify({operationId:`bootstrap:${startedAt}`,stage,elapsedMs:at-startedAt,stageMs:at-previousAt}));previousAt=at};trace("bootstrap_started");document.body.classList.add("rw-popup");if(window.I18n){try{await window.I18n.init()}catch(_){}}trace("i18n_ready");if(window.storageSettings){try{await window.storageSettings.loadAndApply()}catch(_){}}trace("settings_ready");try{window.ChatGPTConfig?.fetchInBackground?.()}catch(_){}try{window.GrokConfig?.fetchInBackground?.()}catch(_){}if(window.authManager)await window.authManager.init();trace("auth_ready");if(!window.authManager?.isLoggedIn()){setStatus("Not signed in","failed");setProgress("Sign in to the extension from the sidebar, then try again.");addLog("Not signed in \u2014 workflow cannot run.","error");return false}if(window.SseClient&&window.authManager?.isLoggedIn()){const sseStartedAt=Date.now();const observeSse=stage=>console.info?.("[RunHostPreparation]",JSON.stringify({operationId:`bootstrap:${startedAt}`,stage,elapsedMs:Date.now()-startedAt,stageMs:Date.now()-sseStartedAt}));try{Promise.resolve(window.SseClient.connect()).then(()=>observeSse("sse_connected"),()=>observeSse("sse_connect_failed"))}catch(_){observeSse("sse_connect_failed")}}trace("sse_started");if(window.RequestCoalescer){try{window.RequestCoalescer.init()}catch(_){}}if(window.storageManager)await window.storageManager.init();trace("storage_ready");if(window.featureGate){await window.featureGate.init();try{if(!window.featureGate._isCacheValid?.()&&window.featureGate.refresh)await window.featureGate.refresh()}catch(_){}}if(window.SystemConfig){try{await SystemConfig.restoreFromStorage()}catch(_){}}trace("entitlements_config_ready");try{if(window.PendingUploadStore){await PendingUploadStore.restore();trace("upload_files_ready");await PendingUploadStore.restoreCache();trace("upload_cache_ready");await PendingUploadStore.restoreLightweight();trace("upload_metadata_ready")}}catch(_){}try{await window.ProviderConfigManager?._fetchApiConfigs?.()}catch(_){}trace("uploads_provider_config_ready");try{window.CharacterRegistry?.initCrossContextSync?.();window.CharacterRegistry?.getScrapedList?.().catch(()=>{});if(window.VoiceRegistry){window.VoiceRegistry.initCrossContextSync?.();await Promise.all([window.VoiceRegistry.getBaseCatalog?.("flow").catch(()=>null),window.VoiceRegistry.getScrapedList?.().catch(()=>null)])}}catch(_){}trace("voice_catalog_ready");try{await window.ProviderMeta?.fetch?.();window.ProviderMeta?.init?.()}catch(_){}trace("catalogs_ready");if(window.WorkflowExecutor&&!window.workflowExecutor){window.workflowExecutor=new WorkflowExecutor}try{window.generationHistory?.init()}catch(_){}try{window.NodeTemplates?.clearServerCache?.();await window.NodeTemplates?.fetchFromServer?.().catch(()=>{})}catch(_){}trace("node_templates_ready");return true}function bindProgressUI(){const eb=window.eventBus;if(!eb)return;const current=data=>{const workflowId=data?.workflowId||data?.workflow?.wf_id||data?.node?.wf_id;return!workflowId||String(workflowId)===String(_currentWfId)};eb.on("flow:reload_sync_state",data=>{if(data?.scope!=="workflow"||data.workflowId&&data.workflowId!==_currentWfId)return;const code=value=>typeof value==="string"&&/^[a-zA-Z0-9_:-]{1,100}$/.test(value)?value:null;if(data.workflowId===_currentWfId){_hostFlowSyncStage=["complete","failed"].includes(data.stage)?null:code(data.stage);if(data.stage==="failed")_hostSyncWarning=true;else if(data.stage==="complete")_hostSyncWarning=false;if(_running||_hostOutcome)refreshRunProgress()}addLog("[FlowReloadSync] "+JSON.stringify({workflowId:_currentWfId,stage:code(data.stage),reason:code(data.reason),flushId:code(data.flushId),at:Number(data.at)||null}))});let spaceSequence=0;const spaceDocument=crypto.randomUUID();const publishSpaceResult=data=>{if(window.WorkflowSpaceRuntimeRelay?.active)return;const node=data?.node||window.workflowExecutor?.currentWorkflow?.nodes?.find(item=>item.node_id===data?.nodeId);const userId=window.authManager?.getUser?.()?.id;if(!node?.node_id||!userId||!_currentWfId)return;const fields=["status","phase","run_started_at","generation_queued","last_error","result_file_ids","result_file_names","result_thumbnails","result_text","result_source","result_provider_urls","result_frame_file_ids","result_frame_thumbnails","result_clean_file_ids","result_clean_thumbnails","result_gen_mode","provider_web_run_id","error_message"];const portable=value=>{if(typeof value==="string"&&/^(?:blob:|data:)/i.test(value))return void 0;if(Array.isArray(value)){const items=value.map(portable).filter(item=>item!==void 0);return value.length&&!items.length?void 0:items}if(value&&typeof value==="object"){const entries=Object.entries(value).map(([key,item])=>[key,portable(item)]).filter(([,item])=>item!==void 0);return Object.keys(value).length&&!entries.length?void 0:Object.fromEntries(entries)}return value};const textFields=new Set(["result_text","error_message","last_error","phase"]);const patch=Object.fromEntries(fields.filter(key=>Object.hasOwn(node,key)).map(key=>[key,textFields.has(key)?node[key]:portable(node[key])]).filter(([,value])=>value!==void 0));chrome.runtime.sendMessage({action:"workflowSpaceResultPatch",data:{workflowId:String(node.wf_id||_currentWfId),userId:String(userId),nodeId:node.node_id,document:spaceDocument,sequence:++spaceSequence,patch}}).catch(()=>{})};eb.on("node:completed",publishSpaceResult);eb.on("node:ref_replaced",publishSpaceResult);eb.on("node:retry",data=>{if(!data?.node)return;const label=window.I18n?.t("flowStatus.retryDelay",{attempt:data.attempt,max:data.maxRetries,seconds:Math.ceil(Math.max(0,Number(data.delayMs)||0)/1e3)});const phase=[label&&label!=="flowStatus.retryDelay"?label:window.I18n?.t("exec.retrying")||"Retrying\u2026",(Array.isArray(data.error?.providerErrorCodes)?data.error.providerErrorCodes.find(code=>typeof code==="string"&&/^PUBLIC_ERROR_[A-Z0-9_]+$/.test(code)):null)||data.error?.code||""].filter(Boolean).join(" \xB7 ");publishSpaceResult({...data,node:{...data.node,status:"running",phase,error_message:null,last_error:null}})});eb.on("node:preview_available",publishSpaceResult);eb.on("node:preview_available",recordRunHostMetadata);eb.on("node:ref_replaced",recordRunHostMetadata);eb.on("execution:started",d=>{if(!current(d))return;_hostRunEpoch++;_hostCompleted=false;_hostSettled=false;_hostInspecting=false;_hostResultReceipts.clear();_hostReceiptRevision=0;_hostDurability=null;window.workflowRunHostLifecycle?.resetNotices();_hostOutcome=null;_hostProviderNotice="";_hostFlowSyncStage=null;_hostSyncWarning=false;_hostReviewNodeIds.clear();_hostPausedJobIds.clear();_failedNodeIds.clear();_doneNodes=0;updateBar();_running=true;setStatus("Running","running");$("rwStop").disabled=false;if(d?.workflow?.wf_name)setTitle(d.workflow.wf_name);addLog(`Started workflow "${d?.workflow?.wf_name||_currentWfId}"`)});eb.on("execution:single_node_state",data=>{if(String(data?.workflowId)!==String(_currentWfId))return;const states=data.nodes||[];for(const state of states)setNodeBadge(state.nodeId,["queued","stopping","running"].includes(state.status)?state.status:"running");updateBar()});eb.on("node:cancelled",data=>{if(!current(data))return;if(data?.node?.node_id){setNodeBadge(data.node.node_id,"cancelled");setNodePhase(data.node.node_id,"Stopped")}refreshRunProgress();addLog(`Stopped node: ${data?.node?.node_id||""}`,"warn")});eb.on("node:started",d=>{if(!current(d))return;if(d?.node?.node_id)_failedNodeIds.delete(d.node.node_id);_hostReviewNodeIds.delete(d?.node?.node_id);setStatus("Running","running");if(d?.node?.node_id){setNodeBadge(d.node.node_id,"running");setNodePhase(d.node.node_id,"")}refreshRunProgress();addLog(`\u25B6 Node "${d?.node?.node_name||d?.node?.node_id}" started`)});eb.on("node:phase",d=>{if(!current(d))return;if(!d?.nodeId||!d?.phase)return;if(_hostNodeStates.get(d.nodeId)==="retrying")setNodeBadge(d.nodeId,"running");const key=`node.phase.${d.phase}`,translated=window.I18n?.t(key);const fallback={submitting:"Submitting prompt...",generating:"Generating image/video...",downloading:"Downloading results...",uploading:"Uploading image to Flow..."}[d.phase]||"Processing...";setNodePhase(d.nodeId,translated&&translated!==key?translated:fallback)});eb.on("node:completed",d=>{if(!current(d))return;recordRunHostResult(d);if(d?.node?.node_id)_failedNodeIds.delete(d.node.node_id);if(d?.node?.node_id){if(String(d.node.error_message||"").includes("[PROVIDER_REVIEW_REQUIRED]"))_hostReviewNodeIds.add(d.node.node_id);else _hostReviewNodeIds.delete(d.node.node_id);setNodeBadge(d.node.node_id,_hostReviewNodeIds.has(d.node.node_id)?"review":"completed");setNodePhase(d.node.node_id,"")}updateBar();addLog(`\u2714 Node "${d?.node?.node_name||d?.node?.node_id}" completed (${d?.result?.fileIds?.length||0} results)`,"ok");refreshRunProgress()});eb.on("node:failed",d=>{if(!current(d))return;if(d?.node?.node_id)_failedNodeIds.add(d.node.node_id);if(d?.node?.node_id){setNodeBadge(d.node.node_id,"failed");setNodePhase(d.node.node_id,d.error?.message||d.error?.code||"")}refreshRunProgress();addLog(`\u2716 Node "${d?.node?.node_name||d?.node?.node_id}" failed: ${d?.error?.message||""}`,"error")});eb.on("node:run_rejected",d=>{if(d?.workflowId&&d.workflowId!==_currentWfId)return;if(d?.nodeId){_failedNodeIds.add(d.nodeId);setNodeBadge(d.nodeId,"failed")}addLog(`Node could not start: ${d?.error?.code||"RUN_REJECTED"}`,"error");if(!window.workflowExecutor?.isRunning){_running=false;$("rwStop").disabled=true;setStatus("Could not start","failed");setProgress("Node did not start. See the log below.")}});eb.on("node:warning",d=>{if(!current(d))return;if(d?.node?.node_id){setNodeBadge(d.node.node_id,"skipped");setNodePhase(d.node.node_id,d.message||"")}refreshRunProgress();addLog(`\u26A0 ${d?.message||""}`,"warn")});eb.on("execution:log",d=>{const msg=typeof d==="string"?d:d?.message||"";if(msg)addLog(msg,d?.level==="warn"?"warn":d?.level==="error"?"error":void 0)});eb.on("node:retry",d=>{if(!current(d))return;if(!d?.node?.node_id)return;setNodeBadge(d.node.node_id,"retrying");setNodePhase(d.node.node_id,`Retry ${d.attempt}/${d.maxRetries} \xB7 retry in ${Math.ceil(Math.max(0,Number(d.delayMs)||0)/1e3)}s \xB7 ${d.error?.code||""}`);refreshRunProgress()});eb.on("node:review",d=>{if(!d?.node?.node_id||d.node.wf_id&&d.node.wf_id!==_currentWfId)return;_hostReviewNodeIds.add(d.node.node_id);_hostCompleted=false;const disposition=window.WorkflowSpaceReviewState(d);if(disposition.status==="failed")_failedNodeIds.add(d.node.node_id);setNodeBadge(d.node.node_id,disposition.status==="failed"?"failed":"review");setNodePhase(d.node.node_id,d.error?.message||d.error?.code||"Review required");refreshRunProgress();addLog(`Node requires review: ${d.node.node_name||d.node.node_id}`,"warn")});eb.on("execution:completed",d=>{if(!current(d))return;const firstOutcome=!_hostOutcome;_hostOutcome=d||{};_hostCompleted=!d?.error&&!d?.stopped&&!_failedNodeIds.size&&!_hostReviewNodeIds.size;_running=false;$("rwStop").disabled=true;renderRunOutcome();if(firstOutcome)addLog("[RunHostStatus] "+JSON.stringify({workflowId:_currentWfId,runEpoch:_hostRunEpoch,stage:"execution_completed",status:$("rwStatus")?.textContent,...runProgressSummary()}))});eb.on("execution:settled",d=>{if(d?.workflowId!==_currentWfId)return;_hostSettled=true;renderRunOutcome();requestRunHostAutoClose()});eb.on("execution:captcha_detected",d=>{const job=runOwnsProviderEvent(d);if(!job)return;_hostProviderNotice=String(d.text||"Google Flow needs attention.");if(d.action==="normal_error"||d.recoveryMode==="normal_error"){addLog(_hostProviderNotice,"warn");return}const paused=job.state==="paused",stopping=job.state==="stopped"||d.action==="stop_batch";setStatus(paused?"Paused":stopping?"Stopping":"Needs attention",paused?"paused":stopping?"stopping":"warning");if(paused)_hostPausedJobIds.add(job.id);if(job.workflowNodeId)setNodeBadge(job.workflowNodeId,paused?"paused":stopping?"stopping":"waiting");setProgress(_hostProviderNotice);addLog(_hostProviderNotice,"warn")});eb.on("execution:captcha_resolved",d=>{if(d?.resumed!==true||!_running)return;const jobs=[..._hostPausedJobIds].map(jobId=>runOwnsProviderEvent({jobId})).filter(job=>job&&job.state==="running");if(!jobs.length)return;for(const job of jobs){_hostPausedJobIds.delete(job.id);if(job.workflowNodeId)setNodeBadge(job.workflowNodeId,"running")}setStatus("Running","running");refreshRunProgress()});eb.on("execution:quota_exceeded",d=>{if(!runOwnsProviderEvent(d))return;_hostProviderNotice=String(d.text||"Flow quota reached");setStatus("Quota exceeded","warning");setProgress(_hostProviderNotice);addLog(_hostProviderNotice,"error")});eb.on("node:policy_blocked",d=>{if(runOwnsProviderEvent(d))addLog("Policy: "+(d.text||"policy violation"),"error")});eb.on("execution:rate_limited",d=>{if(runOwnsProviderEvent(d)){setStatus("Rate limited","warning");setProgress(d.text||"Waiting for the provider.");addLog("Rate limit: "+(d.text||""),"warn")}})}function bindRemoteStop(){chrome.runtime.onMessage.addListener(msg=>{if(msg?.action==="sseRelay:entitlements_changed"){if(msg.data?.features&&msg.data?.plan)window.featureGate?.handleSseEntitlementsChanged?.(msg.data);window.ProviderConfigManager?.fetchPrivateConfigs?.(true).catch(()=>{})}if(msg?.action==="sseRelay:system_settings_changed"&&msg.data){window.SystemConfig?.handleSseUpdate?.(msg.data)}if(msg?.action==="captcha:userAction"){window.eventBus?.emit("captcha:userAction",{decision:msg.decision})}if(msg?.action==="workflowExecutionEvent"&&["execution:stop","execution:force_stop"].includes(msg.event)){const stopWfId=msg.data?.wf_id;if(!stopWfId||stopWfId===_currentWfId){const exec=window.workflowExecutor;if(exec?.handleRemoteStop?.(stopWfId,msg.data?.run_id,msg.data?.stopSource)===false)return;addLog("Received a remote stop request...","warn");setStatus("Stopping...","running");const stopBtn=$("rwStop");if(stopBtn)stopBtn.disabled=true}}if(msg?.action==="loadRunWorkflow"){consumePendingAndRun()}});$("rwStop")?.addEventListener("click",()=>{if(window.workflowExecutor?.isRunning){addLog("Stopping workflow...","warn");try{window.workflowExecutor.stop(true)}catch(_){}}})}async function fillProjectIdIfMissing(wf,runNodes=wf?.nodes||[]){try{if(!wf||wf.project_id)return;const localOnly=runNodes.every(node=>["text_extract","text","delay","note"].includes(node.node_type)||node.node_type==="prompt"&&(node.use_ai!==true||node.multi_prompt===true));if(localOnly)return;const ctx=await window.MessageBridge?.sendToContentScript?.("getProjectContext").catch(()=>null);if(ctx?.projectId&&!ctx.projectError){await window.storageManager.saveWorkflow({...wf,nodes:void 0,edges:void 0,project_id:ctx.projectId,project_name:ctx.projectName||void 0});addLog(`Assigned workflow to the open Flow project: ${ctx.projectName||ctx.projectId}`)}}catch(e){addLog(`Could not assign the project (skipped): ${e.message}`,"warn")}}const PROVIDER_LABEL={flow:"Google Flow (flow.google.com)",chatgpt:"ChatGPT (chatgpt.com)",grok:"Grok (grok.com)",gemini:"Gemini (gemini.google.com)"};function providersOfWorkflow(nodes,onlyNodeId=null){const set=new Set;for(const n of nodes||[]){if(n.enabled===false&&!onlyNodeId)continue;if(onlyNodeId&&n.node_id!==onlyNodeId)continue;if(["image","generate","flow"].includes(n.node_type))set.add("flow");else if(n.node_type==="chatgpt")set.add("chatgpt");else if(n.node_type==="grok")set.add("grok");else if(n.node_type==="gemini")set.add("gemini");else if(n.node_type==="muse")set.add("muse");else if(n.node_type==="prompt"&&n.use_ai===true&&n.multi_prompt!==true)set.add(n.provider==="gemini"?"gemini":"chatgpt")}return[...set]}async function checkProvidersQuiet(providers){const notReady=[];for(const p of providers){let ready=false,reason="";try{if(p==="muse"){const checkWeb=()=>window.MuseSession?.ensureReady?.({createIfMissing:false,activate:false,silent:true});const r=window.MuseApiFacade?.checkReadiness?await window.MuseApiFacade.checkReadiness({entries:window.MuseApiFacade.nodeReadinessEntries(_spaceHealthNodes,{includeDisabled:true,edges:_spaceHealthWorkflow?.edges||[]}),checkWeb}):await checkWeb();ready=r?.ready===true;reason=r?.error||"tab not open"}else if(p==="chatgpt"){const r=await window.ChatGPTSession?.ensureReady?.({createIfMissing:false,activate:false});ready=!!r?.ready;reason=r?.error==="NOT_LOGGED_IN"?"not logged in":r?.error||"tab not open"}else if(p==="gemini"){const r=await window.GeminiSession?.ensureReady?.({createIfMissing:false,activate:false});ready=!!r?.ready;reason=r?.error==="NOT_LOGGED_IN"?"not logged in":r?.error||"tab not open"}else if(p==="grok"){const r=await window.GrokSession?.ensureReady?.({createIfMissing:false,activate:false});ready=!!r?.ready;reason=r?.error==="NOT_LOGGED_IN"?"not logged in":r?.error||"tab not open"}else if(p==="flow"){const health=await spaceFlowApiHealth(_spaceHealthNodes,_spaceHealthWorkflow?.project_id);if(health.apiMode&&(health.ready||health.required)){_preflightFlowApiMode=window.PromptQueue?.isEnabled?.()===true;ready=health.ready;reason=health.error||""}else{_preflightFlowApiMode=false;ready=await window.ProjectHelper?.isFlowProjectReady?.()===true;reason="Flow is not open or no project is selected"}}}catch(e){reason=e?.message||"check failed"}if(!ready)notReady.push({provider:p,reason})}return notReady}function showProviderPanel(notReady,onRetry,onForce){const panel=$("rwProviders");if(!panel)return;panel.hidden=false;panel.innerHTML="";const h=document.createElement("h4");h.textContent=`${notReady.length} provider(s) not ready`;const ul=document.createElement("ul");notReady.forEach(x=>{const li=document.createElement("li");li.textContent=`${PROVIDER_LABEL[x.provider]||x.provider}: ${x.reason}`;ul.appendChild(li)});const hint=document.createElement("div");hint.style.cssText="color:#a8a8ae;margin-bottom:10px;";hint.textContent="Open the provider tab and sign in (Flow needs an open project), then click Re-check.";const actions=document.createElement("div");actions.className="rw-pv-actions";const btnRetry=document.createElement("button");btnRetry.type="button";btnRetry.className="rw-pv-btn rw-pv-btn--primary";btnRetry.textContent="Re-check";btnRetry.addEventListener("click",onRetry);const btnForce=document.createElement("button");btnForce.type="button";btnForce.className="rw-pv-btn";btnForce.textContent="Run anyway";btnForce.disabled=notReady.some(entry=>entry.provider==="flow");btnForce.addEventListener("click",onForce);actions.append(btnRetry,btnForce);panel.append(h,ul,hint,actions)}function hideProviderPanel(){const p=$("rwProviders");if(p){p.hidden=true;p.innerHTML=""}}function preflightGate(providers){return new Promise(resolve=>{const attempt=async()=>{setProgress("Checking providers...");const notReady=await checkProvidersQuiet(providers);if(!notReady.length){hideProviderPanel();resolve(true);return}setStatus("Waiting for provider","failed");setProgress("Provider is not ready \u2014 see the instructions below.");addLog(`Providers not ready: ${notReady.map(x=>x.provider).join(", ")}`,"warn");let forcing=false;const force=async()=>{if(forcing)return;forcing=true;try{const blocked=providers.includes("flow")?await checkProvidersQuiet(["flow"]):[];if(blocked.length){showProviderPanel([...notReady.filter(entry=>entry.provider!=="flow"),...blocked],attempt,force);return}hideProviderPanel();addLog("Provider check skipped \u2014 running anyway.","warn");resolve(true)}finally{forcing=false}};showProviderPanel(notReady,attempt,force)};attempt()})}let _consuming=false;async function consumePendingAndRun(){if(_consuming)return;if(_running||window.workflowExecutor?.isRunning){addLog("A workflow is already running \u2014 ignoring the new request.","warn");return}_consuming=true;try{const stored=await chrome.storage.local.get(["_pendingRunWorkflow"]);const pending=stored?._pendingRunWorkflow;if(!pending?.wfId){setProgress("No workflow is waiting to run.");return}const preparationStartedAt=Date.now();const tracePreparation=stage=>console.info?.("[RunHostPreparation]",JSON.stringify({operationId:`host:${preparationStartedAt}`,workflowId:pending.wfId,nodeId:pending.nodeId||null,stage,elapsedMs:Date.now()-preparationStartedAt,sinceDispatchMs:Math.max(0,Date.now()-Number(pending.timestamp||preparationStartedAt))}));tracePreparation("command_consumed");await chrome.storage.local.remove("_pendingRunWorkflow");if(Date.now()-(pending.timestamp||0)>2*60*1e3){setStatus("Could not start","failed");setProgress("The run request expired \u2014 click Run again.");return}if(pending.actorUserId!=null){try{await window.workflowExecutor.assertCommandActor(pending.actorUserId)}catch(error){setStatus("Could not start","failed");setProgress(window.I18n?.t?.("flowErrors.codes.ACCOUNT_SCOPE_CHANGED")||error.message);return}}_currentWfId=pending.wfId;_hostRunEpoch++;_hostSettled=false;_hostCompleted=false;_hostInspecting=false;_hostResultReceipts.clear();_hostReceiptRevision=0;_hostDurability=null;window.workflowRunHostLifecycle?.resetNotices();_failedNodeIds.clear();_hostNodeStates.clear();_hostReviewNodeIds.clear();_hostPausedJobIds.clear();_hostOutcome=null;_hostProviderNotice="";_hostFlowSyncStage=null;_hostSyncWarning=false;_doneNodes=0;updateBar();_runLogUserId=window.authManager?.getUser?.()?.id||null;if($("rwLog"))$("rwLog").textContent="";setTitle(`Workflow ${pending.wfId}`);setStatus("Preparing","running");setProgress("Loading workflow...");hideProviderPanel();let wfMeta=null;try{wfMeta=await window.storageManager?.getWorkflow?.(pending.wfId);if(pending.actorUserId!=null)await window.workflowExecutor.assertCommandActor(pending.actorUserId)}catch(e){addLog(`Could not load workflow: ${e.message}`,"error");setStatus("Failed","failed");setProgress(`Could not load workflow: ${e.message}`);return}_spaceHealthWorkflow=wfMeta;tracePreparation("definition_loaded");if(wfMeta?.wf_name)setTitle(wfMeta.wf_name);const _allNodes=wfMeta?.nodes||[];const _scopeIds=Array.isArray(pending.onlyNodeIds)&&pending.onlyNodeIds.length?new Set(pending.onlyNodeIds.map(String)):null;const _scopedNodes=_scopeIds?_allNodes.filter(n=>_scopeIds.has(String(n.node_id))):_allNodes;_spaceHealthNodes=pending.nodeId?_scopedNodes.filter(node=>node.node_id===pending.nodeId):_scopedNodes;renderNodeList(_scopedNodes,pending.nodeId||null);await fillProjectIdIfMissing(wfMeta,pending.nodeId?_spaceHealthNodes:_spaceHealthNodes.filter(node=>node.enabled!==false));tracePreparation("project_ready");_preflightFlowApiMode=false;const provs=providersOfWorkflow(_scopedNodes,pending.nodeId||null);if(provs.length)await preflightGate(provs);tracePreparation("providers_ready");setStatus("Preparing","running");const runOpts={manualSubmitMode:pending.manualSubmitMode===true};if(pending.actorUserId!=null)runOpts.actorUserId=String(pending.actorUserId);if(Array.isArray(pending.onlyNodeIds)&&pending.onlyNodeIds.length)runOpts.onlyNodeIds=pending.onlyNodeIds;let ok=false,groupPrepared=!pending.groupReset;try{if(pending.groupReset){const preparingEpoch=_hostRunEpoch;const prepared=await window.WorkflowGroupRunPreparation.prepare(wfMeta,pending,{flowApiMode:_preflightFlowApiMode,assertCurrent:async()=>{if(_groupPreparationDisposed||preparingEpoch!==_hostRunEpoch||pending.wfId!==_currentWfId)throw Error("ABORTED");await window.workflowExecutor.assertCommandActor(pending.actorUserId)}});if(!prepared){setStatus(window.I18n?.t("workflow.cannotRun")||"Not started","failed");setProgress(window.I18n?.t("workflow.cannotRun")||"Cannot run workflow");return}groupPrepared=true}if(pending.nodeId){addLog(`Running one node: ${pending.nodeId}`);tracePreparation("node_executor_started");ok=await window.workflowExecutor.executeSingleNode(pending.wfId,pending.nodeId,runOpts)}else{if(runOpts.onlyNodeIds)addLog(`Running a group of ${runOpts.onlyNodeIds.length} nodes`);tracePreparation("workflow_executor_started");ok=await window.workflowExecutor.execute(pending.wfId,runOpts)}}catch(e){if(!groupPrepared){const message=window.I18n?.t("workflow.cannotRun")||"Cannot run workflow";const detail=e.message==="FLOW_RELOAD_IN_PROGRESS"?window.I18n?.t("workflow.reloadingFlowWait")||message:message;addLog(`${detail} (${e.message})`,"error");setStatus(message,"failed");setProgress(detail);return}addLog(`Workflow execution failed: ${e.message}`,"error");setStatus("Failed","failed");setProgress(`Error: ${e.message}`);return}if(!ok&&!window.workflowExecutor?.isRunning){if($("rwStatus")?.textContent==="Preparing"){setStatus("Could not start","failed");setProgress("Workflow did not start (quota, busy state, or configuration error). See the log below.")}}}finally{_consuming=false;requestRunHostAutoClose()}}document.addEventListener("DOMContentLoaded",async()=>{if(window.EventBus&&!window.eventBus)window.eventBus=new EventBus;$("rwLogToggle")?.addEventListener("click",()=>$("rwLogWrap")?.classList.toggle("rw-log-wrap--open"));bindRunLogControls();bindRunHostLifecycle();bindProgressUI();bindRemoteStop();const ready=await bootstrap().catch(e=>{setStatus("Startup failed","failed");setProgress(`Bootstrap error: ${e.message}`);addLog(`Bootstrap error: ${e.message}`,"error");return false});if(!ready)return;bindVisibleHostDialogs();addLog("Execution environment is ready.");await consumePendingAndRun()})})();
+(function () {
+  const $ = (id) => document.getElementById(id);
+  const MAX_LOG_LINES = 400;
+  function setStatus(text, cls) {
+    const el = $("rwStatus");
+    if (!el) return;
+    el.textContent = text;
+    el.className = "rw-status" + (cls ? ` rw-status--${cls}` : "");
+  }
+  function setTitle(text) {
+    const el = $("rwTitle");
+    if (el) {
+      el.textContent = text;
+      el.title = text;
+    }
+  }
+  function setProgress(text) {
+    const el = $("rwProgress");
+    if (el) el.textContent = text;
+  }
+  function addLog(msg, level) {
+    const box = $("rwLog");
+    if (!box) return;
+    if (level === "error") $("rwLogWrap")?.classList.add("rw-log-wrap--open");
+    const line = document.createElement("div");
+    line.className = "rw-log-line" + (level ? ` rw-log-line--${level}` : "");
+    line.textContent = `[${new Date().toLocaleTimeString(window.I18n?.getLocale?.() || navigator.language)}] ${msg}`;
+    box.appendChild(line);
+    while (box.childNodes.length > MAX_LOG_LINES)
+      box.removeChild(box.firstChild);
+    box.scrollTop = box.scrollHeight;
+    queueRunLogSnapshot();
+  }
+  let _running = false;
+  const _failedNodeIds = new Set();
+  let _currentWfId = null;
+  let _runLogUserId = null,
+    _runLogSnapshot = null,
+    _runLogSaveFlight = null;
+  function queueRunLogSnapshot() {
+    window.WorkflowRunLogUI?.refresh();
+    if (!_currentWfId || !_runLogUserId) return;
+    _runLogSnapshot = {
+      userId: _runLogUserId,
+      workflowId: _currentWfId,
+      lines: Array.from(
+        document.querySelectorAll("#rwLog .rw-log-line"),
+        (el) => el.textContent,
+      ),
+    };
+    if (_runLogSaveFlight) return;
+    _runLogSaveFlight = Promise.resolve()
+      .then(async () => {
+        while (_runLogSnapshot) {
+          const value = _runLogSnapshot;
+          _runLogSnapshot = null;
+          await WorkflowRunLogStore.write(
+            value.userId,
+            value.workflowId,
+            value.lines,
+          );
+        }
+      })
+      .catch(() => {
+        console.info("[WorkflowRunLog]", { stage: "snapshot_failed" });
+      })
+      .finally(() => {
+        _runLogSaveFlight = null;
+        if (_runLogSnapshot) queueRunLogSnapshot();
+      });
+  }
+  function bindRunLogControls() {
+    window.WorkflowRunLogUI?.bindCopyButton(() => _runLogUserId);
+    let documentId = null;
+    chrome.runtime
+      .sendMessage({ action: "workflowSpaceHealthIdentify" })
+      .then((value) => {
+        documentId = value?.documentId || null;
+      })
+      .catch(() => {});
+    chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+      if (
+        message?.action !== "workflowSpaceShowRunLog" ||
+        sender.id !== chrome.runtime.id ||
+        !documentId ||
+        message.documentId !== documentId
+      )
+        return;
+      (async () => {
+        if (
+          message.workflowId !== _currentWfId ||
+          String(message.userId) !== String(_runLogUserId) ||
+          !(await WorkflowRunLogStore.authorized(_runLogUserId))
+        )
+          return { ok: false };
+        _hostInspecting = true;
+        $("rwLogWrap")?.classList.add("rw-log-wrap--open");
+        return { ok: true };
+      })().then(sendResponse, () => sendResponse({ ok: false }));
+      return true;
+    });
+    chrome.storage.onChanged.addListener((changes, area) => {
+      if (
+        area === "local" &&
+        changes.af_auth &&
+        (!changes.af_auth.newValue?.token ||
+          String(changes.af_auth.newValue?.user?.id) !== String(_runLogUserId))
+      ) {
+        _runLogUserId = null;
+        _runLogSnapshot = null;
+        if ($("rwLog")) $("rwLog").textContent = "";
+        window.WorkflowRunLogUI?.refresh();
+      }
+    });
+  }
+  let _runHostDialogCount = 0;
+  let _hostRunEpoch = 0,
+    _hostSettled = false,
+    _hostCompleted = false,
+    _hostInspecting = false;
+  let _hostPostWorkWait = null;
+  const _hostResultReceipts = new Map();
+  let _hostReceiptRevision = 0,
+    _hostDurability = null;
+  function recordRunHostResult(data) {
+    const node = data?.node,
+      result = data?.result || {};
+    if (!node?.node_id || (node.wf_id && node.wf_id !== _currentWfId)) return;
+    const receipt = { status: "completed" };
+    if (Array.isArray(result.fileIds))
+      receipt.result_file_ids = result.fileIds.join(",");
+    else if (Object.hasOwn(node, "result_file_ids"))
+      receipt.result_file_ids = node.result_file_ids;
+    if (typeof node.result_text === "string")
+      receipt.result_text = node.result_text;
+    for (const key of ["result_frame_file_ids", "result_clean_file_ids"])
+      if (Object.hasOwn(node, key)) receipt[key] = node[key];
+    if (
+      JSON.stringify(_hostResultReceipts.get(node.node_id)) !==
+      JSON.stringify(receipt)
+    ) {
+      _hostResultReceipts.set(node.node_id, receipt);
+      _hostReceiptRevision++;
+    }
+  }
+  function recordRunHostMetadata(data) {
+    const id = data?.node?.node_id || data?.nodeId,
+      previous = _hostResultReceipts.get(id);
+    if (!previous || (data.workflowId && data.workflowId !== _currentWfId))
+      return;
+    const source = data.result || {},
+      receipt = { ...previous };
+    for (const [key, field] of [
+      ["fileIds", "result_file_ids"],
+      ["frameFileIds", "result_frame_file_ids"],
+      ["cleanFileIds", "result_clean_file_ids"],
+    ]) {
+      if (Object.hasOwn(source, key))
+        receipt[field] = Array.isArray(source[key])
+          ? source[key].join(",")
+          : source[key];
+    }
+    if (Object.hasOwn(data, "resultFileIds"))
+      receipt.result_file_ids = data.resultFileIds;
+    if (JSON.stringify(previous) !== JSON.stringify(receipt)) {
+      _hostResultReceipts.set(id, receipt);
+      _hostReceiptRevision++;
+    }
+  }
+  function verifyRunHostResults(scope) {
+    const key = `${scope.runEpoch}:${_hostReceiptRevision}`;
+    if (_hostDurability?.key === key) return _hostDurability.promise;
+    const receipts = [..._hostResultReceipts.entries()];
+    const promise = (async () => {
+      if (!receipts.length) return true;
+      const storage = window.storageManager?.storage;
+      if (
+        typeof window.ApiStorage !== "function" ||
+        !(storage instanceof window.ApiStorage)
+      )
+        return false;
+      const nodes = await storage.getNodes(scope.workflowId);
+      if (!Array.isArray(nodes)) return false;
+      return receipts.every(([id, receipt]) => {
+        const node = nodes.find((entry) => entry.node_id === id);
+        if (!node || node.status !== "completed") return false;
+        return Object.entries(receipt).every(([field, expected]) => {
+          const normalize = (value) =>
+            field.endsWith("_file_ids")
+              ? String(value ?? "")
+                  .split(",")
+                  .map((part) => part.trim())
+                  .filter(Boolean)
+                  .join(",")
+              : String(value ?? "");
+          return normalize(node[field]) === normalize(expected);
+        });
+      });
+    })().catch(() => false);
+    _hostDurability = { key, promise };
+    return promise;
+  }
+  function runHostState() {
+    const executor = window.workflowExecutor;
+    const queue = window.PromptQueue?._instance;
+    return {
+      workflowId: _currentWfId,
+      userId: String(window.authManager?.getUser?.()?.id || ""),
+      runEpoch: _hostRunEpoch,
+      completed: _hostCompleted,
+      settled: _hostSettled,
+      receiptRevision: _hostReceiptRevision,
+      dialogs: _runHostDialogCount,
+      inspecting: _hostInspecting,
+      busy:
+        _running ||
+        _consuming ||
+        !!executor?.isRunning ||
+        !!executor?._executionTask ||
+        !!executor?._executionInProgress ||
+        !!executor?._singleNodeSession?.records?.size ||
+        !!queue?._apiRefreshFlushPromise ||
+        !!queue?.getActiveReloadPromise?.() ||
+        window.WorkflowSpaceHealthLifecycle?.isBusy?.() !== false,
+    };
+  }
+  function requestRunHostAutoClose() {
+    const queue = window.PromptQueue?._instance,
+      epoch = _hostRunEpoch;
+    const work = [
+      queue?._apiRefreshFlushPromise,
+      queue?.getActiveReloadPromise?.(),
+    ].filter(Boolean);
+    if (!work.length) {
+      void window.workflowRunHostLifecycle?.maybeClose();
+      return;
+    }
+    if (_hostPostWorkWait?.epoch === epoch) return;
+    if (_hostCompleted)
+      setProgress(
+        "Workflow completed. Waiting for Google Flow synchronization\u2026",
+      );
+    const wait = { epoch, promise: null };
+    _hostPostWorkWait = wait;
+    wait.promise = Promise.allSettled(work)
+      .then(() => {
+        if (_hostRunEpoch === epoch) {
+          if (_hostCompleted) renderRunOutcome();
+          void window.workflowRunHostLifecycle?.maybeClose();
+        }
+      })
+      .finally(() => {
+        if (_hostPostWorkWait === wait) _hostPostWorkWait = null;
+      });
+  }
+  function bindRunHostLifecycle() {
+    const retained = new Set();
+    let retainedEpoch = null;
+    window.workflowRunHostLifecycle = new WorkflowRunHostLifecycle({
+      readState: runHostState,
+      verifyResults: verifyRunHostResults,
+      persistLog: async () => {
+        queueRunLogSnapshot();
+        if (_runLogSaveFlight) await _runLogSaveFlight;
+        return WorkflowRunLogStore.write(
+          _runLogUserId,
+          _currentWfId,
+          Array.from(
+            document.querySelectorAll("#rwLog .rw-log-line"),
+            (el) => el.textContent,
+          ),
+        ).catch(() => false);
+      },
+      onRetain: (reason) => {
+        if (retainedEpoch !== _hostRunEpoch) {
+          retained.clear();
+          retainedEpoch = _hostRunEpoch;
+        }
+        const key = `${_hostRunEpoch}:${reason}`;
+        if (reason === "results_not_saved")
+          setStatus("Save unconfirmed", "warning");
+        else if (reason === "log_not_saved")
+          setStatus("Log not saved", "warning");
+        else if (
+          [
+            "HOST_RECEIPT_PENDING",
+            "HOST_NOT_SETTLED",
+            "EXECUTION_STILL_ACTIVE",
+          ].includes(reason)
+        )
+          setStatus("Syncing", "syncing");
+        if (reason === "native_context_required")
+          setProgress(
+            "Workflow completed. Open the TobyFlow sidebar to close this run window automatically.",
+          );
+        else if (reason === "native_context_not_ready")
+          setProgress(
+            "Workflow completed. Waiting for the TobyFlow sidebar/editor to be ready.",
+          );
+        else if (reason === "log_not_saved")
+          setProgress(
+            "Workflow completed. The log could not be saved, so this window stays open.",
+          );
+        else if (reason === "results_not_saved")
+          setProgress(
+            "Workflow completed. Saved results are not confirmed, so this window stays open.",
+          );
+        else if (
+          [
+            "HOST_RECEIPT_PENDING",
+            "HOST_NOT_SETTLED",
+            "EXECUTION_STILL_ACTIVE",
+          ].includes(reason)
+        )
+          setProgress(
+            "Workflow completed. Waiting for pending operations to finish.",
+          );
+        if (retained.has(key)) return;
+        retained.add(key);
+        addLog(`[RunHostLifecycle] retained: ${reason}`);
+      },
+    });
+    window.workflowRunHostNotice = (options) => {
+      if (!window.workflowRunHostLifecycle.seenWarnings.has(options.code))
+        addLog(`[RunHostNotice] ${options.code}`, "warn");
+      return window.workflowRunHostLifecycle.showWarning(options);
+    };
+    for (const id of ["rwLogToggle", "rwCopyLog"])
+      $(id)?.addEventListener("click", () => {
+        _hostInspecting = true;
+      });
+    let documentId = null;
+    chrome.runtime
+      .sendMessage({ action: "workflowSpaceHealthIdentify" })
+      .then((reply) => {
+        documentId = reply?.documentId || null;
+      })
+      .catch(() => {});
+    chrome.runtime.onMessage.addListener((message, sender, reply) => {
+      if (
+        message?.action !== "workflowRunHostCloseProbe" ||
+        sender.id !== chrome.runtime.id ||
+        !documentId ||
+        message.documentId !== documentId
+      )
+        return;
+      const scope = runHostState();
+      reply({
+        ok:
+          window.workflowRunHostLifecycle.current(message) &&
+          scope.workflowId === message.workflowId &&
+          scope.userId === String(message.userId),
+      });
+      return false;
+    });
+  }
+  function bindVisibleHostDialogs() {
+    const dialog = window.customDialog;
+    if (!dialog || dialog._spaceVisibleHostBound) return;
+    dialog._spaceVisibleHostBound = true;
+    for (const method of ["confirm", "alert", "confirmResumeOrRerun"]) {
+      if (typeof dialog[method] !== "function") continue;
+      const original = dialog[method].bind(dialog);
+      dialog[method] = function (...args) {
+        _runHostDialogCount++;
+        console.info("[WorkflowRunHostDialog]", {
+          method,
+          workflowId: _currentWfId,
+          executing: window.workflowExecutor?.isRunning === true,
+          status: $("rwStatus")?.textContent || null,
+        });
+        let previous = null,
+          hostId = null;
+        const reveal = (async () => {
+          try {
+            const prior = await chrome.windows.getLastFocused();
+            const host = await chrome.windows.getCurrent();
+            hostId = host?.id;
+            if (
+              !Number.isInteger(hostId) ||
+              !_runHostDialogCount ||
+              prior?.id === hostId
+            )
+              return;
+            const current = await chrome.windows.getLastFocused();
+            if (current?.id !== prior?.id || current?.focused !== true) return;
+            await chrome.windows.update(hostId, { focused: true });
+            previous = prior.id;
+          } catch (_) {}
+        })();
+        let result;
+        try {
+          result = original(...args);
+        } catch (error) {
+          _runHostDialogCount--;
+          throw error;
+        }
+        return Promise.resolve(result).finally(async () => {
+          _runHostDialogCount--;
+          await reveal;
+          try {
+            if (!_runHostDialogCount && Number.isInteger(previous)) {
+              const current = await chrome.windows.getLastFocused();
+              if (current?.id === hostId && current?.focused === true)
+                await chrome.windows.update(previous, { focused: true });
+            }
+          } catch (_) {}
+          requestRunHostAutoClose();
+        });
+      };
+    }
+  }
+  let _spaceHealthWorkflow = null,
+    _spaceHealthNodes = [],
+    _preflightFlowApiMode = false;
+  let _groupPreparationDisposed = false;
+  window.addEventListener(
+    "pagehide",
+    () => {
+      _groupPreparationDisposed = true;
+    },
+    { once: true },
+  );
+  async function spaceFlowApiHealth(nodes, projectId) {
+    await window.ExecutionConfig?.getConfig?.(false);
+    const flowNodes = (nodes || []).filter(
+      (node) =>
+        node.enabled !== false &&
+        ["image", "generate", "flow"].includes(node.node_type),
+    );
+    const webOnly = flowNodes.some(
+      (node) =>
+        !(node.media_type === "Video" && node.video_input_type === "Frames") &&
+        (node.voice_search_value ||
+          node.character_search_value ||
+          window.MentionParser?.hasComponents?.(
+            window.workflowExecutor?._resolveEffectivePrompt?.(
+              node,
+              _spaceHealthWorkflow || { nodes, edges: [] },
+            )?.text ||
+              node.prompt ||
+              "",
+          )),
+    );
+    const apiMode =
+      !webOnly &&
+      window.FlowApiAdapter?.isApiModeIntended?.({ forWorkflow: true }) ===
+        true;
+    const required =
+      apiMode &&
+      window.FlowApiAdapter?.isApiModeRequired?.({ forWorkflow: true }) ===
+        true;
+    if (!apiMode)
+      return { apiMode: false, required: false, ready: false, error: null };
+    const mediaTypes = [
+      ...new Set(
+        flowNodes.map((node) =>
+          /video/i.test(node.media_type || "") ? "video" : "image",
+        ),
+      ),
+    ];
+    const status = await window.FlowApiSessionCoordinator?.checkScopes?.({
+      surfaces: ["workflow"],
+      mediaTypes,
+      projectId: projectId || void 0,
+      passive: true,
+      force: false,
+    });
+    return {
+      apiMode,
+      required,
+      ready: status?.ready === true,
+      driver: status?.driver || null,
+      checking: status?.connecting === true,
+      error:
+        status?.reason ||
+        (status?.ready === true ? null : "FLOW_API_HEALTH_UNAVAILABLE"),
+    };
+  }
+  chrome.runtime.onMessage.addListener((message, sender, sendResponse) => {
+    if (message?.action !== "workflowSpaceHealthProbe") return;
+    if (
+      sender.id !== chrome.runtime.id ||
+      !_spaceHealthWorkflow ||
+      message.workflowId !== _currentWfId
+    )
+      return;
+    spaceFlowApiHealth(
+      Array.isArray(message.nodeIds) && message.nodeIds.length
+        ? _spaceHealthWorkflow.nodes.filter((node) =>
+            message.nodeIds.includes(node.node_id),
+          )
+        : _spaceHealthWorkflow.nodes,
+      _spaceHealthWorkflow.project_id,
+    )
+      .then((health) => sendResponse({ ok: true, health }))
+      .catch(() =>
+        sendResponse({ ok: false, error: "FLOW_API_HEALTH_UNAVAILABLE" }),
+      );
+    return true;
+  });
+  let _totalNodes = 0;
+  let _doneNodes = 0;
+  const NODE_BADGE_LABEL = {
+    pending: "Pending",
+    queued: "Queued",
+    running: "Running",
+    retrying: "Retrying",
+    paused: "Paused",
+    waiting: "Needs attention",
+    stopping: "Stopping",
+    completed: "Done",
+    failed: "Failed",
+    skipped: "Skipped",
+    cancelled: "Stopped",
+    review: "Needs review",
+    off: "Off",
+    outside: "Not selected",
+  };
+  const _hostNodeStates = new Map(),
+    _hostReviewNodeIds = new Set(),
+    _hostPausedJobIds = new Set();
+  let _hostOutcome = null,
+    _hostOnlyNodeId = null,
+    _hostProviderNotice = "",
+    _hostFlowSyncStage = null,
+    _hostSyncWarning = false;
+  function renderNodeList(nodes, onlyNodeId = null) {
+    const box = $("rwNodes");
+    if (!box) return;
+    box.textContent = "";
+    _hostNodeStates.clear();
+    _hostReviewNodeIds.clear();
+    _hostPausedJobIds.clear();
+    _hostOnlyNodeId = onlyNodeId;
+    _hostOutcome = null;
+    _hostProviderNotice = "";
+    _hostFlowSyncStage = null;
+    _hostSyncWarning = false;
+    (nodes || [])
+      .filter((n) => n.node_type !== "note")
+      .forEach((n, i) => {
+        const selected = !onlyNodeId || n.node_id === onlyNodeId;
+        const included = selected && (!!onlyNodeId || n.enabled !== false);
+        const state = !selected
+          ? "outside"
+          : !included
+            ? "off"
+            : !onlyNodeId && n.status === "completed"
+              ? "completed"
+              : "pending";
+        if (included) _hostNodeStates.set(n.node_id, state);
+        const row = document.createElement("div");
+        row.className = `rw-node rw-node--${state}`;
+        row.id = `rw-node-${n.node_id}`;
+        if (!included) row.classList.add("rw-node--disabled");
+        const idx = document.createElement("span");
+        idx.className = "rw-node-idx";
+        idx.textContent = String(i + 1);
+        const label = document.createElement("span");
+        label.className = "rw-node-label";
+        const name = document.createElement("span");
+        name.className = "rw-node-name";
+        name.textContent = n.node_name || n.node_type;
+        const phase = document.createElement("span");
+        phase.className = "rw-node-phase";
+        phase.hidden = true;
+        label.append(name, phase);
+        const type = document.createElement("span");
+        type.className = "rw-node-type";
+        type.textContent = n.node_type;
+        const badge = document.createElement("span");
+        badge.className = `rw-node-badge rw-node-badge--${state}`;
+        badge.dataset.badge = "1";
+        badge.textContent = NODE_BADGE_LABEL[state];
+        row.append(idx, label, type, badge);
+        box.appendChild(row);
+      });
+    updateBar();
+  }
+  function setNodeBadge(nodeId, status) {
+    const row = document.getElementById(`rw-node-${nodeId}`);
+    if (!row) return;
+    _hostNodeStates.set(nodeId, status);
+    row.className = "rw-node rw-node--" + status;
+    const badge = row.querySelector("[data-badge]");
+    if (badge) {
+      badge.className = `rw-node-badge rw-node-badge--${status}`;
+      badge.textContent = NODE_BADGE_LABEL[status] || status;
+    }
+    if (status === "running") {
+      try {
+        row.scrollIntoView({ block: "nearest" });
+      } catch (_) {}
+    }
+  }
+  function setNodePhase(nodeId, text) {
+    const row = document.getElementById(`rw-node-${nodeId}`),
+      el = row?.querySelector(".rw-node-phase");
+    if (!el) return;
+    el.textContent = String(text || "");
+    el.title = String(text || "");
+    el.hidden = !text;
+  }
+  function runProgressSummary() {
+    const counts = {
+      total: _hostNodeStates.size,
+      settled: 0,
+      completed: 0,
+      failed: 0,
+      skipped: 0,
+      cancelled: 0,
+      review: 0,
+      active: 0,
+      queued: 0,
+    };
+    for (const state of _hostNodeStates.values()) {
+      if (
+        ["completed", "failed", "skipped", "cancelled", "review"].includes(
+          state,
+        )
+      ) {
+        counts.settled++;
+        counts[state]++;
+      } else if (
+        ["running", "retrying", "paused", "waiting", "stopping"].includes(state)
+      )
+        counts.active++;
+      else if (["pending", "queued"].includes(state)) counts.queued++;
+    }
+    return counts;
+  }
+  function updateBar(error = false) {
+    const counts = runProgressSummary();
+    _totalNodes = counts.total;
+    _doneNodes = counts.settled;
+    const fill = $("rwBarFill");
+    if (!fill) return;
+    const pct = counts.total
+      ? Math.round((counts.settled / counts.total) * 100)
+      : 0;
+    fill.style.width = `${Math.min(100, pct)}%`;
+    fill.className =
+      "rw-bar-fill" +
+      (error || counts.failed || _failedNodeIds.size
+        ? " rw-bar-fill--error"
+        : counts.review || counts.skipped
+          ? " rw-bar-fill--warning"
+          : "");
+    fill.parentElement?.setAttribute("role", "progressbar");
+    fill.parentElement?.setAttribute("aria-valuemin", "0");
+    fill.parentElement?.setAttribute("aria-valuemax", "100");
+    fill.parentElement?.setAttribute("aria-valuenow", String(pct));
+  }
+  function refreshRunProgress() {
+    if (_hostOutcome) {
+      renderRunOutcome();
+      if (_hostSettled) requestRunHostAutoClose();
+      return;
+    }
+    updateBar();
+    const c = runProgressSummary();
+    if (_running && _hostFlowSyncStage && !c.active)
+      setStatus("Syncing", "syncing");
+    else if (
+      _running &&
+      !_hostFlowSyncStage &&
+      $("rwStatus")?.textContent === "Syncing"
+    )
+      setStatus("Running", "running");
+    setProgress(
+      `${c.settled}/${c.total} processed \xB7 ${c.completed} done \xB7 ${c.failed} failed \xB7 ${c.skipped} skipped \xB7 ${c.active} active \xB7 ${c.queued} waiting${_hostFlowSyncStage ? " \xB7 Flow synchronization: " + _hostFlowSyncStage : ""}`,
+    );
+  }
+  function renderRunOutcome() {
+    if (!_hostOutcome) return;
+    const c = runProgressSummary(),
+      notice = _hostProviderNotice
+        ? ` Last provider notice: ${_hostProviderNotice}`
+        : "";
+    _hostCompleted =
+      !_hostOutcome.error &&
+      !_hostOutcome.stopped &&
+      !_failedNodeIds.size &&
+      !_hostReviewNodeIds.size &&
+      !c.cancelled &&
+      !_hostSyncWarning &&
+      c.settled === c.total;
+    if (_hostReviewNodeIds.size) {
+      setStatus("Needs review", "review");
+      setProgress(
+        `${_hostReviewNodeIds.size} node(s) need review \xB7 ${c.completed} done \xB7 ${c.failed} failed \xB7 ${c.skipped} skipped. Check the log before running again.` +
+          notice,
+      );
+    } else if (_hostOutcome.error) {
+      setStatus("Failed", "failed");
+      setProgress(
+        `Finished with an error: ${_hostOutcome.error.message || _hostOutcome.error}` +
+          notice,
+      );
+    } else if (_hostOutcome.stopped || c.cancelled) {
+      setStatus("Stopped", "stopped");
+      setProgress(
+        `Workflow stopped \xB7 ${c.completed} done \xB7 ${c.skipped} skipped.` +
+          notice,
+      );
+    } else if (_failedNodeIds.size || c.failed) {
+      setStatus("Failed", "failed");
+      setProgress(
+        `${Math.max(_failedNodeIds.size, c.failed)} node(s) failed. See the log below.` +
+          notice,
+      );
+    } else {
+      const queue = window.PromptQueue?._instance;
+      if (
+        !_hostSettled ||
+        queue?._apiRefreshFlushPromise ||
+        queue?.getActiveReloadPromise?.()
+      ) {
+        setStatus("Syncing", "syncing");
+        setProgress(
+          "Execution finished. Waiting for result synchronization and cleanup\u2026",
+        );
+      } else if (c.settled < c.total) {
+        _hostCompleted = false;
+        setStatus("Needs review", "review");
+        setProgress(
+          `Execution ended, but ${c.total - c.settled} node(s) have no terminal update. Check the log; no retry was sent.`,
+        );
+      } else {
+        setStatus(
+          _hostSyncWarning
+            ? "Completed with warnings"
+            : c.skipped
+              ? "Completed with skips"
+              : "Completed",
+          c.skipped || _hostSyncWarning ? "warning" : "completed",
+        );
+        setProgress(
+          `Workflow completed \xB7 ${c.completed} done \xB7 ${c.skipped} skipped. ${_hostSyncWarning ? "Flow synchronization failed; check the log before closing." : "You can close this window."}`,
+        );
+      }
+    }
+    updateBar();
+  }
+  function runOwnsProviderEvent(data) {
+    const job = window.PromptQueue?._instance?.getJob?.(data?.jobId);
+    return !!_running &&
+      job?.owner === "workflow" &&
+      job.workflowId === _currentWfId &&
+      job.workflowRunId === window.workflowExecutor?._flowRunId
+      ? job
+      : null;
+  }
+  async function bootstrap() {
+    const startedAt = Date.now();
+    let previousAt = startedAt;
+    const trace = (stage) => {
+      const at = Date.now();
+      console.info?.(
+        "[RunHostPreparation]",
+        JSON.stringify({
+          operationId: `bootstrap:${startedAt}`,
+          stage,
+          elapsedMs: at - startedAt,
+          stageMs: at - previousAt,
+        }),
+      );
+      previousAt = at;
+    };
+    trace("bootstrap_started");
+    document.body.classList.add("rw-popup");
+    if (window.I18n) {
+      try {
+        await window.I18n.init();
+      } catch (_) {}
+    }
+    trace("i18n_ready");
+    if (window.storageSettings) {
+      try {
+        await window.storageSettings.loadAndApply();
+      } catch (_) {}
+    }
+    trace("settings_ready");
+    try {
+      window.ChatGPTConfig?.fetchInBackground?.();
+    } catch (_) {}
+    try {
+      window.GrokConfig?.fetchInBackground?.();
+    } catch (_) {}
+    if (window.authManager) await window.authManager.init();
+    trace("auth_ready");
+    if (!window.authManager?.isLoggedIn()) {
+      setStatus("Not signed in", "failed");
+      setProgress("Sign in to the extension from the sidebar, then try again.");
+      addLog("Not signed in \u2014 workflow cannot run.", "error");
+      return false;
+    }
+    if (window.SseClient && window.authManager?.isLoggedIn()) {
+      const sseStartedAt = Date.now();
+      const observeSse = (stage) =>
+        console.info?.(
+          "[RunHostPreparation]",
+          JSON.stringify({
+            operationId: `bootstrap:${startedAt}`,
+            stage,
+            elapsedMs: Date.now() - startedAt,
+            stageMs: Date.now() - sseStartedAt,
+          }),
+        );
+      try {
+        Promise.resolve(window.SseClient.connect()).then(
+          () => observeSse("sse_connected"),
+          () => observeSse("sse_connect_failed"),
+        );
+      } catch (_) {
+        observeSse("sse_connect_failed");
+      }
+    }
+    trace("sse_started");
+    if (window.RequestCoalescer) {
+      try {
+        window.RequestCoalescer.init();
+      } catch (_) {}
+    }
+    if (window.storageManager) await window.storageManager.init();
+    trace("storage_ready");
+    if (window.featureGate) {
+      await window.featureGate.init();
+      try {
+        if (!window.featureGate._isCacheValid?.() && window.featureGate.refresh)
+          await window.featureGate.refresh();
+      } catch (_) {}
+    }
+    if (window.SystemConfig) {
+      try {
+        await SystemConfig.restoreFromStorage();
+      } catch (_) {}
+    }
+    trace("entitlements_config_ready");
+    try {
+      if (window.PendingUploadStore) {
+        await PendingUploadStore.restore();
+        trace("upload_files_ready");
+        await PendingUploadStore.restoreCache();
+        trace("upload_cache_ready");
+        await PendingUploadStore.restoreLightweight();
+        trace("upload_metadata_ready");
+      }
+    } catch (_) {}
+    try {
+      await window.ProviderConfigManager?._fetchApiConfigs?.();
+    } catch (_) {}
+    trace("uploads_provider_config_ready");
+    try {
+      window.CharacterRegistry?.initCrossContextSync?.();
+      window.CharacterRegistry?.getScrapedList?.().catch(() => {});
+      if (window.VoiceRegistry) {
+        window.VoiceRegistry.initCrossContextSync?.();
+        await Promise.all([
+          window.VoiceRegistry.getBaseCatalog?.("flow").catch(() => null),
+          window.VoiceRegistry.getScrapedList?.().catch(() => null),
+        ]);
+      }
+    } catch (_) {}
+    trace("voice_catalog_ready");
+    try {
+      await window.ProviderMeta?.fetch?.();
+      window.ProviderMeta?.init?.();
+    } catch (_) {}
+    trace("catalogs_ready");
+    if (window.WorkflowExecutor && !window.workflowExecutor) {
+      window.workflowExecutor = new WorkflowExecutor();
+    }
+    try {
+      window.generationHistory?.init();
+    } catch (_) {}
+    try {
+      window.NodeTemplates?.clearServerCache?.();
+      await window.NodeTemplates?.fetchFromServer?.().catch(() => {});
+    } catch (_) {}
+    trace("node_templates_ready");
+    return true;
+  }
+  function bindProgressUI() {
+    const eb = window.eventBus;
+    if (!eb) return;
+    const current = (data) => {
+      const workflowId =
+        data?.workflowId || data?.workflow?.wf_id || data?.node?.wf_id;
+      return !workflowId || String(workflowId) === String(_currentWfId);
+    };
+    eb.on("flow:reload_sync_state", (data) => {
+      if (
+        data?.scope !== "workflow" ||
+        (data.workflowId && data.workflowId !== _currentWfId)
+      )
+        return;
+      const code = (value) =>
+        typeof value === "string" && /^[a-zA-Z0-9_:-]{1,100}$/.test(value)
+          ? value
+          : null;
+      if (data.workflowId === _currentWfId) {
+        _hostFlowSyncStage = ["complete", "failed"].includes(data.stage)
+          ? null
+          : code(data.stage);
+        if (data.stage === "failed") _hostSyncWarning = true;
+        else if (data.stage === "complete") _hostSyncWarning = false;
+        if (_running || _hostOutcome) refreshRunProgress();
+      }
+      addLog(
+        "[FlowReloadSync] " +
+          JSON.stringify({
+            workflowId: _currentWfId,
+            stage: code(data.stage),
+            reason: code(data.reason),
+            flushId: code(data.flushId),
+            at: Number(data.at) || null,
+          }),
+      );
+    });
+    let spaceSequence = 0;
+    const spaceDocument = crypto.randomUUID();
+    const publishSpaceResult = (data) => {
+      if (window.WorkflowSpaceRuntimeRelay?.active) return;
+      const node =
+        data?.node ||
+        window.workflowExecutor?.currentWorkflow?.nodes?.find(
+          (item) => item.node_id === data?.nodeId,
+        );
+      const userId = window.authManager?.getUser?.()?.id;
+      if (!node?.node_id || !userId || !_currentWfId) return;
+      const fields = [
+        "status",
+        "phase",
+        "run_started_at",
+        "generation_queued",
+        "last_error",
+        "result_file_ids",
+        "result_file_names",
+        "result_thumbnails",
+        "result_text",
+        "result_source",
+        "result_provider_urls",
+        "result_frame_file_ids",
+        "result_frame_thumbnails",
+        "result_clean_file_ids",
+        "result_clean_thumbnails",
+        "result_gen_mode",
+        "provider_web_run_id",
+        "error_message",
+      ];
+      const portable = (value) => {
+        if (typeof value === "string" && /^(?:blob:|data:)/i.test(value))
+          return void 0;
+        if (Array.isArray(value)) {
+          const items = value.map(portable).filter((item) => item !== void 0);
+          return value.length && !items.length ? void 0 : items;
+        }
+        if (value && typeof value === "object") {
+          const entries = Object.entries(value)
+            .map(([key, item]) => [key, portable(item)])
+            .filter(([, item]) => item !== void 0);
+          return Object.keys(value).length && !entries.length
+            ? void 0
+            : Object.fromEntries(entries);
+        }
+        return value;
+      };
+      const textFields = new Set([
+        "result_text",
+        "error_message",
+        "last_error",
+        "phase",
+      ]);
+      const patch = Object.fromEntries(
+        fields
+          .filter((key) => Object.hasOwn(node, key))
+          .map((key) => [
+            key,
+            textFields.has(key) ? node[key] : portable(node[key]),
+          ])
+          .filter(([, value]) => value !== void 0),
+      );
+      chrome.runtime
+        .sendMessage({
+          action: "workflowSpaceResultPatch",
+          data: {
+            workflowId: String(node.wf_id || _currentWfId),
+            userId: String(userId),
+            nodeId: node.node_id,
+            document: spaceDocument,
+            sequence: ++spaceSequence,
+            patch,
+          },
+        })
+        .catch(() => {});
+    };
+    eb.on("node:completed", publishSpaceResult);
+    eb.on("node:ref_replaced", publishSpaceResult);
+    eb.on("node:retry", (data) => {
+      if (!data?.node) return;
+      const label = window.I18n?.t("flowStatus.retryDelay", {
+        attempt: data.attempt,
+        max: data.maxRetries,
+        seconds: Math.ceil(Math.max(0, Number(data.delayMs) || 0) / 1e3),
+      });
+      const phase = [
+        label && label !== "flowStatus.retryDelay"
+          ? label
+          : window.I18n?.t("exec.retrying") || "Retrying\u2026",
+        (Array.isArray(data.error?.providerErrorCodes)
+          ? data.error.providerErrorCodes.find(
+              (code) =>
+                typeof code === "string" &&
+                /^PUBLIC_ERROR_[A-Z0-9_]+$/.test(code),
+            )
+          : null) ||
+          data.error?.code ||
+          "",
+      ]
+        .filter(Boolean)
+        .join(" \xB7 ");
+      publishSpaceResult({
+        ...data,
+        node: {
+          ...data.node,
+          status: "running",
+          phase,
+          error_message: null,
+          last_error: null,
+        },
+      });
+    });
+    eb.on("node:preview_available", publishSpaceResult);
+    eb.on("node:preview_available", recordRunHostMetadata);
+    eb.on("node:ref_replaced", recordRunHostMetadata);
+    eb.on("execution:started", (d) => {
+      if (!current(d)) return;
+      _hostRunEpoch++;
+      _hostCompleted = false;
+      _hostSettled = false;
+      _hostInspecting = false;
+      _hostResultReceipts.clear();
+      _hostReceiptRevision = 0;
+      _hostDurability = null;
+      window.workflowRunHostLifecycle?.resetNotices();
+      _hostOutcome = null;
+      _hostProviderNotice = "";
+      _hostFlowSyncStage = null;
+      _hostSyncWarning = false;
+      _hostReviewNodeIds.clear();
+      _hostPausedJobIds.clear();
+      _failedNodeIds.clear();
+      _doneNodes = 0;
+      updateBar();
+      _running = true;
+      setStatus("Running", "running");
+      $("rwStop").disabled = false;
+      if (d?.workflow?.wf_name) setTitle(d.workflow.wf_name);
+      addLog(`Started workflow "${d?.workflow?.wf_name || _currentWfId}"`);
+    });
+    eb.on("execution:single_node_state", (data) => {
+      if (String(data?.workflowId) !== String(_currentWfId)) return;
+      const states = data.nodes || [];
+      for (const state of states)
+        setNodeBadge(
+          state.nodeId,
+          ["queued", "stopping", "running"].includes(state.status)
+            ? state.status
+            : "running",
+        );
+      updateBar();
+    });
+    eb.on("node:cancelled", (data) => {
+      if (!current(data)) return;
+      if (data?.node?.node_id) {
+        setNodeBadge(data.node.node_id, "cancelled");
+        setNodePhase(data.node.node_id, "Stopped");
+      }
+      refreshRunProgress();
+      addLog(`Stopped node: ${data?.node?.node_id || ""}`, "warn");
+    });
+    eb.on("node:started", (d) => {
+      if (!current(d)) return;
+      if (d?.node?.node_id) _failedNodeIds.delete(d.node.node_id);
+      _hostReviewNodeIds.delete(d?.node?.node_id);
+      setStatus("Running", "running");
+      if (d?.node?.node_id) {
+        setNodeBadge(d.node.node_id, "running");
+        setNodePhase(d.node.node_id, "");
+      }
+      refreshRunProgress();
+      addLog(`\u25B6 Node "${d?.node?.node_name || d?.node?.node_id}" started`);
+    });
+    eb.on("node:phase", (d) => {
+      if (!current(d)) return;
+      if (!d?.nodeId || !d?.phase) return;
+      if (_hostNodeStates.get(d.nodeId) === "retrying")
+        setNodeBadge(d.nodeId, "running");
+      const key = `node.phase.${d.phase}`,
+        translated = window.I18n?.t(key);
+      const fallback =
+        {
+          submitting: "Submitting prompt...",
+          generating: "Generating image/video...",
+          downloading: "Downloading results...",
+          uploading: "Uploading image to Flow...",
+        }[d.phase] || "Processing...";
+      setNodePhase(
+        d.nodeId,
+        translated && translated !== key ? translated : fallback,
+      );
+    });
+    eb.on("node:completed", (d) => {
+      if (!current(d)) return;
+      recordRunHostResult(d);
+      if (d?.node?.node_id) _failedNodeIds.delete(d.node.node_id);
+      if (d?.node?.node_id) {
+        if (
+          String(d.node.error_message || "").includes(
+            "[PROVIDER_REVIEW_REQUIRED]",
+          )
+        )
+          _hostReviewNodeIds.add(d.node.node_id);
+        else _hostReviewNodeIds.delete(d.node.node_id);
+        setNodeBadge(
+          d.node.node_id,
+          _hostReviewNodeIds.has(d.node.node_id) ? "review" : "completed",
+        );
+        setNodePhase(d.node.node_id, "");
+      }
+      updateBar();
+      addLog(
+        `\u2714 Node "${d?.node?.node_name || d?.node?.node_id}" completed (${d?.result?.fileIds?.length || 0} results)`,
+        "ok",
+      );
+      refreshRunProgress();
+    });
+    eb.on("node:failed", (d) => {
+      if (!current(d)) return;
+      if (d?.node?.node_id) _failedNodeIds.add(d.node.node_id);
+      if (d?.node?.node_id) {
+        setNodeBadge(d.node.node_id, "failed");
+        setNodePhase(d.node.node_id, d.error?.message || d.error?.code || "");
+      }
+      refreshRunProgress();
+      addLog(
+        `\u2716 Node "${d?.node?.node_name || d?.node?.node_id}" failed: ${d?.error?.message || ""}`,
+        "error",
+      );
+    });
+    eb.on("node:run_rejected", (d) => {
+      if (d?.workflowId && d.workflowId !== _currentWfId) return;
+      if (d?.nodeId) {
+        _failedNodeIds.add(d.nodeId);
+        setNodeBadge(d.nodeId, "failed");
+      }
+      addLog(
+        `Node could not start: ${d?.error?.code || "RUN_REJECTED"}`,
+        "error",
+      );
+      if (!window.workflowExecutor?.isRunning) {
+        _running = false;
+        $("rwStop").disabled = true;
+        setStatus("Could not start", "failed");
+        setProgress("Node did not start. See the log below.");
+      }
+    });
+    eb.on("node:warning", (d) => {
+      if (!current(d)) return;
+      if (d?.node?.node_id) {
+        setNodeBadge(d.node.node_id, "skipped");
+        setNodePhase(d.node.node_id, d.message || "");
+      }
+      refreshRunProgress();
+      addLog(`\u26A0 ${d?.message || ""}`, "warn");
+    });
+    eb.on("execution:log", (d) => {
+      const msg = typeof d === "string" ? d : d?.message || "";
+      if (msg)
+        addLog(
+          msg,
+          d?.level === "warn"
+            ? "warn"
+            : d?.level === "error"
+              ? "error"
+              : void 0,
+        );
+    });
+    eb.on("node:retry", (d) => {
+      if (!current(d)) return;
+      if (!d?.node?.node_id) return;
+      setNodeBadge(d.node.node_id, "retrying");
+      setNodePhase(
+        d.node.node_id,
+        `Retry ${d.attempt}/${d.maxRetries} \xB7 retry in ${Math.ceil(Math.max(0, Number(d.delayMs) || 0) / 1e3)}s \xB7 ${d.error?.code || ""}`,
+      );
+      refreshRunProgress();
+    });
+    eb.on("node:review", (d) => {
+      if (!d?.node?.node_id || (d.node.wf_id && d.node.wf_id !== _currentWfId))
+        return;
+      _hostReviewNodeIds.add(d.node.node_id);
+      _hostCompleted = false;
+      const disposition = window.WorkflowSpaceReviewState(d);
+      if (disposition.status === "failed") _failedNodeIds.add(d.node.node_id);
+      setNodeBadge(
+        d.node.node_id,
+        disposition.status === "failed" ? "failed" : "review",
+      );
+      setNodePhase(
+        d.node.node_id,
+        d.error?.message || d.error?.code || "Review required",
+      );
+      refreshRunProgress();
+      addLog(
+        `Node requires review: ${d.node.node_name || d.node.node_id}`,
+        "warn",
+      );
+    });
+    eb.on("execution:completed", (d) => {
+      if (!current(d)) return;
+      const firstOutcome = !_hostOutcome;
+      _hostOutcome = d || {};
+      _hostCompleted =
+        !d?.error &&
+        !d?.stopped &&
+        !_failedNodeIds.size &&
+        !_hostReviewNodeIds.size;
+      _running = false;
+      $("rwStop").disabled = true;
+      renderRunOutcome();
+      if (firstOutcome)
+        addLog(
+          "[RunHostStatus] " +
+            JSON.stringify({
+              workflowId: _currentWfId,
+              runEpoch: _hostRunEpoch,
+              stage: "execution_completed",
+              status: $("rwStatus")?.textContent,
+              ...runProgressSummary(),
+            }),
+        );
+    });
+    eb.on("execution:settled", (d) => {
+      if (d?.workflowId !== _currentWfId) return;
+      _hostSettled = true;
+      renderRunOutcome();
+      requestRunHostAutoClose();
+    });
+    eb.on("execution:captcha_detected", (d) => {
+      const job = runOwnsProviderEvent(d);
+      if (!job) return;
+      _hostProviderNotice = String(d.text || "Google Flow needs attention.");
+      if (d.action === "normal_error" || d.recoveryMode === "normal_error") {
+        addLog(_hostProviderNotice, "warn");
+        return;
+      }
+      const paused = job.state === "paused",
+        stopping = job.state === "stopped" || d.action === "stop_batch";
+      setStatus(
+        paused ? "Paused" : stopping ? "Stopping" : "Needs attention",
+        paused ? "paused" : stopping ? "stopping" : "warning",
+      );
+      if (paused) _hostPausedJobIds.add(job.id);
+      if (job.workflowNodeId)
+        setNodeBadge(
+          job.workflowNodeId,
+          paused ? "paused" : stopping ? "stopping" : "waiting",
+        );
+      setProgress(_hostProviderNotice);
+      addLog(_hostProviderNotice, "warn");
+    });
+    eb.on("execution:captcha_resolved", (d) => {
+      if (d?.resumed !== true || !_running) return;
+      const jobs = [..._hostPausedJobIds]
+        .map((jobId) => runOwnsProviderEvent({ jobId }))
+        .filter((job) => job && job.state === "running");
+      if (!jobs.length) return;
+      for (const job of jobs) {
+        _hostPausedJobIds.delete(job.id);
+        if (job.workflowNodeId) setNodeBadge(job.workflowNodeId, "running");
+      }
+      setStatus("Running", "running");
+      refreshRunProgress();
+    });
+    eb.on("execution:quota_exceeded", (d) => {
+      if (!runOwnsProviderEvent(d)) return;
+      _hostProviderNotice = String(d.text || "Flow quota reached");
+      setStatus("Quota exceeded", "warning");
+      setProgress(_hostProviderNotice);
+      addLog(_hostProviderNotice, "error");
+    });
+    eb.on("node:policy_blocked", (d) => {
+      if (runOwnsProviderEvent(d))
+        addLog("Policy: " + (d.text || "policy violation"), "error");
+    });
+    eb.on("execution:rate_limited", (d) => {
+      if (runOwnsProviderEvent(d)) {
+        setStatus("Rate limited", "warning");
+        setProgress(d.text || "Waiting for the provider.");
+        addLog("Rate limit: " + (d.text || ""), "warn");
+      }
+    });
+  }
+  function bindRemoteStop() {
+    chrome.runtime.onMessage.addListener((msg) => {
+      if (msg?.action === "sseRelay:entitlements_changed") {
+        if (msg.data?.features && msg.data?.plan)
+          window.featureGate?.handleSseEntitlementsChanged?.(msg.data);
+        window.ProviderConfigManager?.fetchPrivateConfigs?.(true).catch(
+          () => {},
+        );
+      }
+      if (msg?.action === "sseRelay:system_settings_changed" && msg.data) {
+        window.SystemConfig?.handleSseUpdate?.(msg.data);
+      }
+      if (msg?.action === "captcha:userAction") {
+        window.eventBus?.emit("captcha:userAction", { decision: msg.decision });
+      }
+      if (
+        msg?.action === "workflowExecutionEvent" &&
+        ["execution:stop", "execution:force_stop"].includes(msg.event)
+      ) {
+        const stopWfId = msg.data?.wf_id;
+        if (!stopWfId || stopWfId === _currentWfId) {
+          const exec = window.workflowExecutor;
+          if (
+            exec?.handleRemoteStop?.(
+              stopWfId,
+              msg.data?.run_id,
+              msg.data?.stopSource,
+            ) === false
+          )
+            return;
+          addLog("Received a remote stop request...", "warn");
+          setStatus("Stopping...", "running");
+          const stopBtn = $("rwStop");
+          if (stopBtn) stopBtn.disabled = true;
+        }
+      }
+      if (msg?.action === "loadRunWorkflow") {
+        consumePendingAndRun();
+      }
+    });
+    $("rwStop")?.addEventListener("click", () => {
+      if (window.workflowExecutor?.isRunning) {
+        addLog("Stopping workflow...", "warn");
+        try {
+          window.workflowExecutor.stop(true);
+        } catch (_) {}
+      }
+    });
+  }
+  async function fillProjectIdIfMissing(wf, runNodes = wf?.nodes || []) {
+    try {
+      if (!wf || wf.project_id) return;
+      const localOnly = runNodes.every(
+        (node) =>
+          ["text_extract", "text", "delay", "note"].includes(node.node_type) ||
+          (node.node_type === "prompt" &&
+            (node.use_ai !== true || node.multi_prompt === true)),
+      );
+      if (localOnly) return;
+      const ctx = await window.MessageBridge?.sendToContentScript?.(
+        "getProjectContext",
+      ).catch(() => null);
+      if (ctx?.projectId && !ctx.projectError) {
+        await window.storageManager.saveWorkflow({
+          ...wf,
+          nodes: void 0,
+          edges: void 0,
+          project_id: ctx.projectId,
+          project_name: ctx.projectName || void 0,
+        });
+        addLog(
+          `Assigned workflow to the open Flow project: ${ctx.projectName || ctx.projectId}`,
+        );
+      }
+    } catch (e) {
+      addLog(`Could not assign the project (skipped): ${e.message}`, "warn");
+    }
+  }
+  const PROVIDER_LABEL = {
+    flow: "Google Flow (flow.google.com)",
+    chatgpt: "ChatGPT (chatgpt.com)",
+    grok: "Grok (grok.com)",
+    gemini: "Gemini (gemini.google.com)",
+  };
+  function providersOfWorkflow(nodes, onlyNodeId = null) {
+    const set = new Set();
+    for (const n of nodes || []) {
+      if (n.enabled === false && !onlyNodeId) continue;
+      if (onlyNodeId && n.node_id !== onlyNodeId) continue;
+      if (["image", "generate", "flow"].includes(n.node_type)) set.add("flow");
+      else if (n.node_type === "chatgpt") set.add("chatgpt");
+      else if (n.node_type === "grok") set.add("grok");
+      else if (n.node_type === "gemini") set.add("gemini");
+      else if (n.node_type === "muse") set.add("muse");
+      else if (
+        n.node_type === "prompt" &&
+        n.use_ai === true &&
+        n.multi_prompt !== true
+      )
+        set.add(n.provider === "gemini" ? "gemini" : "chatgpt");
+    }
+    return [...set];
+  }
+  async function checkProvidersQuiet(providers) {
+    const notReady = [];
+    for (const p of providers) {
+      let ready = false,
+        reason = "";
+      try {
+        if (p === "muse") {
+          const checkWeb = () =>
+            window.MuseSession?.ensureReady?.({
+              createIfMissing: false,
+              activate: false,
+              silent: true,
+            });
+          const r = window.MuseApiFacade?.checkReadiness
+            ? await window.MuseApiFacade.checkReadiness({
+                entries: window.MuseApiFacade.nodeReadinessEntries(
+                  _spaceHealthNodes,
+                  {
+                    includeDisabled: true,
+                    edges: _spaceHealthWorkflow?.edges || [],
+                  },
+                ),
+                checkWeb,
+              })
+            : await checkWeb();
+          ready = r?.ready === true;
+          reason = r?.error || "tab not open";
+        } else if (p === "chatgpt") {
+          const r = await window.ChatGPTSession?.ensureReady?.({
+            createIfMissing: false,
+            activate: false,
+          });
+          ready = !!r?.ready;
+          reason =
+            r?.error === "NOT_LOGGED_IN"
+              ? "not logged in"
+              : r?.error || "tab not open";
+        } else if (p === "gemini") {
+          const r = await window.GeminiSession?.ensureReady?.({
+            createIfMissing: false,
+            activate: false,
+          });
+          ready = !!r?.ready;
+          reason =
+            r?.error === "NOT_LOGGED_IN"
+              ? "not logged in"
+              : r?.error || "tab not open";
+        } else if (p === "grok") {
+          const r = await window.GrokSession?.ensureReady?.({
+            createIfMissing: false,
+            activate: false,
+          });
+          ready = !!r?.ready;
+          reason =
+            r?.error === "NOT_LOGGED_IN"
+              ? "not logged in"
+              : r?.error || "tab not open";
+        } else if (p === "flow") {
+          const health = await spaceFlowApiHealth(
+            _spaceHealthNodes,
+            _spaceHealthWorkflow?.project_id,
+          );
+          if (health.apiMode && (health.ready || health.required)) {
+            _preflightFlowApiMode = window.PromptQueue?.isEnabled?.() === true;
+            ready = health.ready;
+            reason = health.error || "";
+          } else {
+            _preflightFlowApiMode = false;
+            ready =
+              (await window.ProjectHelper?.isFlowProjectReady?.()) === true;
+            reason = "Flow is not open or no project is selected";
+          }
+        }
+      } catch (e) {
+        reason = e?.message || "check failed";
+      }
+      if (!ready) notReady.push({ provider: p, reason });
+    }
+    return notReady;
+  }
+  function showProviderPanel(notReady, onRetry, onForce) {
+    const panel = $("rwProviders");
+    if (!panel) return;
+    panel.hidden = false;
+    panel.innerHTML = "";
+    const h = document.createElement("h4");
+    h.textContent = `${notReady.length} provider(s) not ready`;
+    const ul = document.createElement("ul");
+    notReady.forEach((x) => {
+      const li = document.createElement("li");
+      li.textContent = `${PROVIDER_LABEL[x.provider] || x.provider}: ${x.reason}`;
+      ul.appendChild(li);
+    });
+    const hint = document.createElement("div");
+    hint.style.cssText = "color:#a8a8ae;margin-bottom:10px;";
+    hint.textContent =
+      "Open the provider tab and sign in (Flow needs an open project), then click Re-check.";
+    const actions = document.createElement("div");
+    actions.className = "rw-pv-actions";
+    const btnRetry = document.createElement("button");
+    btnRetry.type = "button";
+    btnRetry.className = "rw-pv-btn rw-pv-btn--primary";
+    btnRetry.textContent = "Re-check";
+    btnRetry.addEventListener("click", onRetry);
+    const btnForce = document.createElement("button");
+    btnForce.type = "button";
+    btnForce.className = "rw-pv-btn";
+    btnForce.textContent = "Run anyway";
+    btnForce.disabled = notReady.some((entry) => entry.provider === "flow");
+    btnForce.addEventListener("click", onForce);
+    actions.append(btnRetry, btnForce);
+    panel.append(h, ul, hint, actions);
+  }
+  function hideProviderPanel() {
+    const p = $("rwProviders");
+    if (p) {
+      p.hidden = true;
+      p.innerHTML = "";
+    }
+  }
+  function preflightGate(providers) {
+    return new Promise((resolve) => {
+      const attempt = async () => {
+        setProgress("Checking providers...");
+        const notReady = await checkProvidersQuiet(providers);
+        if (!notReady.length) {
+          hideProviderPanel();
+          resolve(true);
+          return;
+        }
+        setStatus("Waiting for provider", "failed");
+        setProgress("Provider is not ready \u2014 see the instructions below.");
+        addLog(
+          `Providers not ready: ${notReady.map((x) => x.provider).join(", ")}`,
+          "warn",
+        );
+        let forcing = false;
+        const force = async () => {
+          if (forcing) return;
+          forcing = true;
+          try {
+            const blocked = providers.includes("flow")
+              ? await checkProvidersQuiet(["flow"])
+              : [];
+            if (blocked.length) {
+              showProviderPanel(
+                [
+                  ...notReady.filter((entry) => entry.provider !== "flow"),
+                  ...blocked,
+                ],
+                attempt,
+                force,
+              );
+              return;
+            }
+            hideProviderPanel();
+            addLog("Provider check skipped \u2014 running anyway.", "warn");
+            resolve(true);
+          } finally {
+            forcing = false;
+          }
+        };
+        showProviderPanel(notReady, attempt, force);
+      };
+      attempt();
+    });
+  }
+  let _consuming = false;
+  async function consumePendingAndRun() {
+    if (_consuming) return;
+    if (_running || window.workflowExecutor?.isRunning) {
+      addLog(
+        "A workflow is already running \u2014 ignoring the new request.",
+        "warn",
+      );
+      return;
+    }
+    _consuming = true;
+    try {
+      const stored = await chrome.storage.local.get(["_pendingRunWorkflow"]);
+      const pending = stored?._pendingRunWorkflow;
+      if (!pending?.wfId) {
+        setProgress("No workflow is waiting to run.");
+        return;
+      }
+      const preparationStartedAt = Date.now();
+      const tracePreparation = (stage) =>
+        console.info?.(
+          "[RunHostPreparation]",
+          JSON.stringify({
+            operationId: `host:${preparationStartedAt}`,
+            workflowId: pending.wfId,
+            nodeId: pending.nodeId || null,
+            stage,
+            elapsedMs: Date.now() - preparationStartedAt,
+            sinceDispatchMs: Math.max(
+              0,
+              Date.now() - Number(pending.timestamp || preparationStartedAt),
+            ),
+          }),
+        );
+      tracePreparation("command_consumed");
+      await chrome.storage.local.remove("_pendingRunWorkflow");
+      if (Date.now() - (pending.timestamp || 0) > 2 * 60 * 1e3) {
+        setStatus("Could not start", "failed");
+        setProgress("The run request expired \u2014 click Run again.");
+        return;
+      }
+      if (pending.actorUserId != null) {
+        try {
+          await window.workflowExecutor.assertCommandActor(pending.actorUserId);
+        } catch (error) {
+          setStatus("Could not start", "failed");
+          setProgress(
+            window.I18n?.t?.("flowErrors.codes.ACCOUNT_SCOPE_CHANGED") ||
+              error.message,
+          );
+          return;
+        }
+      }
+      _currentWfId = pending.wfId;
+      _hostRunEpoch++;
+      _hostSettled = false;
+      _hostCompleted = false;
+      _hostInspecting = false;
+      _hostResultReceipts.clear();
+      _hostReceiptRevision = 0;
+      _hostDurability = null;
+      window.workflowRunHostLifecycle?.resetNotices();
+      _failedNodeIds.clear();
+      _hostNodeStates.clear();
+      _hostReviewNodeIds.clear();
+      _hostPausedJobIds.clear();
+      _hostOutcome = null;
+      _hostProviderNotice = "";
+      _hostFlowSyncStage = null;
+      _hostSyncWarning = false;
+      _doneNodes = 0;
+      updateBar();
+      _runLogUserId = window.authManager?.getUser?.()?.id || null;
+      if ($("rwLog")) $("rwLog").textContent = "";
+      setTitle(`Workflow ${pending.wfId}`);
+      setStatus("Preparing", "running");
+      setProgress("Loading workflow...");
+      hideProviderPanel();
+      let wfMeta = null;
+      try {
+        wfMeta = await window.storageManager?.getWorkflow?.(pending.wfId);
+        if (pending.actorUserId != null)
+          await window.workflowExecutor.assertCommandActor(pending.actorUserId);
+      } catch (e) {
+        addLog(`Could not load workflow: ${e.message}`, "error");
+        setStatus("Failed", "failed");
+        setProgress(`Could not load workflow: ${e.message}`);
+        return;
+      }
+      _spaceHealthWorkflow = wfMeta;
+      tracePreparation("definition_loaded");
+      if (wfMeta?.wf_name) setTitle(wfMeta.wf_name);
+      const _allNodes = wfMeta?.nodes || [];
+      const _scopeIds =
+        Array.isArray(pending.onlyNodeIds) && pending.onlyNodeIds.length
+          ? new Set(pending.onlyNodeIds.map(String))
+          : null;
+      const _scopedNodes = _scopeIds
+        ? _allNodes.filter((n) => _scopeIds.has(String(n.node_id)))
+        : _allNodes;
+      _spaceHealthNodes = pending.nodeId
+        ? _scopedNodes.filter((node) => node.node_id === pending.nodeId)
+        : _scopedNodes;
+      renderNodeList(_scopedNodes, pending.nodeId || null);
+      await fillProjectIdIfMissing(
+        wfMeta,
+        pending.nodeId
+          ? _spaceHealthNodes
+          : _spaceHealthNodes.filter((node) => node.enabled !== false),
+      );
+      tracePreparation("project_ready");
+      _preflightFlowApiMode = false;
+      const provs = providersOfWorkflow(_scopedNodes, pending.nodeId || null);
+      if (provs.length) await preflightGate(provs);
+      tracePreparation("providers_ready");
+      setStatus("Preparing", "running");
+      const runOpts = { manualSubmitMode: pending.manualSubmitMode === true };
+      if (pending.actorUserId != null)
+        runOpts.actorUserId = String(pending.actorUserId);
+      if (Array.isArray(pending.onlyNodeIds) && pending.onlyNodeIds.length)
+        runOpts.onlyNodeIds = pending.onlyNodeIds;
+      let ok = false,
+        groupPrepared = !pending.groupReset;
+      try {
+        if (pending.groupReset) {
+          const preparingEpoch = _hostRunEpoch;
+          const prepared = await window.WorkflowGroupRunPreparation.prepare(
+            wfMeta,
+            pending,
+            {
+              flowApiMode: _preflightFlowApiMode,
+              assertCurrent: async () => {
+                if (
+                  _groupPreparationDisposed ||
+                  preparingEpoch !== _hostRunEpoch ||
+                  pending.wfId !== _currentWfId
+                )
+                  throw Error("ABORTED");
+                await window.workflowExecutor.assertCommandActor(
+                  pending.actorUserId,
+                );
+              },
+            },
+          );
+          if (!prepared) {
+            setStatus(
+              window.I18n?.t("workflow.cannotRun") || "Not started",
+              "failed",
+            );
+            setProgress(
+              window.I18n?.t("workflow.cannotRun") || "Cannot run workflow",
+            );
+            return;
+          }
+          groupPrepared = true;
+        }
+        if (pending.nodeId) {
+          addLog(`Running one node: ${pending.nodeId}`);
+          tracePreparation("node_executor_started");
+          ok = await window.workflowExecutor.executeSingleNode(
+            pending.wfId,
+            pending.nodeId,
+            runOpts,
+          );
+        } else {
+          if (runOpts.onlyNodeIds)
+            addLog(`Running a group of ${runOpts.onlyNodeIds.length} nodes`);
+          tracePreparation("workflow_executor_started");
+          ok = await window.workflowExecutor.execute(pending.wfId, runOpts);
+        }
+      } catch (e) {
+        if (!groupPrepared) {
+          const message =
+            window.I18n?.t("workflow.cannotRun") || "Cannot run workflow";
+          const detail =
+            e.message === "FLOW_RELOAD_IN_PROGRESS"
+              ? window.I18n?.t("workflow.reloadingFlowWait") || message
+              : message;
+          addLog(`${detail} (${e.message})`, "error");
+          setStatus(message, "failed");
+          setProgress(detail);
+          return;
+        }
+        addLog(`Workflow execution failed: ${e.message}`, "error");
+        setStatus("Failed", "failed");
+        setProgress(`Error: ${e.message}`);
+        return;
+      }
+      if (!ok && !window.workflowExecutor?.isRunning) {
+        if ($("rwStatus")?.textContent === "Preparing") {
+          setStatus("Could not start", "failed");
+          setProgress(
+            "Workflow did not start (quota, busy state, or configuration error). See the log below.",
+          );
+        }
+      }
+    } finally {
+      _consuming = false;
+      requestRunHostAutoClose();
+    }
+  }
+  document.addEventListener("DOMContentLoaded", async () => {
+    if (window.EventBus && !window.eventBus) window.eventBus = new EventBus();
+    $("rwLogToggle")?.addEventListener("click", () =>
+      $("rwLogWrap")?.classList.toggle("rw-log-wrap--open"),
+    );
+    bindRunLogControls();
+    bindRunHostLifecycle();
+    bindProgressUI();
+    bindRemoteStop();
+    const ready = await bootstrap().catch((e) => {
+      setStatus("Startup failed", "failed");
+      setProgress(`Bootstrap error: ${e.message}`);
+      addLog(`Bootstrap error: ${e.message}`, "error");
+      return false;
+    });
+    if (!ready) return;
+    bindVisibleHostDialogs();
+    addLog("Execution environment is ready.");
+    await consumePendingAndRun();
+  });
+})();

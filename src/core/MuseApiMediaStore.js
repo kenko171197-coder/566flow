@@ -1,1 +1,166 @@
-var __defProp=Object.defineProperty;var __defNormalProp=(obj,key,value)=>key in obj?__defProp(obj,key,{enumerable:true,configurable:true,writable:true,value}):obj[key]=value;var __publicField=(obj,key,value)=>__defNormalProp(obj,typeof key!=="symbol"?key+"":key,value);class MuseApiMediaStore{static _user(){const id=window.authManager?.getUser?.()?.id;if(!id)throw new Error("MUSE_LOCAL_ASSET_OWNER_REQUIRED");return String(id)}static _ownedUser(handle){const id=this._user();if(handle?.ownerScope!==`toby-user:${id}`)throw new Error("MUSE_LOCAL_ASSET_OWNER_CHANGED");return id}static _db(){if(!this._dbPromise)this._dbPromise=new Promise((resolve,reject)=>{const request=indexedDB.open("tobyflow_muse_api_media",1);request.onupgradeneeded=()=>request.result.createObjectStore("assets",{keyPath:"key"});request.onsuccess=()=>{const db=request.result;db.onversionchange=()=>{db.close();this._dbPromise=null};resolve(db)};request.onerror=()=>reject(request.error);request.onblocked=()=>reject(new Error("MUSE_LOCAL_ASSET_STORE_BLOCKED"))}).catch(error=>{this._dbPromise=null;throw error});return this._dbPromise}static async _run(mode,commandId,index,value,expectedUserId){const userId=this._user();if(userId!==expectedUserId)throw new Error("MUSE_LOCAL_ASSET_OWNER_CHANGED");const db=await this._db();if(userId!==this._user())throw new Error("MUSE_LOCAL_ASSET_OWNER_CHANGED");const key=JSON.stringify([userId,commandId,index]);return new Promise((resolve,reject)=>{const tx=db.transaction("assets",mode),store=tx.objectStore("assets");let result;tx.oncomplete=()=>{try{userId===this._user()?resolve(result):reject(new Error("MUSE_LOCAL_ASSET_OWNER_CHANGED"))}catch(error){reject(error)}};tx.onabort=tx.onerror=()=>reject(tx.error||new Error("MUSE_LOCAL_ASSET_STORE_FAILED"));const request=mode==="readwrite"?store.put({...value,key,userId,commandId,index}):store.get(key);request.onsuccess=()=>{result=request.result}})}static async put(handle,index,blob,sha256){if(!(blob instanceof Blob)||!["video/mp4","image/webp","image/png","image/jpeg"].includes(blob.type)||!blob.size||!/^[a-f0-9]{64}$/.test(sha256||"")||!handle?.scope?.accountBinding||!handle.scope.vmBinding)throw new Error("MUSE_LOCAL_ASSET_INVALID");const userId=this._ownedUser(handle);await this._run("readwrite",handle.commandId,index,{blob,sha256,accountBinding:handle.scope.accountBinding,vmBinding:handle.scope.vmBinding,createdAt:Date.now()},userId)}static async delete(handle,index,before=Infinity){const userId=this._ownedUser(handle),db=await this._db();if(userId!==this._user())throw new Error("MUSE_LOCAL_ASSET_OWNER_CHANGED");const key=JSON.stringify([userId,handle.commandId,index]);return new Promise((resolve,reject)=>{const tx=db.transaction("assets","readwrite"),store=tx.objectStore("assets");let removed=false,cause;tx.oncomplete=()=>resolve(removed);tx.onabort=tx.onerror=()=>reject(cause||tx.error||new Error("MUSE_LOCAL_ASSET_STORE_FAILED"));const request=store.get(key);request.onsuccess=()=>{try{if(userId!==this._user())throw new Error("MUSE_LOCAL_ASSET_OWNER_CHANGED");const row=request.result;if(!row)return;if(row.accountBinding!==handle.scope?.accountBinding||row.vmBinding!==handle.scope?.vmBinding)throw new Error("MUSE_LOCAL_ASSET_BINDING_CHANGED");if(Number.isFinite(before)&&(!Number.isFinite(row.createdAt)||row.createdAt>=before))return;store.delete(key);removed=true}catch(error){cause=error;tx.abort()}}})}static async get(handle,index){const userId=this._ownedUser(handle);const row=await this._run("readonly",handle.commandId,index,void 0,userId);if(!row)return null;if(row.accountBinding!==handle.scope?.accountBinding||row.vmBinding!==handle.scope?.vmBinding)throw new Error("MUSE_LOCAL_ASSET_BINDING_CHANGED");return row}}__publicField(MuseApiMediaStore,"_dbPromise",null);window.MuseApiMediaStore=MuseApiMediaStore;
+var __defProp = Object.defineProperty;
+var __defNormalProp = (obj, key, value) =>
+  key in obj
+    ? __defProp(obj, key, {
+        enumerable: true,
+        configurable: true,
+        writable: true,
+        value,
+      })
+    : (obj[key] = value);
+var __publicField = (obj, key, value) =>
+  __defNormalProp(obj, typeof key !== "symbol" ? key + "" : key, value);
+class MuseApiMediaStore {
+  static _user() {
+    const id = window.authManager?.getUser?.()?.id;
+    if (!id) throw new Error("MUSE_LOCAL_ASSET_OWNER_REQUIRED");
+    return String(id);
+  }
+  static _ownedUser(handle) {
+    const id = this._user();
+    if (handle?.ownerScope !== `toby-user:${id}`)
+      throw new Error("MUSE_LOCAL_ASSET_OWNER_CHANGED");
+    return id;
+  }
+  static _db() {
+    if (!this._dbPromise)
+      this._dbPromise = new Promise((resolve, reject) => {
+        const request = indexedDB.open("tobyflow_muse_api_media", 1);
+        request.onupgradeneeded = () =>
+          request.result.createObjectStore("assets", { keyPath: "key" });
+        request.onsuccess = () => {
+          const db = request.result;
+          db.onversionchange = () => {
+            db.close();
+            this._dbPromise = null;
+          };
+          resolve(db);
+        };
+        request.onerror = () => reject(request.error);
+        request.onblocked = () =>
+          reject(new Error("MUSE_LOCAL_ASSET_STORE_BLOCKED"));
+      }).catch((error) => {
+        this._dbPromise = null;
+        throw error;
+      });
+    return this._dbPromise;
+  }
+  static async _run(mode, commandId, index, value, expectedUserId) {
+    const userId = this._user();
+    if (userId !== expectedUserId)
+      throw new Error("MUSE_LOCAL_ASSET_OWNER_CHANGED");
+    const db = await this._db();
+    if (userId !== this._user())
+      throw new Error("MUSE_LOCAL_ASSET_OWNER_CHANGED");
+    const key = JSON.stringify([userId, commandId, index]);
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction("assets", mode),
+        store = tx.objectStore("assets");
+      let result;
+      tx.oncomplete = () => {
+        try {
+          userId === this._user()
+            ? resolve(result)
+            : reject(new Error("MUSE_LOCAL_ASSET_OWNER_CHANGED"));
+        } catch (error) {
+          reject(error);
+        }
+      };
+      tx.onabort = tx.onerror = () =>
+        reject(tx.error || new Error("MUSE_LOCAL_ASSET_STORE_FAILED"));
+      const request =
+        mode === "readwrite"
+          ? store.put({ ...value, key, userId, commandId, index })
+          : store.get(key);
+      request.onsuccess = () => {
+        result = request.result;
+      };
+    });
+  }
+  static async put(handle, index, blob, sha256) {
+    if (
+      !(blob instanceof Blob) ||
+      !["video/mp4", "image/webp", "image/png", "image/jpeg"].includes(
+        blob.type,
+      ) ||
+      !blob.size ||
+      !/^[a-f0-9]{64}$/.test(sha256 || "") ||
+      !handle?.scope?.accountBinding ||
+      !handle.scope.vmBinding
+    )
+      throw new Error("MUSE_LOCAL_ASSET_INVALID");
+    const userId = this._ownedUser(handle);
+    await this._run(
+      "readwrite",
+      handle.commandId,
+      index,
+      {
+        blob,
+        sha256,
+        accountBinding: handle.scope.accountBinding,
+        vmBinding: handle.scope.vmBinding,
+        createdAt: Date.now(),
+      },
+      userId,
+    );
+  }
+  static async delete(handle, index, before = Infinity) {
+    const userId = this._ownedUser(handle),
+      db = await this._db();
+    if (userId !== this._user())
+      throw new Error("MUSE_LOCAL_ASSET_OWNER_CHANGED");
+    const key = JSON.stringify([userId, handle.commandId, index]);
+    return new Promise((resolve, reject) => {
+      const tx = db.transaction("assets", "readwrite"),
+        store = tx.objectStore("assets");
+      let removed = false,
+        cause;
+      tx.oncomplete = () => resolve(removed);
+      tx.onabort = tx.onerror = () =>
+        reject(cause || tx.error || new Error("MUSE_LOCAL_ASSET_STORE_FAILED"));
+      const request = store.get(key);
+      request.onsuccess = () => {
+        try {
+          if (userId !== this._user())
+            throw new Error("MUSE_LOCAL_ASSET_OWNER_CHANGED");
+          const row = request.result;
+          if (!row) return;
+          if (
+            row.accountBinding !== handle.scope?.accountBinding ||
+            row.vmBinding !== handle.scope?.vmBinding
+          )
+            throw new Error("MUSE_LOCAL_ASSET_BINDING_CHANGED");
+          if (
+            Number.isFinite(before) &&
+            (!Number.isFinite(row.createdAt) || row.createdAt >= before)
+          )
+            return;
+          store.delete(key);
+          removed = true;
+        } catch (error) {
+          cause = error;
+          tx.abort();
+        }
+      };
+    });
+  }
+  static async get(handle, index) {
+    const userId = this._ownedUser(handle);
+    const row = await this._run(
+      "readonly",
+      handle.commandId,
+      index,
+      void 0,
+      userId,
+    );
+    if (!row) return null;
+    if (
+      row.accountBinding !== handle.scope?.accountBinding ||
+      row.vmBinding !== handle.scope?.vmBinding
+    )
+      throw new Error("MUSE_LOCAL_ASSET_BINDING_CHANGED");
+    return row;
+  }
+}
+__publicField(MuseApiMediaStore, "_dbPromise", null);
+window.MuseApiMediaStore = MuseApiMediaStore;

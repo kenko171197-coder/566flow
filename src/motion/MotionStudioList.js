@@ -1,9 +1,3224 @@
-class MotionStudioList{_text(key,fallback){const value=window.I18n?.t?.(key);return value&&value!==key?value:fallback}constructor(){this.button=document.getElementById("motionStudioToolbarBtn");this.grid=document.querySelector("#tab-tools .tools-grid");this.tab=document.getElementById("tab-tools");this.motionTab=document.getElementById("tab-motion");this.destination="tools";this.page=1;this.hasMore=false;this.renderEpoch=0;this.query="";this.cleanupRunning=false;this.cleanupPending=false;this.gateEpoch=0;this.listEpoch=0;this.filterEpoch=0;this.accessAllowed=false;this.accessReason="checking";this.accessStatus=null;this.accessCode=null;this.activeMenu=null;this.runnerStatuses=new Map;this.pendingBatchToggles=new Map;this.runnerStatusEpoch=new Map;this.manualRunIds=new Set;this.downloadNotices=new Map;this.batchStatus=null;this.activeBatchId=null;this.thumbnailJobs=Promise.resolve();this.runningSince=new Map;this.batchStatusTicket=0;if(!this.button||!this.grid||!this.tab)return;this.view=document.createElement("section");this.view.className="motion-list hidden";this.view.id="motionStudioList";this.tab.append(this.view);document.getElementById("motionStudioSubtab")?.addEventListener("click",()=>{void this.openTab().catch(error=>console.warn("[Motion Studio] Open failed",error?.code||error?.message))});document.addEventListener("click",event=>{if(this.activeMenu&&!this.activeMenu.wrapper.contains(event.target))this._closeMenu()});document.addEventListener("keydown",event=>{if(event.key==="Escape"&&this.activeMenu){const button=this.activeMenu.button;this._closeMenu();button.focus()}});this.button.addEventListener("click",async()=>{this.destination="tools";const allowed=await this.gateForAction();if(allowed===true)await this.open();else if(allowed===false)await this.showAccessModal()});window.eventBus?.on?.("sse:tool_config_updated",data=>{if(data?.tool_key!=="motion_studio")return;this.gate({force:true});if(!this.view.classList.contains("hidden"))this.refresh()});window.eventBus?.on?.("sse:entitlements_changed",()=>this.gate({force:true}));window.eventBus?.on?.("featuregate:refreshed",()=>this.gate());for(const event of["i18n:changed","i18n:reloaded"])window.eventBus?.on?.(event,()=>{if(!this.view.classList.contains("hidden"))void this.refresh()});window.eventBus?.on?.("auth:login",()=>this.gate());window.eventBus?.on?.("auth:logout",()=>this.gate());chrome.storage.onChanged.addListener((changes,area)=>{if(area==="local"&&(changes.af_system_settings||changes.af_auth))void this.cleanupBulkDrafts();if(area==="local"&&changes.af_auth&&Number(changes.af_auth.oldValue?.user?.id)!==Number(changes.af_auth.newValue?.user?.id)){this._closePreview();this.runningSince.clear();clearInterval(this.thumbnailClock);this.thumbnailClock=null;this.filterEpoch++;this.listEpoch++;this.page=1;this.hasMore=false;this.projects=[];this.loadMoreFlight=null;this.rows?.replaceChildren();this.runnerStatuses.clear();this.runnerStatusEpoch.clear();this.pendingBatchToggles.clear();this.manualRunIds.clear();this.downloadNotices.clear();this.batchStatus=null;this.activeBatchId=null;this.lastBatchFailure=null;this.batchStatusTicket++}if(area==="local"&&(changes.af_entitlements||changes.af_auth))this.gate();const diagnostic=area==="local"&&changes.motion_runner_diagnostic?.newValue;if(diagnostic&&Number(diagnostic.userId)===Number(window.authManager?.getUser?.()?.id))console.info("[MotionRunnerInit]",JSON.stringify(diagnostic));const runner=area==="local"&&changes.motion_runner_status?.newValue;if(runner)void this._acceptRunnerStatus(runner);const batch=area==="local"&&changes.motion_batch_status?.newValue;if(batch)void this._acceptBatchStatus(batch);const updated=area==="local"&&changes.motion_project_changed?.newValue;if(updated&&Number(updated.userId)===Number(window.authManager?.getUser?.()?.id)&&!this.view.classList.contains("hidden")){clearTimeout(this.projectChangeRefreshTimer);this.projectChangeRefreshTimer=setTimeout(()=>{if(!this.view.classList.contains("hidden"))void this.refresh()},400)}});chrome.tabs?.onRemoved?.addListener?.(tabId=>{if(tabId!==this.runnerHostTabId)return;this.runnerHostTabId=null;if(this.batchStatus&&["running","preparing","pausing"].includes(this.batchStatus.state)){this.batchStatus={...this.batchStatus,state:"needs_review",error:"MOTION_RUNNER_HOST_CLOSED"};void this._showBatchFailure(this.batchStatus).catch(error=>console.warn("[Motion Studio] Batch warning failed",error?.message))}for(const[projectId,state]of this.runnerStatuses){if(["preparing","running","pausing"].includes(state.state))this.runnerStatuses.set(projectId,{...state,state:"needs_review",error:"MOTION_RUNNER_HOST_CLOSED"})}if(!this.view.classList.contains("hidden"))void this.refresh()});this.gate();void this.cleanupBulkDrafts();window.addEventListener("pagehide",()=>{this.bulkCleanupStopped=true;clearTimeout(this.bulkCleanupTimer);this.bulkModal?.close()})}async cleanupBulkDrafts({opening=false,userId=Number(window.authManager?.getUser?.()?.id),flowProjectId=window._currentProjectId}={}){if(this.bulkCleanupStopped||!Number.isSafeInteger(userId)||userId<1||!window.MotionBulkCreator?.cleanupTemporaryBatches){clearTimeout(this.bulkCleanupTimer);return}if(this.bulkCleanupFlight){await this.bulkCleanupFlight;if(opening||this.bulkCleanupUserId!==userId)return this.cleanupBulkDrafts({opening,userId,flowProjectId});return}clearTimeout(this.bulkCleanupTimer);this.bulkCleanupUserId=userId;this.bulkCleanupFlight=(async()=>{await window.SystemConfig?.fetch?.();if(Number(window.authManager?.getUser?.()?.id)!==userId||this.bulkCleanupStopped)return;const hours=window.SystemConfig?.get?.("motion_bulk_staging_ttl_hours");await window.MotionBulkCreator.cleanupTemporaryBatches({userId,flowProjectId,ttlHours:hours,opening});if(Number.isSafeInteger(hours)&&hours>=1&&hours<=720&&!this.bulkCleanupStopped)this.bulkCleanupTimer=setTimeout(()=>{void this.cleanupBulkDrafts()},Math.min(hours*36e5,2147483647))})().catch(error=>console.warn("[MotionBulkCleanup]",{code:error?.message})).finally(()=>{this.bulkCleanupFlight=null});return this.bulkCleanupFlight}async _acceptBatchStatus(status,{refresh=true}={}){const userId=Number(window.authManager?.getUser?.()?.id);if(status?.userId!==userId||status?.flowProjectId!==window._currentProjectId||typeof status.batchId!=="string"||!Number.isSafeInteger(status.epoch)||this.batchStatus?.batchId===status.batchId&&this.batchStatus.userId===userId&&this.batchStatus.flowProjectId===status.flowProjectId&&this.batchStatus.epoch>status.epoch||this.activeBatchId&&this.activeBatchId!==status.batchId&&["preparing","running","pausing"].includes(this.batchStatus?.state))return;const ticket=++this.batchStatusTicket;const showStatus=value=>{this.batchStatus=value;this.activeBatchId=value.batchId;if(refresh&&["failed","needs_review","busy"].includes(value.state))void this._showBatchFailure(value).catch(error=>console.warn("[Motion Studio] Batch warning failed",error?.message));if(refresh&&!this.view.classList.contains("hidden")){clearTimeout(this.projectChangeRefreshTimer);this.projectChangeRefreshTimer=setTimeout(()=>{if(!this.view.classList.contains("hidden"))void this.refresh()},400)}};try{const host=(await chrome.storage.session.get("tobyflow_motion_runner_host"))?.tobyflow_motion_runner_host;if(ticket!==this.batchStatusTicket||Number(window.authManager?.getUser?.()?.id)!==userId||window._currentProjectId!==status.flowProjectId)return;if(!host){showStatus(["running","preparing","pausing"].includes(status.state)?{...status,state:"needs_review",error:"MOTION_RUNNER_HOST_CLOSED"}:status);return}if(host.userId!==userId||!Number.isInteger(host.tabId))return;if(host.epoch!==status.epoch){showStatus(["running","preparing","pausing"].includes(status.state)?{...status,state:"needs_review",error:"MOTION_RUNNER_HOST_CLOSED"}:status);return}const tab=await chrome.tabs.get(host.tabId).catch(()=>null);if(!tab&&ticket===this.batchStatusTicket){showStatus(["running","preparing","pausing"].includes(status.state)?{...status,state:"needs_review",error:"MOTION_RUNNER_HOST_CLOSED"}:status);return}if(ticket!==this.batchStatusTicket||Number(window.authManager?.getUser?.()?.id)!==userId||window._currentProjectId!==status.flowProjectId||tab?.windowId!==host.windowId||tab?.url!==(host.url||chrome.runtime.getURL("motion-runner.html")))return;this.runnerHostTabId=host.tabId;showStatus(status)}catch(_){}}async _showBatchFailure(status){const signature=JSON.stringify([status.batchId,status.state,status.error,status.items?.map(item=>[item.projectId,item.state,item.error,item.failures])]);if(this.lastBatchFailure===signature)return;this.lastBatchFailure=signature;const failed=(status.items||[]).filter(item=>["failed","needs_review"].includes(item.state));const formatTime=value=>{if(!Number.isFinite(Number(value)))return"\u2014";const seconds=Math.max(0,Math.floor(Number(value)));return`${Math.floor(seconds/60)}:${String(seconds%60).padStart(2,"0")}`};const lines=await Promise.all(failed.map(async item=>{const project=await window.authManager._apiCall("GET",`tools/motion-studio/projects/${encodeURIComponent(item.projectId)}`).catch(()=>null);const details=(item.failures||[]).map(entry=>{const frame=project?.tool_project_id===item.projectId&&project?.flow_project_id===status.flowProjectId?project.data_json?.frames?.[entry.frameId]:null;const range=frame?` (${formatTime(frame.start)}\u2013${formatTime(frame.end)})`:"";const retries=Number.isSafeInteger(frame?.stages?.transcribe?.worker?.retry_count)?` \xB7 ${this._text("common.retry","Retry")} ${frame.stages.transcribe.worker.retry_count}`:"";return`${entry.frameId||"\u2014"}${range} \xB7 ${entry.stage} \xB7 ${entry.error}${retries}`}).join("\n");return`${item.name||item.projectId}: ${item.error||item.state}${details?`
-${details}`:""}${item.cleanupError?`
-${item.cleanupError}`:""}`}));if(Number(window.authManager?.getUser?.()?.id)!==status.userId||window._currentProjectId!==status.flowProjectId||this.batchStatus?.batchId!==status.batchId)return;if(!lines.length)lines.push(status.error||status.state);const failedItem=failed.length===1&&failed[0].state==="failed"?failed[0]:null;if(failedItem&&window.customDialog?.confirm){const skip=await window.customDialog.confirm(`${lines.join("\n\n")}
+class MotionStudioList {
+  _text(key, fallback) {
+    const value = window.I18n?.t?.(key);
+    return value && value !== key ? value : fallback;
+  }
+  constructor() {
+    this.button = document.getElementById("motionStudioToolbarBtn");
+    this.grid = document.querySelector("#tab-tools .tools-grid");
+    this.tab = document.getElementById("tab-tools");
+    this.motionTab = document.getElementById("tab-motion");
+    this.destination = "tools";
+    this.page = 1;
+    this.hasMore = false;
+    this.renderEpoch = 0;
+    this.query = "";
+    this.cleanupRunning = false;
+    this.cleanupPending = false;
+    this.gateEpoch = 0;
+    this.listEpoch = 0;
+    this.filterEpoch = 0;
+    this.accessAllowed = false;
+    this.accessReason = "checking";
+    this.accessStatus = null;
+    this.accessCode = null;
+    this.activeMenu = null;
+    this.runnerStatuses = new Map();
+    this.pendingBatchToggles = new Map();
+    this.runnerStatusEpoch = new Map();
+    this.manualRunIds = new Set();
+    this.downloadNotices = new Map();
+    this.batchStatus = null;
+    this.activeBatchId = null;
+    this.thumbnailJobs = Promise.resolve();
+    this.runningSince = new Map();
+    this.batchStatusTicket = 0;
+    if (!this.button || !this.grid || !this.tab) return;
+    this.view = document.createElement("section");
+    this.view.className = "motion-list hidden";
+    this.view.id = "motionStudioList";
+    this.tab.append(this.view);
+    document
+      .getElementById("motionStudioSubtab")
+      ?.addEventListener("click", () => {
+        void this.openTab().catch((error) =>
+          console.warn(
+            "[Motion Studio] Open failed",
+            error?.code || error?.message,
+          ),
+        );
+      });
+    document.addEventListener("click", (event) => {
+      if (this.activeMenu && !this.activeMenu.wrapper.contains(event.target))
+        this._closeMenu();
+    });
+    document.addEventListener("keydown", (event) => {
+      if (event.key === "Escape" && this.activeMenu) {
+        const button = this.activeMenu.button;
+        this._closeMenu();
+        button.focus();
+      }
+    });
+    this.button.addEventListener("click", async () => {
+      this.destination = "tools";
+      const allowed = await this.gateForAction();
+      if (allowed === true) await this.open();
+      else if (allowed === false) await this.showAccessModal();
+    });
+    window.eventBus?.on?.("sse:tool_config_updated", (data) => {
+      if (data?.tool_key !== "motion_studio") return;
+      this.gate({ force: true });
+      if (!this.view.classList.contains("hidden")) this.refresh();
+    });
+    window.eventBus?.on?.("sse:entitlements_changed", () =>
+      this.gate({ force: true }),
+    );
+    window.eventBus?.on?.("featuregate:refreshed", () => this.gate());
+    for (const event of ["i18n:changed", "i18n:reloaded"])
+      window.eventBus?.on?.(event, () => {
+        if (!this.view.classList.contains("hidden")) void this.refresh();
+      });
+    window.eventBus?.on?.("auth:login", () => this.gate());
+    window.eventBus?.on?.("auth:logout", () => this.gate());
+    chrome.storage.onChanged.addListener((changes, area) => {
+      if (area === "local" && (changes.af_system_settings || changes.af_auth))
+        void this.cleanupBulkDrafts();
+      if (
+        area === "local" &&
+        changes.af_auth &&
+        Number(changes.af_auth.oldValue?.user?.id) !==
+          Number(changes.af_auth.newValue?.user?.id)
+      ) {
+        this._closePreview();
+        this.runningSince.clear();
+        clearInterval(this.thumbnailClock);
+        this.thumbnailClock = null;
+        this.filterEpoch++;
+        this.listEpoch++;
+        this.page = 1;
+        this.hasMore = false;
+        this.projects = [];
+        this.loadMoreFlight = null;
+        this.rows?.replaceChildren();
+        this.runnerStatuses.clear();
+        this.runnerStatusEpoch.clear();
+        this.pendingBatchToggles.clear();
+        this.manualRunIds.clear();
+        this.downloadNotices.clear();
+        this.batchStatus = null;
+        this.activeBatchId = null;
+        this.lastBatchFailure = null;
+        this.batchStatusTicket++;
+      }
+      if (area === "local" && (changes.af_entitlements || changes.af_auth))
+        this.gate();
+      const diagnostic =
+        area === "local" && changes.motion_runner_diagnostic?.newValue;
+      if (
+        diagnostic &&
+        Number(diagnostic.userId) ===
+          Number(window.authManager?.getUser?.()?.id)
+      )
+        console.info("[MotionRunnerInit]", JSON.stringify(diagnostic));
+      const runner = area === "local" && changes.motion_runner_status?.newValue;
+      if (runner) void this._acceptRunnerStatus(runner);
+      const batch = area === "local" && changes.motion_batch_status?.newValue;
+      if (batch) void this._acceptBatchStatus(batch);
+      const updated =
+        area === "local" && changes.motion_project_changed?.newValue;
+      if (
+        updated &&
+        Number(updated.userId) ===
+          Number(window.authManager?.getUser?.()?.id) &&
+        !this.view.classList.contains("hidden")
+      ) {
+        clearTimeout(this.projectChangeRefreshTimer);
+        this.projectChangeRefreshTimer = setTimeout(() => {
+          if (!this.view.classList.contains("hidden")) void this.refresh();
+        }, 400);
+      }
+    });
+    chrome.tabs?.onRemoved?.addListener?.((tabId) => {
+      if (tabId !== this.runnerHostTabId) return;
+      this.runnerHostTabId = null;
+      if (
+        this.batchStatus &&
+        ["running", "preparing", "pausing"].includes(this.batchStatus.state)
+      ) {
+        this.batchStatus = {
+          ...this.batchStatus,
+          state: "needs_review",
+          error: "MOTION_RUNNER_HOST_CLOSED",
+        };
+        void this._showBatchFailure(this.batchStatus).catch((error) =>
+          console.warn("[Motion Studio] Batch warning failed", error?.message),
+        );
+      }
+      for (const [projectId, state] of this.runnerStatuses) {
+        if (["preparing", "running", "pausing"].includes(state.state))
+          this.runnerStatuses.set(projectId, {
+            ...state,
+            state: "needs_review",
+            error: "MOTION_RUNNER_HOST_CLOSED",
+          });
+      }
+      if (!this.view.classList.contains("hidden")) void this.refresh();
+    });
+    this.gate();
+    void this.cleanupBulkDrafts();
+    window.addEventListener("pagehide", () => {
+      this.bulkCleanupStopped = true;
+      clearTimeout(this.bulkCleanupTimer);
+      this.bulkModal?.close();
+    });
+  }
+  async cleanupBulkDrafts({
+    opening = false,
+    userId = Number(window.authManager?.getUser?.()?.id),
+    flowProjectId = window._currentProjectId,
+  } = {}) {
+    if (
+      this.bulkCleanupStopped ||
+      !Number.isSafeInteger(userId) ||
+      userId < 1 ||
+      !window.MotionBulkCreator?.cleanupTemporaryBatches
+    ) {
+      clearTimeout(this.bulkCleanupTimer);
+      return;
+    }
+    if (this.bulkCleanupFlight) {
+      await this.bulkCleanupFlight;
+      if (opening || this.bulkCleanupUserId !== userId)
+        return this.cleanupBulkDrafts({ opening, userId, flowProjectId });
+      return;
+    }
+    clearTimeout(this.bulkCleanupTimer);
+    this.bulkCleanupUserId = userId;
+    this.bulkCleanupFlight = (async () => {
+      await window.SystemConfig?.fetch?.();
+      if (
+        Number(window.authManager?.getUser?.()?.id) !== userId ||
+        this.bulkCleanupStopped
+      )
+        return;
+      const hours = window.SystemConfig?.get?.("motion_bulk_staging_ttl_hours");
+      await window.MotionBulkCreator.cleanupTemporaryBatches({
+        userId,
+        flowProjectId,
+        ttlHours: hours,
+        opening,
+      });
+      if (
+        Number.isSafeInteger(hours) &&
+        hours >= 1 &&
+        hours <= 720 &&
+        !this.bulkCleanupStopped
+      )
+        this.bulkCleanupTimer = setTimeout(
+          () => {
+            void this.cleanupBulkDrafts();
+          },
+          Math.min(hours * 36e5, 2147483647),
+        );
+    })()
+      .catch((error) =>
+        console.warn("[MotionBulkCleanup]", { code: error?.message }),
+      )
+      .finally(() => {
+        this.bulkCleanupFlight = null;
+      });
+    return this.bulkCleanupFlight;
+  }
+  async _acceptBatchStatus(status, { refresh = true } = {}) {
+    const userId = Number(window.authManager?.getUser?.()?.id);
+    if (
+      status?.userId !== userId ||
+      status?.flowProjectId !== window._currentProjectId ||
+      typeof status.batchId !== "string" ||
+      !Number.isSafeInteger(status.epoch) ||
+      (this.batchStatus?.batchId === status.batchId &&
+        this.batchStatus.userId === userId &&
+        this.batchStatus.flowProjectId === status.flowProjectId &&
+        this.batchStatus.epoch > status.epoch) ||
+      (this.activeBatchId &&
+        this.activeBatchId !== status.batchId &&
+        ["preparing", "running", "pausing"].includes(this.batchStatus?.state))
+    )
+      return;
+    const ticket = ++this.batchStatusTicket;
+    const showStatus = (value) => {
+      this.batchStatus = value;
+      this.activeBatchId = value.batchId;
+      if (refresh && ["failed", "needs_review", "busy"].includes(value.state))
+        void this._showBatchFailure(value).catch((error) =>
+          console.warn("[Motion Studio] Batch warning failed", error?.message),
+        );
+      if (refresh && !this.view.classList.contains("hidden")) {
+        clearTimeout(this.projectChangeRefreshTimer);
+        this.projectChangeRefreshTimer = setTimeout(() => {
+          if (!this.view.classList.contains("hidden")) void this.refresh();
+        }, 400);
+      }
+    };
+    try {
+      const host = (
+        await chrome.storage.session.get("tobyflow_motion_runner_host")
+      )?.tobyflow_motion_runner_host;
+      if (
+        ticket !== this.batchStatusTicket ||
+        Number(window.authManager?.getUser?.()?.id) !== userId ||
+        window._currentProjectId !== status.flowProjectId
+      )
+        return;
+      if (!host) {
+        showStatus(
+          ["running", "preparing", "pausing"].includes(status.state)
+            ? {
+                ...status,
+                state: "needs_review",
+                error: "MOTION_RUNNER_HOST_CLOSED",
+              }
+            : status,
+        );
+        return;
+      }
+      if (host.userId !== userId || !Number.isInteger(host.tabId)) return;
+      if (host.epoch !== status.epoch) {
+        showStatus(
+          ["running", "preparing", "pausing"].includes(status.state)
+            ? {
+                ...status,
+                state: "needs_review",
+                error: "MOTION_RUNNER_HOST_CLOSED",
+              }
+            : status,
+        );
+        return;
+      }
+      const tab = await chrome.tabs.get(host.tabId).catch(() => null);
+      if (!tab && ticket === this.batchStatusTicket) {
+        showStatus(
+          ["running", "preparing", "pausing"].includes(status.state)
+            ? {
+                ...status,
+                state: "needs_review",
+                error: "MOTION_RUNNER_HOST_CLOSED",
+              }
+            : status,
+        );
+        return;
+      }
+      if (
+        ticket !== this.batchStatusTicket ||
+        Number(window.authManager?.getUser?.()?.id) !== userId ||
+        window._currentProjectId !== status.flowProjectId ||
+        tab?.windowId !== host.windowId ||
+        tab?.url !== (host.url || chrome.runtime.getURL("motion-runner.html"))
+      )
+        return;
+      this.runnerHostTabId = host.tabId;
+      showStatus(status);
+    } catch (_) {}
+  }
+  async _showBatchFailure(status) {
+    const signature = JSON.stringify([
+      status.batchId,
+      status.state,
+      status.error,
+      status.items?.map((item) => [
+        item.projectId,
+        item.state,
+        item.error,
+        item.failures,
+      ]),
+    ]);
+    if (this.lastBatchFailure === signature) return;
+    this.lastBatchFailure = signature;
+    const failed = (status.items || []).filter((item) =>
+      ["failed", "needs_review"].includes(item.state),
+    );
+    const formatTime = (value) => {
+      if (!Number.isFinite(Number(value))) return "\u2014";
+      const seconds = Math.max(0, Math.floor(Number(value)));
+      return `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
+    };
+    const lines = await Promise.all(
+      failed.map(async (item) => {
+        const project = await window.authManager
+          ._apiCall(
+            "GET",
+            `tools/motion-studio/projects/${encodeURIComponent(item.projectId)}`,
+          )
+          .catch(() => null);
+        const details = (item.failures || [])
+          .map((entry) => {
+            const frame =
+              project?.tool_project_id === item.projectId &&
+              project?.flow_project_id === status.flowProjectId
+                ? project.data_json?.frames?.[entry.frameId]
+                : null;
+            const range = frame
+              ? ` (${formatTime(frame.start)}\u2013${formatTime(frame.end)})`
+              : "";
+            const retries = Number.isSafeInteger(
+              frame?.stages?.transcribe?.worker?.retry_count,
+            )
+              ? ` \xB7 ${this._text("common.retry", "Retry")} ${frame.stages.transcribe.worker.retry_count}`
+              : "";
+            return `${entry.frameId || "\u2014"}${range} \xB7 ${entry.stage} \xB7 ${entry.error}${retries}`;
+          })
+          .join("\n");
+        return `${item.name || item.projectId}: ${item.error || item.state}${
+          details
+            ? `
+${details}`
+            : ""
+        }${
+          item.cleanupError
+            ? `
+${item.cleanupError}`
+            : ""
+        }`;
+      }),
+    );
+    if (
+      Number(window.authManager?.getUser?.()?.id) !== status.userId ||
+      window._currentProjectId !== status.flowProjectId ||
+      this.batchStatus?.batchId !== status.batchId
+    )
+      return;
+    if (!lines.length) lines.push(status.error || status.state);
+    const failedItem =
+      failed.length === 1 && failed[0].state === "failed" ? failed[0] : null;
+    if (failedItem && window.customDialog?.confirm) {
+      const skip = await window.customDialog.confirm(
+        `${lines.join("\n\n")}
 
-${this._text("motionBatch.skipConfirm","Skip this project and continue the batch?")}`,{title:this._text("workflow.runAll","Run All"),type:"warning",confirmText:this._text("onboarding.skip","Skip"),cancelText:this._text("common.cancel","Cancel")});if(skip&&this.batchStatus?.batchId===status.batchId&&Number(window.authManager?.getUser?.()?.id)===status.userId&&window._currentProjectId===status.flowProjectId)await this.runAll(status,failedItem.projectId)}else await window.customDialog?.alert?.(lines.join("\n\n"),{title:this._text("workflow.runAll","Run All"),type:"warning"})}async _acceptRunnerStatus(status,{refresh=true}={}){const userId=Number(window.authManager?.getUser?.()?.id);if(!Number.isSafeInteger(userId)||userId<1||Number(status?.userId)!==userId||typeof status.projectId!=="string"||typeof status.runId!=="string"||!Number.isSafeInteger(status.epoch)||status.epoch<1)return;const ticket=(this.runnerStatusEpoch.get(status.projectId)||0)+1;this.runnerStatusEpoch.set(status.projectId,ticket);try{const host=(await chrome.storage.session.get("tobyflow_motion_runner_host"))?.tobyflow_motion_runner_host;if(ticket!==this.runnerStatusEpoch.get(status.projectId)||Number(window.authManager?.getUser?.()?.id)!==userId)return;const markLost=()=>{const current=this.runnerStatuses.get(status.projectId);if(!["preparing","running","pausing"].includes(status.state)||current&&current.epoch>status.epoch)return;this.runnerStatuses.set(status.projectId,{...status,state:"needs_review",error:"MOTION_RUNNER_HOST_CLOSED"});if(refresh&&!this.view.classList.contains("hidden")){clearTimeout(this.projectChangeRefreshTimer);this.projectChangeRefreshTimer=setTimeout(()=>{if(!this.view.classList.contains("hidden"))void this.refresh()},400)}};if(!host||host.userId===userId&&Number.isSafeInteger(host.epoch)&&host.epoch>status.epoch){markLost();return}if(host.userId!==userId||host.epoch!==status.epoch||!Number.isInteger(host.tabId))return;this.runnerHostTabId=host.tabId;const tab=await chrome.tabs.get(host.tabId).catch(()=>null);if(ticket!==this.runnerStatusEpoch.get(status.projectId)||Number(window.authManager?.getUser?.()?.id)!==userId||this.runnerHostTabId!==host.tabId)return;if(!tab){markLost();return}if(tab.windowId!==host.windowId||tab.url!==(host.url||chrome.runtime.getURL("motion-runner.html")))return;const previousStatus=this.runnerStatuses.get(status.projectId);const rowChanged=!previousStatus||["runId","epoch","state","sourceRevision","error"].some(key=>previousStatus[key]!==status[key]);this.runnerStatuses.set(status.projectId,status);if(!previousStatus||["runId","state","stage","detail","frameId","error"].some(key=>previousStatus[key]!==status[key]))console.info("[MotionSidebarRun]",JSON.stringify({projectId:status.projectId,runId:status.runId,state:status.state,stage:status.stage||null,detail:status.detail||null,frameId:status.frameId||null,code:status.error||null}));const downloadState=status.downloadError?"failed":status.stage==="final_download"?status.detail:null;if(["running","ready","failed"].includes(downloadState)&&this.downloadNotices.get(status.runId)!==downloadState){this.downloadNotices.set(status.runId,downloadState);if(this.downloadNotices.size>100)this.downloadNotices.delete(this.downloadNotices.keys().next().value);window.showNotification?.(downloadState==="running"?this._text("download.downloading","Downloading..."):downloadState==="ready"?this._text("download.success","Downloaded successfully!"):this._text("download.failed","Download failed"),downloadState==="failed"?"error":downloadState==="running"?"info":"success")}if(this.manualRunIds.has(status.runId)&&["failed","needs_review"].includes(status.state)){this.manualRunIds.delete(status.runId);void this._showProjectFailure(status).catch(error=>console.warn("[Motion Studio] Project warning failed",error?.message))}else if(["ready","paused","stopped"].includes(status.state))this.manualRunIds.delete(status.runId);if(refresh&&rowChanged&&!this.view.classList.contains("hidden")&&this.rows){await this._filter()}}catch(_){}}async _showProjectFailure(status){const current=await window.authManager._apiCall("GET",`tools/motion-studio/projects/${encodeURIComponent(status.projectId)}`).catch(()=>null);if(Number(window.authManager?.getUser?.()?.id)!==status.userId||current?.tool_project_id!==status.projectId||current?.flow_project_id!==window._currentProjectId)return;const translate=key=>{const value=window.I18n?.t?.(key);return value&&value!==key?value:""};const message=window.MotionFailureNotice.format(status,{errorMessage:(code,context={})=>translate(`flowErrors.codes.${code}`)||translate(context.transcript?"motionEditor.transcriptFailed":"motionEditor.errorGeneric")||code,text:key=>translate(`motionEditor.${key}`),format:(key,_fallback,values)=>translate(`motionEditor.${key}`).replace(/\{(\d+)\}/g,(_,i)=>String(values[Number(i)]??""))});const details=[current.name,message,status.cleanupError].filter(Boolean).join("\n");await window.customDialog?.alert?.(details,{title:this._text("common.run","Run"),type:"warning",icon:"flow"})}async _clearRunnerStatus(userId,projectId){this.runnerStatuses.delete(projectId);this.runnerStatusEpoch.set(projectId,(this.runnerStatusEpoch.get(projectId)||0)+1);try{await chrome.storage.local?.remove?.(`motion_runner_status:${userId}:${projectId}`)}catch(error){console.warn("[Motion Studio] Runner status cleanup failed",error?.message)}}gate({force=false}={}){const auth=window.authManager;const userId=auth?.getUser?.()?.id;const token=auth?.getToken?.()??auth?.token;const loggedIn=!!auth?.isLoggedIn?.();const version=window.featureGate?._lastEntitlementsVersion;const pending=this.gateFlight;if(!force&&pending&&pending.userId===userId&&pending.token===token&&pending.loggedIn===loggedIn&&pending.version===version)return pending.promise;const flight={userId,token,loggedIn,version};flight.promise=this._checkGate().finally(()=>{if(this.gateFlight===flight)this.gateFlight=null});this.gateFlight=flight;return flight.promise}async _checkGate(){const ticket=++this.gateEpoch;this.button?.classList.remove("hidden");if(!window.authManager?.isLoggedIn?.()){this.accessAllowed=false;this.accessReason="locked";this.button?.classList.add("motion-tool-locked");this.button?.classList.remove("motion-tool-unavailable");this.back();window.refreshModuleOverlays?.();return false}try{const userId=window.authManager.getUser?.()?.id;for(let attempt=0;;attempt++){try{await window.authManager._apiCall("GET","tools/motion-studio/projects?per_page=1");break}catch(error){if(![502,503,504].includes(Number(error?.httpStatus))||attempt>=2)throw error;console.info("[Motion Studio] Access check retry",{status:error.httpStatus,attempt:attempt+1});await new Promise(resolve=>setTimeout(resolve,attempt===0?500:1200));if(ticket!==this.gateEpoch||!window.authManager.isLoggedIn?.()||window.authManager.getUser?.()?.id!==userId)return null}}if(ticket===this.gateEpoch){this.accessAllowed=true;this.accessReason=null;this.accessStatus=null;this.accessCode=null;this.button?.classList.remove("motion-tool-locked");this.button?.classList.remove("motion-tool-unavailable");window.refreshModuleOverlays?.()}return ticket===this.gateEpoch?this.accessAllowed:null}catch(error){if(ticket===this.gateEpoch){this.accessAllowed=false;this.accessStatus=error?.httpStatus??null;this.accessCode=error?.code??null;this.accessReason=this.accessCode==="MOTION_ENTITLEMENT_DENIED"?"locked":"unavailable";this.button?.classList.toggle("motion-tool-locked",this.accessReason==="locked");this.button?.classList.toggle("motion-tool-unavailable",this.accessReason==="unavailable");this.back();window.refreshModuleOverlays?.()}console.warn("[Motion Studio] Access check failed",{status:error?.httpStatus??null,code:error?.code??null,reason:this.accessReason});return ticket===this.gateEpoch?false:null}}async gateForAction(){if(this.actionGateFlight)return this.actionGateFlight;this.actionGateFlight=(async()=>{let result;do{result=await this.gate()}while(result===null);return result})();try{return await this.actionGateFlight}finally{this.actionGateFlight=null}}async showAccessModal(){if(this.accessReason==="locked"){await window.featureGate?.showModuleBlockedDialog?.("motion_tool_enabled");return}if(this.accessStatus===403){await window.customDialog?.alert?.(this.accessCode==="MOTION_TOOL_DISABLED"?this._text("motionList.toolDisabled","Motion Studio is disabled in Tools \u2192 Tool config. Contact your administrator."):this._text("motionList.accessDenied","The server denied access to Motion Studio. Check permissions and tool configuration."),{title:"Motion Studio",type:"warning"});return}const retry=await window.customDialog?.confirm?.(this._text("motionList.unavailable","Could not connect to Motion Studio on the server. Try again."),{title:"Motion Studio",type:"warning",confirmText:this._text("common.retry","Retry"),cancelText:this._text("common.close","Close")});if(retry&&await this.gateForAction())await this.open()}back(){this.listEpoch++;this.filterEpoch++;this.loadMoreFlight=null;this._closeMenu();this._closePreview();clearInterval(this.thumbnailClock);this.thumbnailClock=null;this.grid?.classList.remove("hidden");this.view?.classList.add("hidden")}async open(){if(!this.accessAllowed){await this.showAccessModal();return}const direct=this.destination==="motion"&&this.motionTab;(direct?this.motionTab:this.tab).append(this.view);this.grid.classList.toggle("hidden",!direct);this.view.classList.remove("hidden");this.page=1;await this.refresh();this.reconcileTombstones().catch(()=>{})}async openTab(){window.motionTemplateTab?.select("motion");this.destination="motion";const allowed=await this.gateForAction();if(allowed===true){if(!await this._creationProjectContext())return;await this.open()}else if(allowed===false&&!this.motionTab?.querySelector(".module-blocked-overlay"))await this.showAccessModal()}_button(label,action,title=label){const button=document.createElement("button");button.type="button";button.textContent=label;button.title=title;button.className="btn btn-secondary btn-sm";button.addEventListener("click",action);return button}_icon(name,size=14){const paths={back:'<path d="m15 18-6-6 6-6"/>',search:'<circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/>',refresh:'<polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>',plus:'<path d="M12 5v14M5 12h14"/>',close:'<path d="m6 6 12 12M18 6 6 18"/>',edit:'<path d="m16 3 5 5L9 20l-6 1 1-6L16 3ZM14 5l5 5"/>',trash:'<path d="M3 6h18M9 6V3h6v3M5 6l1 15h12l1-15M10 10v7M14 10v7"/>',video:'<rect x="3" y="4" width="18" height="16" rx="3"/><path d="m10 8 6 4-6 4V8Z"/>',play:'<path d="m8 5 11 7-11 7V5Z"/>',pause:'<path d="M8 5v14M16 5v14"/>',stop:'<rect x="6" y="6" width="12" height="12" rx="1"/>',clock:'<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',more:'<circle cx="12" cy="5" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="12" cy="19" r="1"/>'};const holder=document.createElement("span");holder.innerHTML=`<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${paths[name]||""}</svg>`;if(name==="refresh")holder.firstElementChild.setAttribute("stroke-width","2");return holder.firstElementChild}_iconButton(icon,title,action){const button=this._button("",action,title);button.classList.add("btn-toolbar-icon");button.setAttribute("aria-label",title);button.append(this._icon(icon));return button}_createButton(label){const button=this._button("",()=>this.create(),label);button.className="btn btn-primary btn-sm btn-icon-text btn-add-short motion-create-button";const text=document.createElement("span");text.textContent=label;button.append(this._icon("plus"),text);button.disabled=this.creating===true;button.setAttribute("aria-busy",String(this.creating===true));return button}refresh(){if(this.refreshFlight){this.refreshQueued=true;return this.refreshFlight}const flight=this._refresh().finally(()=>{if(this.refreshFlight!==flight)return;this.refreshFlight=null;const queued=this.refreshQueued;this.refreshQueued=false;if(queued&&!this.view.classList.contains("hidden"))void this.refresh()});this.refreshFlight=flight;return flight}_syncLoadMore(){this.rows?.querySelector(".motion-list-load-more")?.remove();if(!this.rows||!this.hasMore)return;const footer=document.createElement("div");footer.className="motion-list-load-more";const pending=!!this.loadMoreFlight;const button=this._button(this._text(pending?"common.loading":this.loadMoreError?"common.retry":"common.loadMore",pending?"Loading...":this.loadMoreError?"Retry":"Load more"),()=>void this.loadMore());button.disabled=pending;button.setAttribute("aria-busy",String(pending));if(this.loadMoreError){const error=document.createElement("small");error.setAttribute("role","status");error.textContent=this.loadMoreError;footer.append(error)}footer.append(button);this.rows.append(footer)}async _restoreRunnerStatuses(projects,ticket){const userId=Number(window.authManager?.getUser?.()?.id);if(!Number.isSafeInteger(userId)||userId<1||!chrome.storage.local?.get||!chrome.storage.session?.get)return;const keys=projects.map(item=>`motion_runner_status:${userId}:${item.tool_project_id}`);const baseline=new Map(projects.map(item=>[item.tool_project_id,this.runnerStatusEpoch.get(item.tool_project_id)||0]));const statuses=await chrome.storage.local.get(keys).catch(()=>({}));if(ticket!==this.listEpoch||this.view.classList.contains("hidden")||Number(window.authManager?.getUser?.()?.id)!==userId)return;await Promise.all(projects.map((item,index)=>{if((this.runnerStatusEpoch.get(item.tool_project_id)||0)!==baseline.get(item.tool_project_id))return null;const status=statuses?.[keys[index]];return status?this._acceptRunnerStatus(status,{refresh:false}):null}))}loadMore(){if(!this.hasMore||this.refreshFlight||this.view.classList.contains("hidden"))return Promise.resolve();if(this.loadMoreFlight)return this.loadMoreFlight;const pane=this.view.closest(".tab-pane");if(pane&&!pane.classList.contains("active"))return Promise.resolve();const userId=Number(window.authManager?.getUser?.()?.id),flowProjectId=window._currentProjectId;if(this.listUserId!==userId||this.listProjectId!==flowProjectId)return Promise.resolve();const ticket=this.listEpoch,previousPage=this.page;const current=()=>ticket===this.listEpoch&&!this.view.classList.contains("hidden")&&Number(window.authManager?.getUser?.()?.id)===userId&&window._currentProjectId===flowProjectId;this.loadMoreError=null;const flight=Promise.resolve().then(async()=>{try{const page=await window.authManager._apiCall("GET",`tools/motion-studio/projects?per_page=30&page=${previousPage+1}`);if(!current()||this.page!==previousPage)return;const projects=new Map((this.projects||[]).map(project=>[project.tool_project_id,project]));const additions=Array.isArray(page?.data)?page.data:[];for(const project of additions)projects.set(project.tool_project_id,project);this.projects=[...projects.values()];this.page=previousPage+1;this.hasMore=this.page<Number(page?.last_page);await this._restoreRunnerStatuses(additions,ticket);if(!current())return;await this._filter({append:true})}catch(error){if(current())this.loadMoreError=error?.message||this._text("motionList.unavailable","Could not connect to Motion Studio on the server. Try again.")}finally{if(this.loadMoreFlight===flight){this.loadMoreFlight=null;if(current())this._syncLoadMore()}}});this.loadMoreFlight=flight;this._syncLoadMore();return flight}async _refresh(){const ticket=++this.listEpoch;this.loadMoreFlight=null;this.loadMoreError=null;const scrollTop=this.rows?.scrollTop||0;if(this.batchStatus&&this.batchStatus.flowProjectId!==window._currentProjectId){this.batchStatus=null;this.activeBatchId=null;this.batchStatusTicket++}if(chrome.storage.local?.get&&chrome.storage.session?.get){const savedBatch=(await chrome.storage.local.get("motion_batch_status").catch(()=>({})))?.motion_batch_status;if(savedBatch)await this._acceptBatchStatus(savedBatch,{refresh:false});if(ticket!==this.listEpoch)return}const requestedUser=Number(window.authManager?.getUser?.()?.id);const requestedProject=window._currentProjectId,requestedPage=this.page;let page,loadError,loadedPage=1;const loadedProjects=new Map;try{for(let index=1;index<=requestedPage;index++){page=await window.authManager._apiCall("GET",`tools/motion-studio/projects?per_page=30&page=${index}`);if(ticket!==this.listEpoch||Number(window.authManager?.getUser?.()?.id)!==requestedUser||window._currentProjectId!==requestedProject||this.page!==requestedPage)return;for(const project of Array.isArray(page?.data)?page.data:[])loadedProjects.set(project.tool_project_id,project);loadedPage=index;if(!(index<Number(page?.last_page)))break}}catch(error){loadError=error}if(ticket!==this.listEpoch||this.view.classList.contains("hidden")||Number(window.authManager?.getUser?.()?.id)!==requestedUser||window._currentProjectId!==requestedProject||this.page!==requestedPage)return;this.filterEpoch++;this._closeMenu();this.view.replaceChildren();const heading=document.createElement("div");heading.className="motion-list-heading";const back=this._iconButton("back",this._text("common.back","Back"),()=>this.back());back.classList.add("motion-list-back");back.hidden=this.destination==="motion";const title=document.createElement("strong");title.textContent="Motion Studio";heading.append(back,title);this.view.append(heading);const toolbar=document.createElement("div");toolbar.className="wf-toolbar motion-list-toolbar";const left=document.createElement("div");left.className="wf-toolbar-left";const right=document.createElement("div");right.className="wf-toolbar-right";const searchToggle=this._iconButton("search",this._text("project.searchPlaceholder","Search project..."),()=>{searchRow.classList.toggle("hidden");searchToggle.setAttribute("aria-expanded",String(!searchRow.classList.contains("hidden")));if(!searchRow.classList.contains("hidden"))search.focus()});searchToggle.setAttribute("aria-expanded",String(!!this.query));left.append(searchToggle,this._iconButton("refresh",this._text("albums.refresh","Refresh"),()=>this.refresh()));const batch=this.batchStatus?.flowProjectId===window._currentProjectId?this.batchStatus:null;const active=["running","preparing","pausing"].includes(batch?.state);const retryableFailure=batch?.state==="failed"&&batch.items?.some(item=>item.state==="failed"&&(item.runId||item.failureStage==="preflight"));const resumable=(["paused","needs_review"].includes(batch?.state)||retryableFailure)&&Array.isArray(batch?.items)&&batch.items.length>0;const runBatch=this._iconButton("play",resumable?this._text("common.resume","Resume"):this._text("workflow.runAll","Run All"),()=>void this.runAll(resumable?batch:null));runBatch.disabled=active||batch?.state==="failed"&&!retryableFailure;const pauseBatch=this._iconButton("pause",this._text("common.pause","Pause"),()=>void this.controlBatch("pause"));const stopBatch=this._iconButton("stop",this._text("common.stop","Stop"),()=>void this.controlBatch("stop"));pauseBatch.disabled=!active||batch?.state==="pausing";stopBatch.disabled=!active;left.append(runBatch,pauseBatch,stopBatch);const create=this._createButton(window.I18n?.t?.("workflow.add")||"Add");create.title=window.I18n?.t?.("project.createNew")||"Create new project";const bulk=this._button(this._text("motionBatch.createTitle","Create Motion projects"),()=>void this.openBulk());bulk.className="btn btn-secondary btn-sm motion-bulk-create-button";right.append(bulk,create);toolbar.append(left,right);this.view.append(toolbar);if(batch&&Array.isArray(batch.items)){const progress=document.createElement("div");progress.className="motion-batch-progress";progress.setAttribute("role","status");progress.setAttribute("aria-live","polite");const done=batch.items.filter(item=>["ready","skipped"].includes(item.state)).length;const current=batch.items.find(item=>item.state==="running");const runner=current?this.runnerStatuses.get(current.projectId):null;const translated=this._text(`genBatch.status_${batch.state}`,batch.state);const detail=[translated,`${done}/${batch.items.length}`,current?.name||current?.projectId,runner?.frameId,runner?.stage].filter(Boolean).join(" \xB7 ");progress.textContent=detail;if(["failed","needs_review"].includes(batch.state)&&batch.items.some(item=>item.state==="failed")){const review=this._button(this._text("onboarding.skip","Skip"),()=>{this.lastBatchFailure=null;void this._showBatchFailure(batch).catch(error=>console.warn("[Motion Studio] Batch warning failed",error?.message))});review.className="btn btn-secondary btn-sm";progress.append(" ",review)}this.view.append(progress)}if(this.cleanupPending){const pending=document.createElement("p");pending.textContent=this._text("motionList.cleanupPending","Deleted on the server; local media cleanup is pending. Reopen Tools to retry.");this.view.append(pending)}const search=document.createElement("input");search.type="search";search.placeholder=this._text("project.searchPlaceholder","Search project...");search.value=this.query;search.setAttribute("aria-label",this._text("project.searchPlaceholder","Search project..."));search.className="motion-list-search";search.addEventListener("input",()=>{this.query=search.value.trim().toLowerCase();this._filter()});const searchRow=document.createElement("div");searchRow.className=`wf-search-row${this.query?"":" hidden"}`;const searchWrapper=document.createElement("div");searchWrapper.className="wf-search-input-wrapper";const closeSearch=this._iconButton("close",this._text("common.close","Close"),()=>{this.query="";search.value="";this._filter();searchRow.classList.add("hidden");searchToggle.setAttribute("aria-expanded","false");searchToggle.focus()});closeSearch.className="wf-search-close";searchWrapper.append(this._icon("search"),search,closeSearch);searchRow.append(searchWrapper);this.view.append(searchRow);const rows=document.createElement("div");rows.className="workflow-list motion-list-rows";rows.setAttribute("aria-live","polite");this.view.append(rows);this.rows=rows;rows.addEventListener("scroll",()=>{if(!this.loadMoreError&&rows.clientHeight>0&&rows.scrollTop>0&&rows.scrollTop+rows.clientHeight>=rows.scrollHeight-128)void this.loadMore()},{passive:true});for(let i=0;i<3;i++){const skeleton=document.createElement("div");skeleton.className="workflow-card skeleton motion-list-skeleton";skeleton.setAttribute("aria-hidden","true");rows.append(skeleton)}try{if(loadError)throw loadError;const projects=[...loadedProjects.values()];this.projects=projects;this.page=loadedPage;this.hasMore=loadedPage<Number(page?.last_page);this.listUserId=requestedUser;this.listProjectId=requestedProject;await this._restoreRunnerStatuses(projects,ticket);if(ticket!==this.listEpoch||this.view.classList.contains("hidden"))return;await this._filter();rows.scrollTop=requestedPage>1?scrollTop:0;if(this.batchStatus&&["failed","needs_review","busy"].includes(this.batchStatus.state))void this._showBatchFailure(this.batchStatus).catch(error=>console.warn("[Motion Studio] Batch warning failed",error?.message))}catch(error){if(ticket!==this.listEpoch)return;rows.textContent=error?.message||this._text("motionList.unavailable","Could not connect to Motion Studio on the server. Try again.");this.accessAllowed=false;this.accessStatus=error?.httpStatus??null;this.accessCode=error?.code??null;this.accessReason=this.accessCode==="MOTION_ENTITLEMENT_DENIED"?"locked":"unavailable";this.button.classList.toggle("motion-tool-locked",this.accessReason==="locked");this.button.classList.toggle("motion-tool-unavailable",this.accessReason==="unavailable");this.back()}}async _filter({append=false}={}){const ticket=append?this.filterEpoch:++this.filterEpoch;const renderTicket=++this.renderEpoch;const previousRows=append?new Map([...this.rows.querySelectorAll(".motion-project-row")].map(row=>[row.dataset.motionProjectId,row])):new Map;const sourceProjects=new Map((this.projects||[]).map(project=>[project.tool_project_id,project]));const scrollTop=this.rows.scrollTop;this._closeMenu();if(!append){clearInterval(this.thumbnailClock);this.thumbnailClock=null}const shown=(this.projects||[]).filter(project=>String(project.name||"").toLowerCase().includes(this.query));this.rows.classList.toggle("is-empty",!shown.length);if(!shown.length){this.rows.replaceChildren();const empty=document.createElement("div");empty.className="workflow-empty-state motion-empty-state";const label=document.createElement("p");label.textContent=this.query?this._text("project.noMatch","No matching projects found"):this._text("motionList.empty","No Motion projects yet");const hint=document.createElement("small");hint.textContent=this.query?this._text("motionList.searchHint","Try searching for another name."):this._text("motionList.emptyHint","Create your first project to start making videos.");empty.append(this._icon(this.query?"search":"video",48),label,hint);if(!this.query)empty.append(this._createButton(window.I18n?.t?.("project.createNew")||"Create new project"));this.rows.append(empty);this._syncLoadMore();return}let grouped;try{grouped=window.ProjectHelper?.sortByProjectGroup?await window.ProjectHelper.sortByProjectGroup(shown.map(project=>({...project,project_id:project.flow_project_id})),window._currentProjectId):shown.map(project=>({type:"item",item:project}))}catch(error){console.warn("[Motion Studio] Project grouping failed",error?.message);grouped=shown.map(project=>({type:"item",item:project}))}if(ticket!==this.filterEpoch||renderTicket!==this.renderEpoch||this.view.classList.contains("hidden"))return;this.rows.replaceChildren();for(const entry of grouped){if(entry.type==="header"){const header=document.createElement("div");header.className=`project-group-header${entry.isCurrent?" current":""}`;const name2=document.createElement("span");name2.className="project-group-name";name2.textContent=entry.projectName;const count=document.createElement("span");count.className="project-group-count";count.textContent=`(${entry.count})`;header.append(name2,count);if(entry.isCurrent){const badge2=document.createElement("span");badge2.className="project-group-badge";badge2.textContent=window.I18n?.t?.("common.current")||"current";header.append(badge2)}this.rows.append(header);continue}const project=entry.item;const previous=previousRows.get(project.tool_project_id);if(previous&&previous._motionProject===sourceProjects.get(project.tool_project_id)){this.rows.append(previous);continue}const frames=Object.values(project.data_json?.frames||{});const runnerStatus=this.runnerStatuses.get(project.tool_project_id);const runner=runnerStatus?.sourceRevision!=null&&Number(runnerStatus.sourceRevision)!==Number(project.data_json?.source_revision)?null:runnerStatus;const failed=runner?.state==="needs_review"||runner?.state==="failed"&&runner.sourceRevision!=null||frames.some(frame=>Object.values(frame.stages||{}).some(stage=>stage?.state==="failed"));const running=runner?["preparing","running","pausing"].includes(runner.state):project.data_json?.paused!==true&&frames.some(frame=>Object.values(frame.stages||{}).some(stage=>stage?.state==="running"));const data=project.data_json,final=data?.final,frameIds=Object.keys(data?.frames||{});const generationComplete=window.MotionRunJournal?.isGenerationComplete?.(data)===true;const complete=!running&&!failed&&(generationComplete||data?.requires_resplit!==true&&!!final&&final.stale!==true&&Number(final.source_revision)===Number(data?.source_revision)&&frameIds.length>0&&Array.isArray(final.frame_ids)&&final.frame_ids.length===frameIds.length&&new Set(final.frame_ids).size===frameIds.length&&frameIds.every(id=>final.frame_ids.includes(id)&&data.frames[id]?.stages?.persist?.state==="ready"));const storedState=["complete","completed"].includes(project.status)&&!complete?"ready":project.status;const statuses={draft:["idle",this._text("motionList.draft","Draft")],ready:["idle",this._text("common.ready","Ready")],running:["running",this._text("exec.running","Running")],paused:["pending",this._text("exec.paused","Paused")],complete:["completed",this._text("exec.completed","Completed")],completed:["completed",this._text("exec.completed","Completed")],failed:["failed",this._text("exec.failed","Failed")]};const[style,label]=statuses[complete?"complete":project.data_json?.paused?"paused":running?"running":failed?"failed":storedState]||["idle",this._text("common.ready","Ready")];const row=document.createElement("div");row.className=`workflow-card motion-project-row ${style}`;row._motionProject=sourceProjects.get(project.tool_project_id);row.dataset.motionProjectId=project.tool_project_id;const badge=document.createElement("button");badge.type="button";badge.className=`motion-project-thumbnail ${style}`;badge.setAttribute("aria-label",label);badge.setAttribute("data-tooltip",generationComplete?`${label} \xB7 ${this._text("flowErrors.codes."+data.generation_completion.merge_error,"")}`:label);if(running)badge.innerHTML='<svg class="motion-thumbnail-spinner" width="24" height="24" viewBox="0 0 24 24" fill="none" aria-hidden="true"><circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="2" opacity=".25"/><path d="M12 3a9 9 0 0 1 9 9" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>';else{const placeholder=document.createElement("span");placeholder.className="motion-thumbnail-placeholder";placeholder.setAttribute("aria-hidden","true");badge.append(placeholder)}const previewPlay=document.createElement("span");previewPlay.className="motion-thumbnail-play";previewPlay.setAttribute("aria-hidden","true");previewPlay.textContent="\u25B6";badge.append(previewPlay);if(running){if(!this.runningSince.has(project.tool_project_id))this.runningSince.set(project.tool_project_id,Date.now());if(!this.thumbnailClock)this.thumbnailClock=setInterval(()=>{if(this.view.classList.contains("hidden"))return;this.view.querySelectorAll("[data-motion-elapsed]").forEach(node=>{const seconds=Math.max(0,Math.floor((Date.now()-Number(node.dataset.motionElapsed))/1e3));node.textContent=`${Math.floor(seconds/60)}:${String(seconds%60).padStart(2,"0")}`})},1e3);this.thumbnailClock?.unref?.();const timer=document.createElement("span");timer.className="motion-thumbnail-timer";timer.dataset.motionElapsed=this.runningSince.get(project.tool_project_id);const elapsed=Math.max(0,Math.floor((Date.now()-Number(timer.dataset.motionElapsed))/1e3));timer.textContent=`${Math.floor(elapsed/60)}:${String(elapsed%60).padStart(2,"0")}`;badge.append(timer)}else this.runningSince.delete(project.tool_project_id);badge.addEventListener("click",event=>{event.stopPropagation();void this._previewProject(project).catch(error=>window.showNotification?.(error?.message||"MOTION_VIDEO_PREVIEW_FAILED","error"))});this.thumbnailJobs=this.thumbnailJobs.catch(()=>{}).then(()=>this._loadThumbnail(badge,project,ticket)).catch(error=>{const raw=String(error?.code||error?.message||"MOTION_THUMBNAIL_FAILED");console.warn("[MotionThumbnail]",{projectId:project.tool_project_id,code:/^[A-Za-z][A-Za-z0-9_:-]{0,99}$/.test(raw)?raw:"MOTION_THUMBNAIL_FAILED"})});const item=this._button("",()=>this.openProject(project.tool_project_id));item.className="motion-project-main workflow-card-info";const name=document.createElement("strong");name.className="workflow-card-name";name.textContent=project.name;name.title=project.name||"";const meta=document.createElement("span");meta.className="workflow-card-meta";const videoIcon=document.createElement("span");videoIcon.className="motion-project-video-icon";videoIcon.setAttribute("aria-hidden","true");meta.append(videoIcon,document.createTextNode(`${frames.length} frame`));const duration=Number(project.data_json?.source?.duration??project.data_json?.source_draft?.duration);if(Number.isFinite(duration)&&duration>0){const seconds=Math.floor(duration);const hours=Math.floor(seconds/3600);const minutes=Math.floor(seconds%3600/60);const text=hours>0?`${hours}:${String(minutes).padStart(2,"0")}:${String(seconds%60).padStart(2,"0")}`:`${minutes}:${String(seconds%60).padStart(2,"0")}`;meta.append(document.createTextNode(` \xB7 ${text}`))}else{meta.append(document.createTextNode(" \xB7 \u2014"))}const size=document.createElement("span");size.className="motion-project-size";size.textContent=" \xB7 \u2026";meta.append(size);this.usageJobs=(this.usageJobs||Promise.resolve()).catch(()=>{}).then(()=>this._loadProjectUsage(size,project,ticket));if(style==="running"){const completed=frames.filter(frame=>frame.stages?.persist?.state==="ready").length;const percent=frames.length?Math.round(completed/frames.length*100):0;meta.append(document.createTextNode(` \xB7 ${percent}%`));const progress=document.createElement("span");progress.className=`workflow-card-inline-progress${percent>0?"":" indeterminate"}`;progress.setAttribute("role","progressbar");progress.setAttribute("aria-label",label);progress.setAttribute("aria-valuemin","0");progress.setAttribute("aria-valuemax","100");if(percent>0)progress.setAttribute("aria-valuenow",String(percent));const bar=document.createElement("span");bar.className="workflow-card-inline-progress-bar";bar.style.width=`${percent}%`;progress.append(bar);meta.append(progress)}item.append(name,meta);if(project.updated_at&&Number.isFinite(Date.parse(project.updated_at))){const time=document.createElement("span");time.className="workflow-card-last-edit";time.append(this._icon("clock",12),document.createTextNode(new Date(project.updated_at).toLocaleString()));item.append(time)}const actions=document.createElement("div");actions.className="workflow-card-actions motion-project-actions";let enabled=project.data_json?.batch_enabled===true;let toggleRevision=project.revision;const pendingToggle=this.pendingBatchToggles.get(project.tool_project_id);const shownEnabled=pendingToggle?pendingToggle.value:enabled;const toggle=document.createElement("button");toggle.type="button";toggle.className=`wf-toggle-btn ${shownEnabled?"on":"off"}`;toggle.disabled=!!pendingToggle;toggle.setAttribute("role","switch");toggle.setAttribute("aria-checked",String(shownEnabled));toggle.setAttribute("aria-label",this._text("motionBatch.include","Include project in batch run"));toggle.title=this._text("motionBatch.include","Include project in batch run");const track=document.createElement("span");track.className="wf-toggle-track";const thumb=document.createElement("span");thumb.className="wf-toggle-thumb";track.append(thumb);toggle.append(track);toggle.addEventListener("click",async event=>{event.stopPropagation();if(toggle.disabled||this.pendingBatchToggles.has(project.tool_project_id))return;toggle.disabled=true;const pending={value:!enabled};this.pendingBatchToggles.set(project.tool_project_id,pending);const showEnabled=value=>{toggle.setAttribute("aria-checked",String(value));toggle.classList.toggle("on",value);toggle.classList.toggle("off",!value)};showEnabled(!enabled);try{const saved=await window.authManager._apiCall("PATCH",`tools/motion-studio/projects/${encodeURIComponent(project.tool_project_id)}/batch-enabled`,{revision:toggleRevision,batch_enabled:!enabled});enabled=!enabled;if(Number.isSafeInteger(saved?.revision))toggleRevision=saved.revision}catch(error){showEnabled(enabled);window.showNotification?.(error?.message||this._text("motionBatch.updateFailed","Could not update project."),"error")}finally{if(this.pendingBatchToggles.get(project.tool_project_id)===pending)this.pendingBatchToggles.delete(project.tool_project_id);await this.refresh().catch(refreshError=>console.warn("[Motion Studio] Refresh failed",refreshError?.message));toggle.disabled=false}});actions.append(toggle);const wrapper=document.createElement("div");wrapper.className="tobyflow-dot-menu";const menuButton=this._iconButton("more","Menu project",()=>{});menuButton.className="btn btn-secondary btn-sm tobyflow-dot-menu-btn";menuButton.setAttribute("aria-haspopup","menu");menuButton.setAttribute("aria-expanded","false");const menu=document.createElement("div");menu.className="tobyflow-dropdown-menu hidden";menu.setAttribute("role","menu");const paused=!complete&&(runner?["paused","failed","needs_review"].includes(runner.state):project.data_json?.paused===true);const controllableRunning=running&&!!runner?.runId;const runAction=controllableRunning?["pause",this._text("common.pause","Pause"),()=>this.controlProject(project,"pause"),false]:["play",paused?this._text("common.resume","Resume"):this._text("common.run","Run"),()=>this.runProject(project),false];for(const[icon,text,action,danger]of[runAction,["edit",this._text("node.rename","Rename"),()=>this.rename(project),false],["refresh","Reset",()=>this.reset(project),false],["trash",this._text("common.delete","Delete"),()=>this.remove(project),true]]){const option=document.createElement("button");option.type="button";option.className=`tobyflow-dropdown-item${danger?" tobyflow-dropdown-danger":""}`;option.setAttribute("role","menuitem");option.append(this._icon(icon),document.createTextNode(text));if(controllableRunning&&icon==="pause")option.disabled=runner.state==="pausing"||this.projectControlPending===project.tool_project_id;option.addEventListener("click",event=>{event.stopPropagation();this._closeMenu();void action()});menu.append(option)}menuButton.addEventListener("click",event=>{event.stopPropagation();const wasOpen=this.activeMenu?.wrapper===wrapper;this._closeMenu();if(wasOpen)return;row.classList.add("motion-menu-open");menu.classList.remove("hidden");menuButton.setAttribute("aria-expanded","true");const rect=menuButton.getBoundingClientRect();menu.style.position="fixed";menu.style.left=`${Math.max(8,Math.min(rect.right-menu.offsetWidth,window.innerWidth-menu.offsetWidth-8))}px`;menu.style.top=`${Math.max(8,Math.min(rect.bottom+4,window.innerHeight-menu.offsetHeight-8))}px`;this.activeMenu={wrapper,button:menuButton,menu,row}});wrapper.append(menuButton,menu);actions.append(wrapper);if(controllableRunning){const control=this._iconButton("pause",this._text("common.pause","Pause"),()=>void this.controlProject(project,"pause"));control.disabled=runner?.state==="pausing"||this.projectControlPending===project.tool_project_id;actions.prepend(control);if(runner?.runId&&running){const stop=this._iconButton("stop",this._text("common.stop","Stop"),()=>void this.controlProject(project,"stop"));stop.disabled=control.disabled;actions.prepend(stop)}}row.append(badge,item,actions);this.rows.append(row)}this._syncLoadMore();this.rows.scrollTop=scrollTop}_closeMenu(){if(!this.activeMenu)return;this.activeMenu.menu.classList.add("hidden");this.activeMenu.button.setAttribute("aria-expanded","false");this.activeMenu.row.classList.remove("motion-menu-open");this.activeMenu=null}async _creationProjectContext(expected=null){const operationId=expected?.operationId||`motion-scope-${Date.now()}-${this.creationScopeSequence=(this.creationScopeSequence||0)+1}`;const accountId=Number(window.authManager?.getUser?.()?.id);const context=await window.ProjectHelper?.getOpenProjectContext?.();const sameAccount=Number.isSafeInteger(accountId)&&accountId>0&&Number(window.authManager?.getUser?.()?.id)===accountId&&(!expected||expected.accountId===accountId);const ready=sameAccount&&/^[A-Za-z0-9_-]{1,120}$/.test(String(context?.projectId||""))&&(!expected||expected.flowProjectId===context.projectId);console.info("[MotionCreationScope]",JSON.stringify({operationId,stage:expected?"before_create":"opening",sameAccount,projectOpen:!!context?.projectId,matchesExpected:!expected||expected.flowProjectId===context?.projectId,allowed:ready}));if(!ready){if(!sameAccount){if(this.rows)this.rows.textContent=this._text("motionEditor.text237","Account changed. Close and reopen the project.")}else if(typeof window._showProjectSelectOverlay==="function"){await window._showProjectSelectOverlay(true)}else await window.ProjectHelper?.warnNoProjectForUpload?.(null,this._text("motionEditor.text118","Open a Flow project first."));return null}window._currentProjectId=context.projectId;window._currentProjectName=context.projectName||context.tabTitle||null;if(Number.isInteger(context.tabId)){window._targetFlowTabId=context.tabId;window.MessageBridge?.setTargetTabId?.(context.tabId,"motion_creation_context")}return{accountId,flowProjectId:context.projectId,operationId}}async create(){if(this.creating){console.info("[MotionCreateInteraction]",JSON.stringify({stage:"blocked",reason:"creation_pending"}));return}const operationId=`motion-create-${Date.now()}-${this.createSequence=(this.createSequence||0)+1}`;const startedAt=Date.now();const trace=(stage,reason=null,detail={})=>console.info("[MotionCreateInteraction]",JSON.stringify({operationId,stage,elapsedMs:Date.now()-startedAt,reason:reason==null?null:/^[a-zA-Z][a-zA-Z0-9_:.-]{0,120}$/.test(reason)?reason:"unclassified_error",...detail}));const setPending=pending=>this.view?.querySelectorAll(".motion-create-button").forEach(button=>{button.disabled=pending;button.setAttribute("aria-busy",String(pending))});this.creating=true;setPending(true);trace("start");try{trace("access_check");if(await this.gateForAction()!==true){trace("blocked",this.accessCode||this.accessReason||"access_denied");await this.showAccessModal();return}trace("project_context");const scope=await this._creationProjectContext();if(!scope){trace("blocked","project_context_unavailable");return}const{flowProjectId,accountId}=scope;const translate=(key,fallback)=>{const text=window.I18n?.t?.(key);return text&&text!==key?text:fallback};const title=translate("project.createNew","Create new project");const namePrompt=translate("motionList.projectNameRequired","Enter a project name.");if(typeof window.customDialog?.prompt!=="function")throw new Error("MOTION_CREATE_DIALOG_UNAVAILABLE");trace("name_prompt");const nameResult=window.customDialog.prompt(namePrompt,{title,defaultValue:"Motion project",icon:"video-creative",confirmText:translate("common.create","Create"),cancelText:translate("common.cancel","Cancel")});const dialog=document.querySelector(".cdialog-overlay");const dialogStyle=dialog&&window.getComputedStyle?.(dialog);trace("name_prompt_opened",null,{modalAttached:!!dialog?.isConnected,modalDisplay:dialogStyle?.display||null,modalVisibility:dialogStyle?.visibility||null});const name=await nameResult;if(name===null){trace("cancelled");return}if(!name.trim()||name.trim().length>160){await window.customDialog.alert(`${namePrompt} (1\u2013160)`,{title,type:"warning"});return}trace("context_recheck");if(!await this._creationProjectContext(scope)){trace("blocked","project_context_changed");return}trace("create_request");const project=await window.authManager._apiCall("POST","tools/motion-studio/projects",{name:name.trim(),flow_project_id:flowProjectId,voice_mode:"lip_sync"});if(Number(window.authManager?.getUser?.()?.id)!==accountId){trace("blocked","account_changed");return}trace("created");await this.refresh();if(project?.tool_project_id&&window._currentProjectId===flowProjectId)this.openProject(project.tool_project_id,{newlyCreated:true})}catch(error){trace("failed",error?.code||error?.message||"creation_failed");if(error?.code==="MOTION_PROJECT_QUOTA_EXCEEDED"&&window.customDialog){const t=(key,fallback)=>{const value=window.I18n?.t?.(key);return value&&value!==key?value:fallback};const title=t("gate.usageLimitTitle","Usage limit reached");const showUpgrade=window.SystemConfig?.getBool?.("show_upgrade_ui")!==false;const detail=showUpgrade?t("gate.usageLimitUpgrade","Upgrade your plan to increase the limit."):t("gate.usageLimitContact","Please contact admin to increase the limit.");const message=`Motion Studio \u2014 ${title}.
+${this._text("motionBatch.skipConfirm", "Skip this project and continue the batch?")}`,
+        {
+          title: this._text("workflow.runAll", "Run All"),
+          type: "warning",
+          confirmText: this._text("onboarding.skip", "Skip"),
+          cancelText: this._text("common.cancel", "Cancel"),
+        },
+      );
+      if (
+        skip &&
+        this.batchStatus?.batchId === status.batchId &&
+        Number(window.authManager?.getUser?.()?.id) === status.userId &&
+        window._currentProjectId === status.flowProjectId
+      )
+        await this.runAll(status, failedItem.projectId);
+    } else
+      await window.customDialog?.alert?.(lines.join("\n\n"), {
+        title: this._text("workflow.runAll", "Run All"),
+        type: "warning",
+      });
+  }
+  async _acceptRunnerStatus(status, { refresh = true } = {}) {
+    const userId = Number(window.authManager?.getUser?.()?.id);
+    if (
+      !Number.isSafeInteger(userId) ||
+      userId < 1 ||
+      Number(status?.userId) !== userId ||
+      typeof status.projectId !== "string" ||
+      typeof status.runId !== "string" ||
+      !Number.isSafeInteger(status.epoch) ||
+      status.epoch < 1
+    )
+      return;
+    const ticket = (this.runnerStatusEpoch.get(status.projectId) || 0) + 1;
+    this.runnerStatusEpoch.set(status.projectId, ticket);
+    try {
+      const host = (
+        await chrome.storage.session.get("tobyflow_motion_runner_host")
+      )?.tobyflow_motion_runner_host;
+      if (
+        ticket !== this.runnerStatusEpoch.get(status.projectId) ||
+        Number(window.authManager?.getUser?.()?.id) !== userId
+      )
+        return;
+      const markLost = () => {
+        const current = this.runnerStatuses.get(status.projectId);
+        if (
+          !["preparing", "running", "pausing"].includes(status.state) ||
+          (current && current.epoch > status.epoch)
+        )
+          return;
+        this.runnerStatuses.set(status.projectId, {
+          ...status,
+          state: "needs_review",
+          error: "MOTION_RUNNER_HOST_CLOSED",
+        });
+        if (refresh && !this.view.classList.contains("hidden")) {
+          clearTimeout(this.projectChangeRefreshTimer);
+          this.projectChangeRefreshTimer = setTimeout(() => {
+            if (!this.view.classList.contains("hidden")) void this.refresh();
+          }, 400);
+        }
+      };
+      if (
+        !host ||
+        (host.userId === userId &&
+          Number.isSafeInteger(host.epoch) &&
+          host.epoch > status.epoch)
+      ) {
+        markLost();
+        return;
+      }
+      if (
+        host.userId !== userId ||
+        host.epoch !== status.epoch ||
+        !Number.isInteger(host.tabId)
+      )
+        return;
+      this.runnerHostTabId = host.tabId;
+      const tab = await chrome.tabs.get(host.tabId).catch(() => null);
+      if (
+        ticket !== this.runnerStatusEpoch.get(status.projectId) ||
+        Number(window.authManager?.getUser?.()?.id) !== userId ||
+        this.runnerHostTabId !== host.tabId
+      )
+        return;
+      if (!tab) {
+        markLost();
+        return;
+      }
+      if (
+        tab.windowId !== host.windowId ||
+        tab.url !== (host.url || chrome.runtime.getURL("motion-runner.html"))
+      )
+        return;
+      const previousStatus = this.runnerStatuses.get(status.projectId);
+      const rowChanged =
+        !previousStatus ||
+        ["runId", "epoch", "state", "sourceRevision", "error"].some(
+          (key) => previousStatus[key] !== status[key],
+        );
+      this.runnerStatuses.set(status.projectId, status);
+      if (
+        !previousStatus ||
+        ["runId", "state", "stage", "detail", "frameId", "error"].some(
+          (key) => previousStatus[key] !== status[key],
+        )
+      )
+        console.info(
+          "[MotionSidebarRun]",
+          JSON.stringify({
+            projectId: status.projectId,
+            runId: status.runId,
+            state: status.state,
+            stage: status.stage || null,
+            detail: status.detail || null,
+            frameId: status.frameId || null,
+            code: status.error || null,
+          }),
+        );
+      const downloadState = status.downloadError
+        ? "failed"
+        : status.stage === "final_download"
+          ? status.detail
+          : null;
+      if (
+        ["running", "ready", "failed"].includes(downloadState) &&
+        this.downloadNotices.get(status.runId) !== downloadState
+      ) {
+        this.downloadNotices.set(status.runId, downloadState);
+        if (this.downloadNotices.size > 100)
+          this.downloadNotices.delete(this.downloadNotices.keys().next().value);
+        window.showNotification?.(
+          downloadState === "running"
+            ? this._text("download.downloading", "Downloading...")
+            : downloadState === "ready"
+              ? this._text("download.success", "Downloaded successfully!")
+              : this._text("download.failed", "Download failed"),
+          downloadState === "failed"
+            ? "error"
+            : downloadState === "running"
+              ? "info"
+              : "success",
+        );
+      }
+      if (
+        this.manualRunIds.has(status.runId) &&
+        ["failed", "needs_review"].includes(status.state)
+      ) {
+        this.manualRunIds.delete(status.runId);
+        void this._showProjectFailure(status).catch((error) =>
+          console.warn(
+            "[Motion Studio] Project warning failed",
+            error?.message,
+          ),
+        );
+      } else if (["ready", "paused", "stopped"].includes(status.state))
+        this.manualRunIds.delete(status.runId);
+      if (
+        refresh &&
+        rowChanged &&
+        !this.view.classList.contains("hidden") &&
+        this.rows
+      ) {
+        await this._filter();
+      }
+    } catch (_) {}
+  }
+  async _showProjectFailure(status) {
+    const current = await window.authManager
+      ._apiCall(
+        "GET",
+        `tools/motion-studio/projects/${encodeURIComponent(status.projectId)}`,
+      )
+      .catch(() => null);
+    if (
+      Number(window.authManager?.getUser?.()?.id) !== status.userId ||
+      current?.tool_project_id !== status.projectId ||
+      current?.flow_project_id !== window._currentProjectId
+    )
+      return;
+    const translate = (key) => {
+      const value = window.I18n?.t?.(key);
+      return value && value !== key ? value : "";
+    };
+    const message = window.MotionFailureNotice.format(status, {
+      errorMessage: (code, context = {}) =>
+        translate(`flowErrors.codes.${code}`) ||
+        translate(
+          context.transcript
+            ? "motionEditor.transcriptFailed"
+            : "motionEditor.errorGeneric",
+        ) ||
+        code,
+      text: (key) => translate(`motionEditor.${key}`),
+      format: (key, _fallback, values) =>
+        translate(`motionEditor.${key}`).replace(/\{(\d+)\}/g, (_, i) =>
+          String(values[Number(i)] ?? ""),
+        ),
+    });
+    const details = [current.name, message, status.cleanupError]
+      .filter(Boolean)
+      .join("\n");
+    await window.customDialog?.alert?.(details, {
+      title: this._text("common.run", "Run"),
+      type: "warning",
+      icon: "flow",
+    });
+  }
+  async _clearRunnerStatus(userId, projectId) {
+    this.runnerStatuses.delete(projectId);
+    this.runnerStatusEpoch.set(
+      projectId,
+      (this.runnerStatusEpoch.get(projectId) || 0) + 1,
+    );
+    try {
+      await chrome.storage.local?.remove?.(
+        `motion_runner_status:${userId}:${projectId}`,
+      );
+    } catch (error) {
+      console.warn(
+        "[Motion Studio] Runner status cleanup failed",
+        error?.message,
+      );
+    }
+  }
+  gate({ force = false } = {}) {
+    const auth = window.authManager;
+    const userId = auth?.getUser?.()?.id;
+    const token = auth?.getToken?.() ?? auth?.token;
+    const loggedIn = !!auth?.isLoggedIn?.();
+    const version = window.featureGate?._lastEntitlementsVersion;
+    const pending = this.gateFlight;
+    if (
+      !force &&
+      pending &&
+      pending.userId === userId &&
+      pending.token === token &&
+      pending.loggedIn === loggedIn &&
+      pending.version === version
+    )
+      return pending.promise;
+    const flight = { userId, token, loggedIn, version };
+    flight.promise = this._checkGate().finally(() => {
+      if (this.gateFlight === flight) this.gateFlight = null;
+    });
+    this.gateFlight = flight;
+    return flight.promise;
+  }
+  async _checkGate() {
+    const ticket = ++this.gateEpoch;
+    this.button?.classList.remove("hidden");
+    if (!window.authManager?.isLoggedIn?.()) {
+      this.accessAllowed = false;
+      this.accessReason = "locked";
+      this.button?.classList.add("motion-tool-locked");
+      this.button?.classList.remove("motion-tool-unavailable");
+      this.back();
+      window.refreshModuleOverlays?.();
+      return false;
+    }
+    try {
+      const userId = window.authManager.getUser?.()?.id;
+      for (let attempt = 0; ; attempt++) {
+        try {
+          await window.authManager._apiCall(
+            "GET",
+            "tools/motion-studio/projects?per_page=1",
+          );
+          break;
+        } catch (error) {
+          if (
+            ![502, 503, 504].includes(Number(error?.httpStatus)) ||
+            attempt >= 2
+          )
+            throw error;
+          console.info("[Motion Studio] Access check retry", {
+            status: error.httpStatus,
+            attempt: attempt + 1,
+          });
+          await new Promise((resolve) =>
+            setTimeout(resolve, attempt === 0 ? 500 : 1200),
+          );
+          if (
+            ticket !== this.gateEpoch ||
+            !window.authManager.isLoggedIn?.() ||
+            window.authManager.getUser?.()?.id !== userId
+          )
+            return null;
+        }
+      }
+      if (ticket === this.gateEpoch) {
+        this.accessAllowed = true;
+        this.accessReason = null;
+        this.accessStatus = null;
+        this.accessCode = null;
+        this.button?.classList.remove("motion-tool-locked");
+        this.button?.classList.remove("motion-tool-unavailable");
+        window.refreshModuleOverlays?.();
+      }
+      return ticket === this.gateEpoch ? this.accessAllowed : null;
+    } catch (error) {
+      if (ticket === this.gateEpoch) {
+        this.accessAllowed = false;
+        this.accessStatus = error?.httpStatus ?? null;
+        this.accessCode = error?.code ?? null;
+        this.accessReason =
+          this.accessCode === "MOTION_ENTITLEMENT_DENIED"
+            ? "locked"
+            : "unavailable";
+        this.button?.classList.toggle(
+          "motion-tool-locked",
+          this.accessReason === "locked",
+        );
+        this.button?.classList.toggle(
+          "motion-tool-unavailable",
+          this.accessReason === "unavailable",
+        );
+        this.back();
+        window.refreshModuleOverlays?.();
+      }
+      console.warn("[Motion Studio] Access check failed", {
+        status: error?.httpStatus ?? null,
+        code: error?.code ?? null,
+        reason: this.accessReason,
+      });
+      return ticket === this.gateEpoch ? false : null;
+    }
+  }
+  async gateForAction() {
+    if (this.actionGateFlight) return this.actionGateFlight;
+    this.actionGateFlight = (async () => {
+      let result;
+      do {
+        result = await this.gate();
+      } while (result === null);
+      return result;
+    })();
+    try {
+      return await this.actionGateFlight;
+    } finally {
+      this.actionGateFlight = null;
+    }
+  }
+  async showAccessModal() {
+    if (this.accessReason === "locked") {
+      await window.featureGate?.showModuleBlockedDialog?.(
+        "motion_tool_enabled",
+      );
+      return;
+    }
+    if (this.accessStatus === 403) {
+      await window.customDialog?.alert?.(
+        this.accessCode === "MOTION_TOOL_DISABLED"
+          ? this._text(
+              "motionList.toolDisabled",
+              "Motion Studio is disabled in Tools \u2192 Tool config. Contact your administrator.",
+            )
+          : this._text(
+              "motionList.accessDenied",
+              "The server denied access to Motion Studio. Check permissions and tool configuration.",
+            ),
+        { title: "Motion Studio", type: "warning" },
+      );
+      return;
+    }
+    const retry = await window.customDialog?.confirm?.(
+      this._text(
+        "motionList.unavailable",
+        "Could not connect to Motion Studio on the server. Try again.",
+      ),
+      {
+        title: "Motion Studio",
+        type: "warning",
+        confirmText: this._text("common.retry", "Retry"),
+        cancelText: this._text("common.close", "Close"),
+      },
+    );
+    if (retry && (await this.gateForAction())) await this.open();
+  }
+  back() {
+    this.listEpoch++;
+    this.filterEpoch++;
+    this.loadMoreFlight = null;
+    this._closeMenu();
+    this._closePreview();
+    clearInterval(this.thumbnailClock);
+    this.thumbnailClock = null;
+    this.grid?.classList.remove("hidden");
+    this.view?.classList.add("hidden");
+  }
+  async open() {
+    if (!this.accessAllowed) {
+      await this.showAccessModal();
+      return;
+    }
+    const direct = this.destination === "motion" && this.motionTab;
+    (direct ? this.motionTab : this.tab).append(this.view);
+    this.grid.classList.toggle("hidden", !direct);
+    this.view.classList.remove("hidden");
+    this.page = 1;
+    await this.refresh();
+    this.reconcileTombstones().catch(() => {});
+  }
+  async openTab() {
+    window.motionTemplateTab?.select("motion");
+    this.destination = "motion";
+    const allowed = await this.gateForAction();
+    if (allowed === true) {
+      if (!(await this._creationProjectContext())) return;
+      await this.open();
+    } else if (
+      allowed === false &&
+      !this.motionTab?.querySelector(".module-blocked-overlay")
+    )
+      await this.showAccessModal();
+  }
+  _button(label, action, title = label) {
+    const button = document.createElement("button");
+    button.type = "button";
+    button.textContent = label;
+    button.title = title;
+    button.className = "btn btn-secondary btn-sm";
+    button.addEventListener("click", action);
+    return button;
+  }
+  _icon(name, size = 14) {
+    const paths = {
+      back: '<path d="m15 18-6-6 6-6"/>',
+      search: '<circle cx="11" cy="11" r="8"/><path d="m21 21-4.35-4.35"/>',
+      refresh:
+        '<polyline points="23 4 23 10 17 10"/><polyline points="1 20 1 14 7 14"/><path d="M3.51 9a9 9 0 0 1 14.85-3.36L23 10M1 14l4.64 4.36A9 9 0 0 0 20.49 15"/>',
+      plus: '<path d="M12 5v14M5 12h14"/>',
+      close: '<path d="m6 6 12 12M18 6 6 18"/>',
+      edit: '<path d="m16 3 5 5L9 20l-6 1 1-6L16 3ZM14 5l5 5"/>',
+      trash: '<path d="M3 6h18M9 6V3h6v3M5 6l1 15h12l1-15M10 10v7M14 10v7"/>',
+      video:
+        '<rect x="3" y="4" width="18" height="16" rx="3"/><path d="m10 8 6 4-6 4V8Z"/>',
+      play: '<path d="m8 5 11 7-11 7V5Z"/>',
+      pause: '<path d="M8 5v14M16 5v14"/>',
+      stop: '<rect x="6" y="6" width="12" height="12" rx="1"/>',
+      clock: '<circle cx="12" cy="12" r="9"/><path d="M12 7v5l3 2"/>',
+      more: '<circle cx="12" cy="5" r="1"/><circle cx="12" cy="12" r="1"/><circle cx="12" cy="19" r="1"/>',
+    };
+    const holder = document.createElement("span");
+    holder.innerHTML = `<svg width="${size}" height="${size}" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true">${paths[name] || ""}</svg>`;
+    if (name === "refresh")
+      holder.firstElementChild.setAttribute("stroke-width", "2");
+    return holder.firstElementChild;
+  }
+  _iconButton(icon, title, action) {
+    const button = this._button("", action, title);
+    button.classList.add("btn-toolbar-icon");
+    button.setAttribute("aria-label", title);
+    button.append(this._icon(icon));
+    return button;
+  }
+  _createButton(label) {
+    const button = this._button("", () => this.create(), label);
+    button.className =
+      "btn btn-primary btn-sm btn-icon-text btn-add-short motion-create-button";
+    const text = document.createElement("span");
+    text.textContent = label;
+    button.append(this._icon("plus"), text);
+    button.disabled = this.creating === true;
+    button.setAttribute("aria-busy", String(this.creating === true));
+    return button;
+  }
+  refresh() {
+    if (this.refreshFlight) {
+      this.refreshQueued = true;
+      return this.refreshFlight;
+    }
+    const flight = this._refresh().finally(() => {
+      if (this.refreshFlight !== flight) return;
+      this.refreshFlight = null;
+      const queued = this.refreshQueued;
+      this.refreshQueued = false;
+      if (queued && !this.view.classList.contains("hidden"))
+        void this.refresh();
+    });
+    this.refreshFlight = flight;
+    return flight;
+  }
+  _syncLoadMore() {
+    this.rows?.querySelector(".motion-list-load-more")?.remove();
+    if (!this.rows || !this.hasMore) return;
+    const footer = document.createElement("div");
+    footer.className = "motion-list-load-more";
+    const pending = !!this.loadMoreFlight;
+    const button = this._button(
+      this._text(
+        pending
+          ? "common.loading"
+          : this.loadMoreError
+            ? "common.retry"
+            : "common.loadMore",
+        pending ? "Loading..." : this.loadMoreError ? "Retry" : "Load more",
+      ),
+      () => void this.loadMore(),
+    );
+    button.disabled = pending;
+    button.setAttribute("aria-busy", String(pending));
+    if (this.loadMoreError) {
+      const error = document.createElement("small");
+      error.setAttribute("role", "status");
+      error.textContent = this.loadMoreError;
+      footer.append(error);
+    }
+    footer.append(button);
+    this.rows.append(footer);
+  }
+  async _restoreRunnerStatuses(projects, ticket) {
+    const userId = Number(window.authManager?.getUser?.()?.id);
+    if (
+      !Number.isSafeInteger(userId) ||
+      userId < 1 ||
+      !chrome.storage.local?.get ||
+      !chrome.storage.session?.get
+    )
+      return;
+    const keys = projects.map(
+      (item) => `motion_runner_status:${userId}:${item.tool_project_id}`,
+    );
+    const baseline = new Map(
+      projects.map((item) => [
+        item.tool_project_id,
+        this.runnerStatusEpoch.get(item.tool_project_id) || 0,
+      ]),
+    );
+    const statuses = await chrome.storage.local.get(keys).catch(() => ({}));
+    if (
+      ticket !== this.listEpoch ||
+      this.view.classList.contains("hidden") ||
+      Number(window.authManager?.getUser?.()?.id) !== userId
+    )
+      return;
+    await Promise.all(
+      projects.map((item, index) => {
+        if (
+          (this.runnerStatusEpoch.get(item.tool_project_id) || 0) !==
+          baseline.get(item.tool_project_id)
+        )
+          return null;
+        const status = statuses?.[keys[index]];
+        return status
+          ? this._acceptRunnerStatus(status, { refresh: false })
+          : null;
+      }),
+    );
+  }
+  loadMore() {
+    if (
+      !this.hasMore ||
+      this.refreshFlight ||
+      this.view.classList.contains("hidden")
+    )
+      return Promise.resolve();
+    if (this.loadMoreFlight) return this.loadMoreFlight;
+    const pane = this.view.closest(".tab-pane");
+    if (pane && !pane.classList.contains("active")) return Promise.resolve();
+    const userId = Number(window.authManager?.getUser?.()?.id),
+      flowProjectId = window._currentProjectId;
+    if (this.listUserId !== userId || this.listProjectId !== flowProjectId)
+      return Promise.resolve();
+    const ticket = this.listEpoch,
+      previousPage = this.page;
+    const current = () =>
+      ticket === this.listEpoch &&
+      !this.view.classList.contains("hidden") &&
+      Number(window.authManager?.getUser?.()?.id) === userId &&
+      window._currentProjectId === flowProjectId;
+    this.loadMoreError = null;
+    const flight = Promise.resolve().then(async () => {
+      try {
+        const page = await window.authManager._apiCall(
+          "GET",
+          `tools/motion-studio/projects?per_page=30&page=${previousPage + 1}`,
+        );
+        if (!current() || this.page !== previousPage) return;
+        const projects = new Map(
+          (this.projects || []).map((project) => [
+            project.tool_project_id,
+            project,
+          ]),
+        );
+        const additions = Array.isArray(page?.data) ? page.data : [];
+        for (const project of additions)
+          projects.set(project.tool_project_id, project);
+        this.projects = [...projects.values()];
+        this.page = previousPage + 1;
+        this.hasMore = this.page < Number(page?.last_page);
+        await this._restoreRunnerStatuses(additions, ticket);
+        if (!current()) return;
+        await this._filter({ append: true });
+      } catch (error) {
+        if (current())
+          this.loadMoreError =
+            error?.message ||
+            this._text(
+              "motionList.unavailable",
+              "Could not connect to Motion Studio on the server. Try again.",
+            );
+      } finally {
+        if (this.loadMoreFlight === flight) {
+          this.loadMoreFlight = null;
+          if (current()) this._syncLoadMore();
+        }
+      }
+    });
+    this.loadMoreFlight = flight;
+    this._syncLoadMore();
+    return flight;
+  }
+  async _refresh() {
+    const ticket = ++this.listEpoch;
+    this.loadMoreFlight = null;
+    this.loadMoreError = null;
+    const scrollTop = this.rows?.scrollTop || 0;
+    if (
+      this.batchStatus &&
+      this.batchStatus.flowProjectId !== window._currentProjectId
+    ) {
+      this.batchStatus = null;
+      this.activeBatchId = null;
+      this.batchStatusTicket++;
+    }
+    if (chrome.storage.local?.get && chrome.storage.session?.get) {
+      const savedBatch = (
+        await chrome.storage.local.get("motion_batch_status").catch(() => ({}))
+      )?.motion_batch_status;
+      if (savedBatch)
+        await this._acceptBatchStatus(savedBatch, { refresh: false });
+      if (ticket !== this.listEpoch) return;
+    }
+    const requestedUser = Number(window.authManager?.getUser?.()?.id);
+    const requestedProject = window._currentProjectId,
+      requestedPage = this.page;
+    let page,
+      loadError,
+      loadedPage = 1;
+    const loadedProjects = new Map();
+    try {
+      for (let index = 1; index <= requestedPage; index++) {
+        page = await window.authManager._apiCall(
+          "GET",
+          `tools/motion-studio/projects?per_page=30&page=${index}`,
+        );
+        if (
+          ticket !== this.listEpoch ||
+          Number(window.authManager?.getUser?.()?.id) !== requestedUser ||
+          window._currentProjectId !== requestedProject ||
+          this.page !== requestedPage
+        )
+          return;
+        for (const project of Array.isArray(page?.data) ? page.data : [])
+          loadedProjects.set(project.tool_project_id, project);
+        loadedPage = index;
+        if (!(index < Number(page?.last_page))) break;
+      }
+    } catch (error) {
+      loadError = error;
+    }
+    if (
+      ticket !== this.listEpoch ||
+      this.view.classList.contains("hidden") ||
+      Number(window.authManager?.getUser?.()?.id) !== requestedUser ||
+      window._currentProjectId !== requestedProject ||
+      this.page !== requestedPage
+    )
+      return;
+    this.filterEpoch++;
+    this._closeMenu();
+    this.view.replaceChildren();
+    const heading = document.createElement("div");
+    heading.className = "motion-list-heading";
+    const back = this._iconButton(
+      "back",
+      this._text("common.back", "Back"),
+      () => this.back(),
+    );
+    back.classList.add("motion-list-back");
+    back.hidden = this.destination === "motion";
+    const title = document.createElement("strong");
+    title.textContent = "Motion Studio";
+    heading.append(back, title);
+    this.view.append(heading);
+    const toolbar = document.createElement("div");
+    toolbar.className = "wf-toolbar motion-list-toolbar";
+    const left = document.createElement("div");
+    left.className = "wf-toolbar-left";
+    const right = document.createElement("div");
+    right.className = "wf-toolbar-right";
+    const searchToggle = this._iconButton(
+      "search",
+      this._text("project.searchPlaceholder", "Search project..."),
+      () => {
+        searchRow.classList.toggle("hidden");
+        searchToggle.setAttribute(
+          "aria-expanded",
+          String(!searchRow.classList.contains("hidden")),
+        );
+        if (!searchRow.classList.contains("hidden")) search.focus();
+      },
+    );
+    searchToggle.setAttribute("aria-expanded", String(!!this.query));
+    left.append(
+      searchToggle,
+      this._iconButton("refresh", this._text("albums.refresh", "Refresh"), () =>
+        this.refresh(),
+      ),
+    );
+    const batch =
+      this.batchStatus?.flowProjectId === window._currentProjectId
+        ? this.batchStatus
+        : null;
+    const active = ["running", "preparing", "pausing"].includes(batch?.state);
+    const retryableFailure =
+      batch?.state === "failed" &&
+      batch.items?.some(
+        (item) =>
+          item.state === "failed" &&
+          (item.runId || item.failureStage === "preflight"),
+      );
+    const resumable =
+      (["paused", "needs_review"].includes(batch?.state) || retryableFailure) &&
+      Array.isArray(batch?.items) &&
+      batch.items.length > 0;
+    const runBatch = this._iconButton(
+      "play",
+      resumable
+        ? this._text("common.resume", "Resume")
+        : this._text("workflow.runAll", "Run All"),
+      () => void this.runAll(resumable ? batch : null),
+    );
+    runBatch.disabled =
+      active || (batch?.state === "failed" && !retryableFailure);
+    const pauseBatch = this._iconButton(
+      "pause",
+      this._text("common.pause", "Pause"),
+      () => void this.controlBatch("pause"),
+    );
+    const stopBatch = this._iconButton(
+      "stop",
+      this._text("common.stop", "Stop"),
+      () => void this.controlBatch("stop"),
+    );
+    pauseBatch.disabled = !active || batch?.state === "pausing";
+    stopBatch.disabled = !active;
+    left.append(runBatch, pauseBatch, stopBatch);
+    const create = this._createButton(
+      window.I18n?.t?.("workflow.add") || "Add",
+    );
+    create.title =
+      window.I18n?.t?.("project.createNew") || "Create new project";
+    const bulk = this._button(
+      this._text("motionBatch.createTitle", "Create Motion projects"),
+      () => void this.openBulk(),
+    );
+    bulk.className = "btn btn-secondary btn-sm motion-bulk-create-button";
+    right.append(bulk, create);
+    toolbar.append(left, right);
+    this.view.append(toolbar);
+    if (batch && Array.isArray(batch.items)) {
+      const progress = document.createElement("div");
+      progress.className = "motion-batch-progress";
+      progress.setAttribute("role", "status");
+      progress.setAttribute("aria-live", "polite");
+      const done = batch.items.filter((item) =>
+        ["ready", "skipped"].includes(item.state),
+      ).length;
+      const current = batch.items.find((item) => item.state === "running");
+      const runner = current
+        ? this.runnerStatuses.get(current.projectId)
+        : null;
+      const translated = this._text(
+        `genBatch.status_${batch.state}`,
+        batch.state,
+      );
+      const detail = [
+        translated,
+        `${done}/${batch.items.length}`,
+        current?.name || current?.projectId,
+        runner?.frameId,
+        runner?.stage,
+      ]
+        .filter(Boolean)
+        .join(" \xB7 ");
+      progress.textContent = detail;
+      if (
+        ["failed", "needs_review"].includes(batch.state) &&
+        batch.items.some((item) => item.state === "failed")
+      ) {
+        const review = this._button(
+          this._text("onboarding.skip", "Skip"),
+          () => {
+            this.lastBatchFailure = null;
+            void this._showBatchFailure(batch).catch((error) =>
+              console.warn(
+                "[Motion Studio] Batch warning failed",
+                error?.message,
+              ),
+            );
+          },
+        );
+        review.className = "btn btn-secondary btn-sm";
+        progress.append(" ", review);
+      }
+      this.view.append(progress);
+    }
+    if (this.cleanupPending) {
+      const pending = document.createElement("p");
+      pending.textContent = this._text(
+        "motionList.cleanupPending",
+        "Deleted on the server; local media cleanup is pending. Reopen Tools to retry.",
+      );
+      this.view.append(pending);
+    }
+    const search = document.createElement("input");
+    search.type = "search";
+    search.placeholder = this._text(
+      "project.searchPlaceholder",
+      "Search project...",
+    );
+    search.value = this.query;
+    search.setAttribute(
+      "aria-label",
+      this._text("project.searchPlaceholder", "Search project..."),
+    );
+    search.className = "motion-list-search";
+    search.addEventListener("input", () => {
+      this.query = search.value.trim().toLowerCase();
+      this._filter();
+    });
+    const searchRow = document.createElement("div");
+    searchRow.className = `wf-search-row${this.query ? "" : " hidden"}`;
+    const searchWrapper = document.createElement("div");
+    searchWrapper.className = "wf-search-input-wrapper";
+    const closeSearch = this._iconButton(
+      "close",
+      this._text("common.close", "Close"),
+      () => {
+        this.query = "";
+        search.value = "";
+        this._filter();
+        searchRow.classList.add("hidden");
+        searchToggle.setAttribute("aria-expanded", "false");
+        searchToggle.focus();
+      },
+    );
+    closeSearch.className = "wf-search-close";
+    searchWrapper.append(this._icon("search"), search, closeSearch);
+    searchRow.append(searchWrapper);
+    this.view.append(searchRow);
+    const rows = document.createElement("div");
+    rows.className = "workflow-list motion-list-rows";
+    rows.setAttribute("aria-live", "polite");
+    this.view.append(rows);
+    this.rows = rows;
+    rows.addEventListener(
+      "scroll",
+      () => {
+        if (
+          !this.loadMoreError &&
+          rows.clientHeight > 0 &&
+          rows.scrollTop > 0 &&
+          rows.scrollTop + rows.clientHeight >= rows.scrollHeight - 128
+        )
+          void this.loadMore();
+      },
+      { passive: true },
+    );
+    for (let i = 0; i < 3; i++) {
+      const skeleton = document.createElement("div");
+      skeleton.className = "workflow-card skeleton motion-list-skeleton";
+      skeleton.setAttribute("aria-hidden", "true");
+      rows.append(skeleton);
+    }
+    try {
+      if (loadError) throw loadError;
+      const projects = [...loadedProjects.values()];
+      this.projects = projects;
+      this.page = loadedPage;
+      this.hasMore = loadedPage < Number(page?.last_page);
+      this.listUserId = requestedUser;
+      this.listProjectId = requestedProject;
+      await this._restoreRunnerStatuses(projects, ticket);
+      if (ticket !== this.listEpoch || this.view.classList.contains("hidden"))
+        return;
+      await this._filter();
+      rows.scrollTop = requestedPage > 1 ? scrollTop : 0;
+      if (
+        this.batchStatus &&
+        ["failed", "needs_review", "busy"].includes(this.batchStatus.state)
+      )
+        void this._showBatchFailure(this.batchStatus).catch((error) =>
+          console.warn("[Motion Studio] Batch warning failed", error?.message),
+        );
+    } catch (error) {
+      if (ticket !== this.listEpoch) return;
+      rows.textContent =
+        error?.message ||
+        this._text(
+          "motionList.unavailable",
+          "Could not connect to Motion Studio on the server. Try again.",
+        );
+      this.accessAllowed = false;
+      this.accessStatus = error?.httpStatus ?? null;
+      this.accessCode = error?.code ?? null;
+      this.accessReason =
+        this.accessCode === "MOTION_ENTITLEMENT_DENIED"
+          ? "locked"
+          : "unavailable";
+      this.button.classList.toggle(
+        "motion-tool-locked",
+        this.accessReason === "locked",
+      );
+      this.button.classList.toggle(
+        "motion-tool-unavailable",
+        this.accessReason === "unavailable",
+      );
+      this.back();
+    }
+  }
+  async _filter({ append = false } = {}) {
+    const ticket = append ? this.filterEpoch : ++this.filterEpoch;
+    const renderTicket = ++this.renderEpoch;
+    const previousRows = append
+      ? new Map(
+          [...this.rows.querySelectorAll(".motion-project-row")].map((row) => [
+            row.dataset.motionProjectId,
+            row,
+          ]),
+        )
+      : new Map();
+    const sourceProjects = new Map(
+      (this.projects || []).map((project) => [
+        project.tool_project_id,
+        project,
+      ]),
+    );
+    const scrollTop = this.rows.scrollTop;
+    this._closeMenu();
+    if (!append) {
+      clearInterval(this.thumbnailClock);
+      this.thumbnailClock = null;
+    }
+    const shown = (this.projects || []).filter((project) =>
+      String(project.name || "")
+        .toLowerCase()
+        .includes(this.query),
+    );
+    this.rows.classList.toggle("is-empty", !shown.length);
+    if (!shown.length) {
+      this.rows.replaceChildren();
+      const empty = document.createElement("div");
+      empty.className = "workflow-empty-state motion-empty-state";
+      const label = document.createElement("p");
+      label.textContent = this.query
+        ? this._text("project.noMatch", "No matching projects found")
+        : this._text("motionList.empty", "No Motion projects yet");
+      const hint = document.createElement("small");
+      hint.textContent = this.query
+        ? this._text("motionList.searchHint", "Try searching for another name.")
+        : this._text(
+            "motionList.emptyHint",
+            "Create your first project to start making videos.",
+          );
+      empty.append(
+        this._icon(this.query ? "search" : "video", 48),
+        label,
+        hint,
+      );
+      if (!this.query)
+        empty.append(
+          this._createButton(
+            window.I18n?.t?.("project.createNew") || "Create new project",
+          ),
+        );
+      this.rows.append(empty);
+      this._syncLoadMore();
+      return;
+    }
+    let grouped;
+    try {
+      grouped = window.ProjectHelper?.sortByProjectGroup
+        ? await window.ProjectHelper.sortByProjectGroup(
+            shown.map((project) => ({
+              ...project,
+              project_id: project.flow_project_id,
+            })),
+            window._currentProjectId,
+          )
+        : shown.map((project) => ({ type: "item", item: project }));
+    } catch (error) {
+      console.warn("[Motion Studio] Project grouping failed", error?.message);
+      grouped = shown.map((project) => ({ type: "item", item: project }));
+    }
+    if (
+      ticket !== this.filterEpoch ||
+      renderTicket !== this.renderEpoch ||
+      this.view.classList.contains("hidden")
+    )
+      return;
+    this.rows.replaceChildren();
+    for (const entry of grouped) {
+      if (entry.type === "header") {
+        const header = document.createElement("div");
+        header.className = `project-group-header${entry.isCurrent ? " current" : ""}`;
+        const name2 = document.createElement("span");
+        name2.className = "project-group-name";
+        name2.textContent = entry.projectName;
+        const count = document.createElement("span");
+        count.className = "project-group-count";
+        count.textContent = `(${entry.count})`;
+        header.append(name2, count);
+        if (entry.isCurrent) {
+          const badge2 = document.createElement("span");
+          badge2.className = "project-group-badge";
+          badge2.textContent = window.I18n?.t?.("common.current") || "current";
+          header.append(badge2);
+        }
+        this.rows.append(header);
+        continue;
+      }
+      const project = entry.item;
+      const previous = previousRows.get(project.tool_project_id);
+      if (
+        previous &&
+        previous._motionProject === sourceProjects.get(project.tool_project_id)
+      ) {
+        this.rows.append(previous);
+        continue;
+      }
+      const frames = Object.values(project.data_json?.frames || {});
+      const runnerStatus = this.runnerStatuses.get(project.tool_project_id);
+      const runner =
+        runnerStatus?.sourceRevision != null &&
+        Number(runnerStatus.sourceRevision) !==
+          Number(project.data_json?.source_revision)
+          ? null
+          : runnerStatus;
+      const failed =
+        runner?.state === "needs_review" ||
+        (runner?.state === "failed" && runner.sourceRevision != null) ||
+        frames.some((frame) =>
+          Object.values(frame.stages || {}).some(
+            (stage) => stage?.state === "failed",
+          ),
+        );
+      const running = runner
+        ? ["preparing", "running", "pausing"].includes(runner.state)
+        : project.data_json?.paused !== true &&
+          frames.some((frame) =>
+            Object.values(frame.stages || {}).some(
+              (stage) => stage?.state === "running",
+            ),
+          );
+      const data = project.data_json,
+        final = data?.final,
+        frameIds = Object.keys(data?.frames || {});
+      const generationComplete =
+        window.MotionRunJournal?.isGenerationComplete?.(data) === true;
+      const complete =
+        !running &&
+        !failed &&
+        (generationComplete ||
+          (data?.requires_resplit !== true &&
+            !!final &&
+            final.stale !== true &&
+            Number(final.source_revision) === Number(data?.source_revision) &&
+            frameIds.length > 0 &&
+            Array.isArray(final.frame_ids) &&
+            final.frame_ids.length === frameIds.length &&
+            new Set(final.frame_ids).size === frameIds.length &&
+            frameIds.every(
+              (id) =>
+                final.frame_ids.includes(id) &&
+                data.frames[id]?.stages?.persist?.state === "ready",
+            )));
+      const storedState =
+        ["complete", "completed"].includes(project.status) && !complete
+          ? "ready"
+          : project.status;
+      const statuses = {
+        draft: ["idle", this._text("motionList.draft", "Draft")],
+        ready: ["idle", this._text("common.ready", "Ready")],
+        running: ["running", this._text("exec.running", "Running")],
+        paused: ["pending", this._text("exec.paused", "Paused")],
+        complete: ["completed", this._text("exec.completed", "Completed")],
+        completed: ["completed", this._text("exec.completed", "Completed")],
+        failed: ["failed", this._text("exec.failed", "Failed")],
+      };
+      const [style, label] = statuses[
+        complete
+          ? "complete"
+          : project.data_json?.paused
+            ? "paused"
+            : running
+              ? "running"
+              : failed
+                ? "failed"
+                : storedState
+      ] || ["idle", this._text("common.ready", "Ready")];
+      const row = document.createElement("div");
+      row.className = `workflow-card motion-project-row ${style}`;
+      row._motionProject = sourceProjects.get(project.tool_project_id);
+      row.dataset.motionProjectId = project.tool_project_id;
+      const badge = document.createElement("button");
+      badge.type = "button";
+      badge.className = `motion-project-thumbnail ${style}`;
+      badge.setAttribute("aria-label", label);
+      badge.setAttribute(
+        "data-tooltip",
+        generationComplete
+          ? `${label} \xB7 ${this._text("flowErrors.codes." + data.generation_completion.merge_error, "")}`
+          : label,
+      );
+      if (running)
+        badge.innerHTML =
+          '<svg class="motion-thumbnail-spinner" width="24" height="24" viewBox="0 0 24 24" fill="none" aria-hidden="true"><circle cx="12" cy="12" r="9" stroke="currentColor" stroke-width="2" opacity=".25"/><path d="M12 3a9 9 0 0 1 9 9" stroke="currentColor" stroke-width="2" stroke-linecap="round"/></svg>';
+      else {
+        const placeholder = document.createElement("span");
+        placeholder.className = "motion-thumbnail-placeholder";
+        placeholder.setAttribute("aria-hidden", "true");
+        badge.append(placeholder);
+      }
+      const previewPlay = document.createElement("span");
+      previewPlay.className = "motion-thumbnail-play";
+      previewPlay.setAttribute("aria-hidden", "true");
+      previewPlay.textContent = "\u25B6";
+      badge.append(previewPlay);
+      if (running) {
+        if (!this.runningSince.has(project.tool_project_id))
+          this.runningSince.set(project.tool_project_id, Date.now());
+        if (!this.thumbnailClock)
+          this.thumbnailClock = setInterval(() => {
+            if (this.view.classList.contains("hidden")) return;
+            this.view
+              .querySelectorAll("[data-motion-elapsed]")
+              .forEach((node) => {
+                const seconds = Math.max(
+                  0,
+                  Math.floor(
+                    (Date.now() - Number(node.dataset.motionElapsed)) / 1e3,
+                  ),
+                );
+                node.textContent = `${Math.floor(seconds / 60)}:${String(seconds % 60).padStart(2, "0")}`;
+              });
+          }, 1e3);
+        this.thumbnailClock?.unref?.();
+        const timer = document.createElement("span");
+        timer.className = "motion-thumbnail-timer";
+        timer.dataset.motionElapsed = this.runningSince.get(
+          project.tool_project_id,
+        );
+        const elapsed = Math.max(
+          0,
+          Math.floor((Date.now() - Number(timer.dataset.motionElapsed)) / 1e3),
+        );
+        timer.textContent = `${Math.floor(elapsed / 60)}:${String(elapsed % 60).padStart(2, "0")}`;
+        badge.append(timer);
+      } else this.runningSince.delete(project.tool_project_id);
+      badge.addEventListener("click", (event) => {
+        event.stopPropagation();
+        void this._previewProject(project).catch((error) =>
+          window.showNotification?.(
+            error?.message || "MOTION_VIDEO_PREVIEW_FAILED",
+            "error",
+          ),
+        );
+      });
+      this.thumbnailJobs = this.thumbnailJobs
+        .catch(() => {})
+        .then(() => this._loadThumbnail(badge, project, ticket))
+        .catch((error) => {
+          const raw = String(
+            error?.code || error?.message || "MOTION_THUMBNAIL_FAILED",
+          );
+          console.warn("[MotionThumbnail]", {
+            projectId: project.tool_project_id,
+            code: /^[A-Za-z][A-Za-z0-9_:-]{0,99}$/.test(raw)
+              ? raw
+              : "MOTION_THUMBNAIL_FAILED",
+          });
+        });
+      const item = this._button("", () =>
+        this.openProject(project.tool_project_id),
+      );
+      item.className = "motion-project-main workflow-card-info";
+      const name = document.createElement("strong");
+      name.className = "workflow-card-name";
+      name.textContent = project.name;
+      name.title = project.name || "";
+      const meta = document.createElement("span");
+      meta.className = "workflow-card-meta";
+      const videoIcon = document.createElement("span");
+      videoIcon.className = "motion-project-video-icon";
+      videoIcon.setAttribute("aria-hidden", "true");
+      meta.append(videoIcon, document.createTextNode(`${frames.length} frame`));
+      const duration = Number(
+        project.data_json?.source?.duration ??
+          project.data_json?.source_draft?.duration,
+      );
+      if (Number.isFinite(duration) && duration > 0) {
+        const seconds = Math.floor(duration);
+        const hours = Math.floor(seconds / 3600);
+        const minutes = Math.floor((seconds % 3600) / 60);
+        const text =
+          hours > 0
+            ? `${hours}:${String(minutes).padStart(2, "0")}:${String(seconds % 60).padStart(2, "0")}`
+            : `${minutes}:${String(seconds % 60).padStart(2, "0")}`;
+        meta.append(document.createTextNode(` \xB7 ${text}`));
+      } else {
+        meta.append(document.createTextNode(" \xB7 \u2014"));
+      }
+      const size = document.createElement("span");
+      size.className = "motion-project-size";
+      size.textContent = " \xB7 \u2026";
+      meta.append(size);
+      this.usageJobs = (this.usageJobs || Promise.resolve())
+        .catch(() => {})
+        .then(() => this._loadProjectUsage(size, project, ticket));
+      if (style === "running") {
+        const completed = frames.filter(
+          (frame) => frame.stages?.persist?.state === "ready",
+        ).length;
+        const percent = frames.length
+          ? Math.round((completed / frames.length) * 100)
+          : 0;
+        meta.append(document.createTextNode(` \xB7 ${percent}%`));
+        const progress = document.createElement("span");
+        progress.className = `workflow-card-inline-progress${percent > 0 ? "" : " indeterminate"}`;
+        progress.setAttribute("role", "progressbar");
+        progress.setAttribute("aria-label", label);
+        progress.setAttribute("aria-valuemin", "0");
+        progress.setAttribute("aria-valuemax", "100");
+        if (percent > 0)
+          progress.setAttribute("aria-valuenow", String(percent));
+        const bar = document.createElement("span");
+        bar.className = "workflow-card-inline-progress-bar";
+        bar.style.width = `${percent}%`;
+        progress.append(bar);
+        meta.append(progress);
+      }
+      item.append(name, meta);
+      if (
+        project.updated_at &&
+        Number.isFinite(Date.parse(project.updated_at))
+      ) {
+        const time = document.createElement("span");
+        time.className = "workflow-card-last-edit";
+        time.append(
+          this._icon("clock", 12),
+          document.createTextNode(
+            new Date(project.updated_at).toLocaleString(),
+          ),
+        );
+        item.append(time);
+      }
+      const actions = document.createElement("div");
+      actions.className = "workflow-card-actions motion-project-actions";
+      let enabled = project.data_json?.batch_enabled === true;
+      let toggleRevision = project.revision;
+      const pendingToggle = this.pendingBatchToggles.get(
+        project.tool_project_id,
+      );
+      const shownEnabled = pendingToggle ? pendingToggle.value : enabled;
+      const toggle = document.createElement("button");
+      toggle.type = "button";
+      toggle.className = `wf-toggle-btn ${shownEnabled ? "on" : "off"}`;
+      toggle.disabled = !!pendingToggle;
+      toggle.setAttribute("role", "switch");
+      toggle.setAttribute("aria-checked", String(shownEnabled));
+      toggle.setAttribute(
+        "aria-label",
+        this._text("motionBatch.include", "Include project in batch run"),
+      );
+      toggle.title = this._text(
+        "motionBatch.include",
+        "Include project in batch run",
+      );
+      const track = document.createElement("span");
+      track.className = "wf-toggle-track";
+      const thumb = document.createElement("span");
+      thumb.className = "wf-toggle-thumb";
+      track.append(thumb);
+      toggle.append(track);
+      toggle.addEventListener("click", async (event) => {
+        event.stopPropagation();
+        if (
+          toggle.disabled ||
+          this.pendingBatchToggles.has(project.tool_project_id)
+        )
+          return;
+        toggle.disabled = true;
+        const pending = { value: !enabled };
+        this.pendingBatchToggles.set(project.tool_project_id, pending);
+        const showEnabled = (value) => {
+          toggle.setAttribute("aria-checked", String(value));
+          toggle.classList.toggle("on", value);
+          toggle.classList.toggle("off", !value);
+        };
+        showEnabled(!enabled);
+        try {
+          const saved = await window.authManager._apiCall(
+            "PATCH",
+            `tools/motion-studio/projects/${encodeURIComponent(project.tool_project_id)}/batch-enabled`,
+            { revision: toggleRevision, batch_enabled: !enabled },
+          );
+          enabled = !enabled;
+          if (Number.isSafeInteger(saved?.revision))
+            toggleRevision = saved.revision;
+        } catch (error) {
+          showEnabled(enabled);
+          window.showNotification?.(
+            error?.message ||
+              this._text(
+                "motionBatch.updateFailed",
+                "Could not update project.",
+              ),
+            "error",
+          );
+        } finally {
+          if (this.pendingBatchToggles.get(project.tool_project_id) === pending)
+            this.pendingBatchToggles.delete(project.tool_project_id);
+          await this.refresh().catch((refreshError) =>
+            console.warn(
+              "[Motion Studio] Refresh failed",
+              refreshError?.message,
+            ),
+          );
+          toggle.disabled = false;
+        }
+      });
+      actions.append(toggle);
+      const wrapper = document.createElement("div");
+      wrapper.className = "tobyflow-dot-menu";
+      const menuButton = this._iconButton("more", "Menu project", () => {});
+      menuButton.className = "btn btn-secondary btn-sm tobyflow-dot-menu-btn";
+      menuButton.setAttribute("aria-haspopup", "menu");
+      menuButton.setAttribute("aria-expanded", "false");
+      const menu = document.createElement("div");
+      menu.className = "tobyflow-dropdown-menu hidden";
+      menu.setAttribute("role", "menu");
+      const paused =
+        !complete &&
+        (runner
+          ? ["paused", "failed", "needs_review"].includes(runner.state)
+          : project.data_json?.paused === true);
+      const controllableRunning = running && !!runner?.runId;
+      const runAction = controllableRunning
+        ? [
+            "pause",
+            this._text("common.pause", "Pause"),
+            () => this.controlProject(project, "pause"),
+            false,
+          ]
+        : [
+            "play",
+            paused
+              ? this._text("common.resume", "Resume")
+              : this._text("common.run", "Run"),
+            () => this.runProject(project),
+            false,
+          ];
+      for (const [icon, text, action, danger] of [
+        runAction,
+        [
+          "edit",
+          this._text("node.rename", "Rename"),
+          () => this.rename(project),
+          false,
+        ],
+        ["refresh", "Reset", () => this.reset(project), false],
+        [
+          "trash",
+          this._text("common.delete", "Delete"),
+          () => this.remove(project),
+          true,
+        ],
+      ]) {
+        const option = document.createElement("button");
+        option.type = "button";
+        option.className = `tobyflow-dropdown-item${danger ? " tobyflow-dropdown-danger" : ""}`;
+        option.setAttribute("role", "menuitem");
+        option.append(this._icon(icon), document.createTextNode(text));
+        if (controllableRunning && icon === "pause")
+          option.disabled =
+            runner.state === "pausing" ||
+            this.projectControlPending === project.tool_project_id;
+        option.addEventListener("click", (event) => {
+          event.stopPropagation();
+          this._closeMenu();
+          void action();
+        });
+        menu.append(option);
+      }
+      menuButton.addEventListener("click", (event) => {
+        event.stopPropagation();
+        const wasOpen = this.activeMenu?.wrapper === wrapper;
+        this._closeMenu();
+        if (wasOpen) return;
+        row.classList.add("motion-menu-open");
+        menu.classList.remove("hidden");
+        menuButton.setAttribute("aria-expanded", "true");
+        const rect = menuButton.getBoundingClientRect();
+        menu.style.position = "fixed";
+        menu.style.left = `${Math.max(8, Math.min(rect.right - menu.offsetWidth, window.innerWidth - menu.offsetWidth - 8))}px`;
+        menu.style.top = `${Math.max(8, Math.min(rect.bottom + 4, window.innerHeight - menu.offsetHeight - 8))}px`;
+        this.activeMenu = { wrapper, button: menuButton, menu, row };
+      });
+      wrapper.append(menuButton, menu);
+      actions.append(wrapper);
+      if (controllableRunning) {
+        const control = this._iconButton(
+          "pause",
+          this._text("common.pause", "Pause"),
+          () => void this.controlProject(project, "pause"),
+        );
+        control.disabled =
+          runner?.state === "pausing" ||
+          this.projectControlPending === project.tool_project_id;
+        actions.prepend(control);
+        if (runner?.runId && running) {
+          const stop = this._iconButton(
+            "stop",
+            this._text("common.stop", "Stop"),
+            () => void this.controlProject(project, "stop"),
+          );
+          stop.disabled = control.disabled;
+          actions.prepend(stop);
+        }
+      }
+      row.append(badge, item, actions);
+      this.rows.append(row);
+    }
+    this._syncLoadMore();
+    this.rows.scrollTop = scrollTop;
+  }
+  _closeMenu() {
+    if (!this.activeMenu) return;
+    this.activeMenu.menu.classList.add("hidden");
+    this.activeMenu.button.setAttribute("aria-expanded", "false");
+    this.activeMenu.row.classList.remove("motion-menu-open");
+    this.activeMenu = null;
+  }
+  async _creationProjectContext(expected = null) {
+    const operationId =
+      expected?.operationId ||
+      `motion-scope-${Date.now()}-${(this.creationScopeSequence = (this.creationScopeSequence || 0) + 1)}`;
+    const accountId = Number(window.authManager?.getUser?.()?.id);
+    const context = await window.ProjectHelper?.getOpenProjectContext?.();
+    const sameAccount =
+      Number.isSafeInteger(accountId) &&
+      accountId > 0 &&
+      Number(window.authManager?.getUser?.()?.id) === accountId &&
+      (!expected || expected.accountId === accountId);
+    const ready =
+      sameAccount &&
+      /^[A-Za-z0-9_-]{1,120}$/.test(String(context?.projectId || "")) &&
+      (!expected || expected.flowProjectId === context.projectId);
+    console.info(
+      "[MotionCreationScope]",
+      JSON.stringify({
+        operationId,
+        stage: expected ? "before_create" : "opening",
+        sameAccount,
+        projectOpen: !!context?.projectId,
+        matchesExpected:
+          !expected || expected.flowProjectId === context?.projectId,
+        allowed: ready,
+      }),
+    );
+    if (!ready) {
+      if (!sameAccount) {
+        if (this.rows)
+          this.rows.textContent = this._text(
+            "motionEditor.text237",
+            "Account changed. Close and reopen the project.",
+          );
+      } else if (typeof window._showProjectSelectOverlay === "function") {
+        await window._showProjectSelectOverlay(true);
+      } else
+        await window.ProjectHelper?.warnNoProjectForUpload?.(
+          null,
+          this._text("motionEditor.text118", "Open a Flow project first."),
+        );
+      return null;
+    }
+    window._currentProjectId = context.projectId;
+    window._currentProjectName =
+      context.projectName || context.tabTitle || null;
+    if (Number.isInteger(context.tabId)) {
+      window._targetFlowTabId = context.tabId;
+      window.MessageBridge?.setTargetTabId?.(
+        context.tabId,
+        "motion_creation_context",
+      );
+    }
+    return { accountId, flowProjectId: context.projectId, operationId };
+  }
+  async create() {
+    if (this.creating) {
+      console.info(
+        "[MotionCreateInteraction]",
+        JSON.stringify({ stage: "blocked", reason: "creation_pending" }),
+      );
+      return;
+    }
+    const operationId = `motion-create-${Date.now()}-${(this.createSequence = (this.createSequence || 0) + 1)}`;
+    const startedAt = Date.now();
+    const trace = (stage, reason = null, detail = {}) =>
+      console.info(
+        "[MotionCreateInteraction]",
+        JSON.stringify({
+          operationId,
+          stage,
+          elapsedMs: Date.now() - startedAt,
+          reason:
+            reason == null
+              ? null
+              : /^[a-zA-Z][a-zA-Z0-9_:.-]{0,120}$/.test(reason)
+                ? reason
+                : "unclassified_error",
+          ...detail,
+        }),
+      );
+    const setPending = (pending) =>
+      this.view?.querySelectorAll(".motion-create-button").forEach((button) => {
+        button.disabled = pending;
+        button.setAttribute("aria-busy", String(pending));
+      });
+    this.creating = true;
+    setPending(true);
+    trace("start");
+    try {
+      trace("access_check");
+      if ((await this.gateForAction()) !== true) {
+        trace(
+          "blocked",
+          this.accessCode || this.accessReason || "access_denied",
+        );
+        await this.showAccessModal();
+        return;
+      }
+      trace("project_context");
+      const scope = await this._creationProjectContext();
+      if (!scope) {
+        trace("blocked", "project_context_unavailable");
+        return;
+      }
+      const { flowProjectId, accountId } = scope;
+      const translate = (key, fallback) => {
+        const text = window.I18n?.t?.(key);
+        return text && text !== key ? text : fallback;
+      };
+      const title = translate("project.createNew", "Create new project");
+      const namePrompt = translate(
+        "motionList.projectNameRequired",
+        "Enter a project name.",
+      );
+      if (typeof window.customDialog?.prompt !== "function")
+        throw new Error("MOTION_CREATE_DIALOG_UNAVAILABLE");
+      trace("name_prompt");
+      const nameResult = window.customDialog.prompt(namePrompt, {
+        title,
+        defaultValue: "Motion project",
+        icon: "video-creative",
+        confirmText: translate("common.create", "Create"),
+        cancelText: translate("common.cancel", "Cancel"),
+      });
+      const dialog = document.querySelector(".cdialog-overlay");
+      const dialogStyle = dialog && window.getComputedStyle?.(dialog);
+      trace("name_prompt_opened", null, {
+        modalAttached: !!dialog?.isConnected,
+        modalDisplay: dialogStyle?.display || null,
+        modalVisibility: dialogStyle?.visibility || null,
+      });
+      const name = await nameResult;
+      if (name === null) {
+        trace("cancelled");
+        return;
+      }
+      if (!name.trim() || name.trim().length > 160) {
+        await window.customDialog.alert(`${namePrompt} (1\u2013160)`, {
+          title,
+          type: "warning",
+        });
+        return;
+      }
+      trace("context_recheck");
+      if (!(await this._creationProjectContext(scope))) {
+        trace("blocked", "project_context_changed");
+        return;
+      }
+      trace("create_request");
+      const project = await window.authManager._apiCall(
+        "POST",
+        "tools/motion-studio/projects",
+        {
+          name: name.trim(),
+          flow_project_id: flowProjectId,
+          voice_mode: "lip_sync",
+        },
+      );
+      if (Number(window.authManager?.getUser?.()?.id) !== accountId) {
+        trace("blocked", "account_changed");
+        return;
+      }
+      trace("created");
+      await this.refresh();
+      if (
+        project?.tool_project_id &&
+        window._currentProjectId === flowProjectId
+      )
+        this.openProject(project.tool_project_id, { newlyCreated: true });
+    } catch (error) {
+      trace("failed", error?.code || error?.message || "creation_failed");
+      if (
+        error?.code === "MOTION_PROJECT_QUOTA_EXCEEDED" &&
+        window.customDialog
+      ) {
+        const t = (key, fallback) => {
+          const value = window.I18n?.t?.(key);
+          return value && value !== key ? value : fallback;
+        };
+        const title = t("gate.usageLimitTitle", "Usage limit reached");
+        const showUpgrade =
+          window.SystemConfig?.getBool?.("show_upgrade_ui") !== false;
+        const detail = showUpgrade
+          ? t(
+              "gate.usageLimitUpgrade",
+              "Upgrade your plan to increase the limit.",
+            )
+          : t(
+              "gate.usageLimitContact",
+              "Please contact admin to increase the limit.",
+            );
+        const message = `Motion Studio \u2014 ${title}.
 
-${detail}`;if(showUpgrade){const confirmed=await window.customDialog.confirm(message,{title,type:"warning",confirmText:t("common.upgrade","Upgrade"),cancelText:t("common.later","Later")});if(confirmed){if(typeof window.openUpgradeModal==="function")window.openUpgradeModal();else chrome.runtime.sendMessage({action:"showUpgradeModal"}).catch(()=>{})}}else await window.customDialog.alert(message,{title,type:"warning"})}else this.rows.textContent=error?.message||this._text("motionList.createFailed","Could not create project")}finally{this.creating=false;setPending(false);trace("settled")}}async openBulk(){if(this.openingBulk||this.bulkModal&&!this.bulkModal.closed)return;this.openingBulk=true;try{if(await this.gateForAction()!==true){await this.showAccessModal();return}const scope=await this._creationProjectContext();if(!scope)return;const{accountId:userId,flowProjectId}=scope;if(!flowProjectId||!window.MotionBulkCreator||!window.MotionBulkModal||!window.MotionArtifactStore){throw new Error("MOTION_BULK_UNAVAILABLE")}const quota=await window.MotionBulkCreator.checkQuota({userId,flowProjectId,count:0});if(!window.MotionBulkCreator.canCreateMultiple(quota)){const showUpgrade=window.SystemConfig?.getBool?.("show_upgrade_ui")!==false;if(showUpgrade){const accepted=await window.customDialog?.confirm?.(this._text("motionBatchRecovery.upgrade","Upgrade your plan to create Motion projects in bulk."),{title:this._text("gate.usageLimitTitle","Usage limit reached"),type:"warning",confirmText:this._text("common.upgrade","Upgrade"),cancelText:this._text("common.later","Later")});if(accepted){if(typeof window.openUpgradeModal==="function")window.openUpgradeModal();else await chrome.runtime.sendMessage({action:"showUpgradeModal"})}}else await window.customDialog?.alert?.(this._text("gate.usageLimitContact","Please contact admin to increase the limit."),{type:"warning"});return}const profileResponse=await window.RequestSigner.fetchProtected("motionTool",{force:true,promptVariant:"timeline"});const profile=profileResponse?.data;if(profile?.tool_key!=="motion_studio")throw new Error("INVALID_TOOL_PROFILE");await this.cleanupBulkDrafts({opening:true,userId,flowProjectId});const resumeItems=[];window.MotionBulkCreator._context(userId,flowProjectId);const modal=new window.MotionBulkModal({userId,flowProjectId,profile,quota,resumeItems,onDone:async()=>{if(Number(window.authManager?.getUser?.()?.id)===userId)await this.refresh()}});await modal.open();this.bulkModal=modal}catch(error){window.showNotification?.(error?.message||"MOTION_BULK_UNAVAILABLE","error")}finally{this.openingBulk=false}}_batchDialogItems(entries){return entries.map(item=>{const paused=item.error==="MOTION_PROJECT_PAUSED"||item.state==="paused";const state=paused?"paused":["eligible","ready"].includes(item.state)?"ready":["complete","completed"].includes(item.state)?"complete":["running","preparing","pausing"].includes(item.state)?"running":["pending","skipped"].includes(item.state)?"pending":"failed";const labels={ready:["common.ready","Ready"],complete:["exec.completed","Completed"],running:["exec.running","Running"],paused:["exec.paused","Paused"],pending:["common.pending","Pending"],failed:["exec.failed","Failed"]};const id=item.tool_project_id||item.projectId;return{name:item.name||this.projects?.find(project=>project.tool_project_id===id)?.name||id,state,label:this._text(...labels[state]),detail:!paused&&item.error?this._text(`flowErrors.codes.${item.error}`,""):""}})}async runAll(resume=null,skipProjectId=null){if(this.batchStarting||!window.MotionBulkCreator||!window.MotionBatchSnapshot||!window.MotionBatchPreflight)return;this.batchStarting=true;try{if(await this.gateForAction()!==true){await this.showAccessModal();return}const userId=Number(window.authManager?.getUser?.()?.id),flowProjectId=window._currentProjectId;if(!Number.isSafeInteger(userId)||userId<1||!flowProjectId)throw new Error("MOTION_FLOW_PROJECT_MISMATCH");const quota=resume?null:await window.MotionBulkCreator.checkQuota({userId,flowProjectId,count:0});if(!resume&&!window.MotionBulkCreator.canRunMultiple(quota)){if(window.SystemConfig?.getBool?.("show_upgrade_ui")!==false){const accepted=await window.customDialog?.confirm?.(this._text("gate.usageLimitUpgrade","Upgrade your plan to increase the limit."),{title:this._text("gate.usageLimitTitle","Usage limit reached"),type:"warning",confirmText:this._text("common.upgrade","Upgrade"),cancelText:this._text("common.later","Later")});if(accepted){if(typeof window.openUpgradeModal==="function")window.openUpgradeModal();else await chrome.runtime.sendMessage({action:"showUpgradeModal"})}}else await window.customDialog?.alert?.(this._text("gate.usageLimitContact","Please contact admin to increase the limit."),{type:"warning"});return}let items=[];let dialogEntries=resume?.items?.map(item=>({...item,state:item.state==="ready"?"complete":item.state}))||[];if(!resume){const data=await window.authManager._apiCall("GET",`tools/motion-studio/projects/batch-snapshot?flow_project_id=${encodeURIComponent(flowProjectId)}`);const snapshot=await window.MotionBatchSnapshot.classify({data,userId,flowProjectId,artifactStore:window.MotionArtifactStore});window.MotionBulkCreator._context(userId,flowProjectId);const blocked=snapshot.entries.filter(item=>!["eligible","complete"].includes(item.state));if(blocked.length){await window.customDialog?.alert?.(this._text("motionEditor.text146","Not ready"),{title:this._text("workflow.runAll","Run All"),type:"warning",statusItems:this._batchDialogItems(blocked)});return}items=snapshot.entries.filter(item=>item.state==="eligible");if(items.length){const initialTarget=await window.MotionBulkCreator._liveContext(userId,flowProjectId);const assertScope=async()=>{const target=await window.MotionBulkCreator._liveContext(userId,flowProjectId);if(["tabId","projectId","driverKey","origin"].some(key=>target[key]!==initialTarget[key]))throw new Error("FLOW_EXECUTION_TARGET_CHANGED")};const profile=(await window.RequestSigner.fetchProtected("motionTool",{force:true,promptVariant:"timeline"}))?.data;if(profile?.tool_key!=="motion_studio"||!Number.isSafeInteger(profile.revision))throw new Error("MOTION_PROFILE_UNPINNED");const workerConfig=(await window.ExecutionConfig.getConfig())?.parallel;const checked=await window.MotionBatchPreflight.inspect({entries:items,userId,flowProjectId,profile,api:(method,path)=>window.authManager._apiCall(method,path),artifactStore:window.MotionArtifactStore,assertScope,workerConfig,resolveVoice:slug=>window.MotionFlowQueueRequest.resolveVoice(slug),resolveCaps:(current,currentProject)=>window.ImagePickerModal.resolveCapsMulti({provider:"flow",mode:"video",isFrames:false,modelValue:currentProject.data_json?.preferences?.flow_model||current.settings.flow_model,duration:current.settings.flow_duration}),checkAgents:()=>chrome.runtime.sendMessage({action:"i2p:checkProviders",excludeWorkerTabs:profile.settings?.execution_mode==="parallel"})});dialogEntries=checked;const invalid=checked.filter(item=>item.state!=="ready");if(invalid.length)console.info("[MotionBatchPreflight]",invalid.map(item=>({projectId:item.tool_project_id,state:item.state,code:item.error})))}}const projectId=skipProjectId&&resume?.items?.find(item=>item.projectId===skipProjectId&&item.state==="failed")?.projectId||resume?.items?.find(item=>["pending","paused","running"].includes(item.state)||item.state==="failed"&&(item.runId||item.failureStage==="preflight"))?.projectId||items[0]?.tool_project_id;if(!projectId){window.showNotification?.(this._text("motionBatch.noneEligible","No Motion projects to run."),"info");return}const prompt=window.I18n?.t?.("motionBatch.runAllConfirm",{count:resume?.items?.length||items.length});const text=prompt&&prompt!=="motionBatch.runAllConfirm"?prompt:`Run ${resume?.items?.length||items.length} Motion projects sequentially?`;const projectName=window._currentProjectName||(await window.ProjectHelper?.getProjectList?.())?.[flowProjectId]?.name||this._text("project.current","Current");window.MotionBulkCreator._context(userId,flowProjectId);if(!await window.customDialog?.confirm?.(`${text}
+${detail}`;
+        if (showUpgrade) {
+          const confirmed = await window.customDialog.confirm(message, {
+            title,
+            type: "warning",
+            confirmText: t("common.upgrade", "Upgrade"),
+            cancelText: t("common.later", "Later"),
+          });
+          if (confirmed) {
+            if (typeof window.openUpgradeModal === "function")
+              window.openUpgradeModal();
+            else
+              chrome.runtime
+                .sendMessage({ action: "showUpgradeModal" })
+                .catch(() => {});
+          }
+        } else
+          await window.customDialog.alert(message, { title, type: "warning" });
+      } else
+        this.rows.textContent =
+          error?.message ||
+          this._text("motionList.createFailed", "Could not create project");
+    } finally {
+      this.creating = false;
+      setPending(false);
+      trace("settled");
+    }
+  }
+  async openBulk() {
+    if (this.openingBulk || (this.bulkModal && !this.bulkModal.closed)) return;
+    this.openingBulk = true;
+    try {
+      if ((await this.gateForAction()) !== true) {
+        await this.showAccessModal();
+        return;
+      }
+      const scope = await this._creationProjectContext();
+      if (!scope) return;
+      const { accountId: userId, flowProjectId } = scope;
+      if (
+        !flowProjectId ||
+        !window.MotionBulkCreator ||
+        !window.MotionBulkModal ||
+        !window.MotionArtifactStore
+      ) {
+        throw new Error("MOTION_BULK_UNAVAILABLE");
+      }
+      const quota = await window.MotionBulkCreator.checkQuota({
+        userId,
+        flowProjectId,
+        count: 0,
+      });
+      if (!window.MotionBulkCreator.canCreateMultiple(quota)) {
+        const showUpgrade =
+          window.SystemConfig?.getBool?.("show_upgrade_ui") !== false;
+        if (showUpgrade) {
+          const accepted = await window.customDialog?.confirm?.(
+            this._text(
+              "motionBatchRecovery.upgrade",
+              "Upgrade your plan to create Motion projects in bulk.",
+            ),
+            {
+              title: this._text("gate.usageLimitTitle", "Usage limit reached"),
+              type: "warning",
+              confirmText: this._text("common.upgrade", "Upgrade"),
+              cancelText: this._text("common.later", "Later"),
+            },
+          );
+          if (accepted) {
+            if (typeof window.openUpgradeModal === "function")
+              window.openUpgradeModal();
+            else
+              await chrome.runtime.sendMessage({ action: "showUpgradeModal" });
+          }
+        } else
+          await window.customDialog?.alert?.(
+            this._text(
+              "gate.usageLimitContact",
+              "Please contact admin to increase the limit.",
+            ),
+            { type: "warning" },
+          );
+        return;
+      }
+      const profileResponse = await window.RequestSigner.fetchProtected(
+        "motionTool",
+        { force: true, promptVariant: "timeline" },
+      );
+      const profile = profileResponse?.data;
+      if (profile?.tool_key !== "motion_studio")
+        throw new Error("INVALID_TOOL_PROFILE");
+      await this.cleanupBulkDrafts({ opening: true, userId, flowProjectId });
+      const resumeItems = [];
+      window.MotionBulkCreator._context(userId, flowProjectId);
+      const modal = new window.MotionBulkModal({
+        userId,
+        flowProjectId,
+        profile,
+        quota,
+        resumeItems,
+        onDone: async () => {
+          if (Number(window.authManager?.getUser?.()?.id) === userId)
+            await this.refresh();
+        },
+      });
+      await modal.open();
+      this.bulkModal = modal;
+    } catch (error) {
+      window.showNotification?.(
+        error?.message || "MOTION_BULK_UNAVAILABLE",
+        "error",
+      );
+    } finally {
+      this.openingBulk = false;
+    }
+  }
+  _batchDialogItems(entries) {
+    return entries.map((item) => {
+      const paused =
+        item.error === "MOTION_PROJECT_PAUSED" || item.state === "paused";
+      const state = paused
+        ? "paused"
+        : ["eligible", "ready"].includes(item.state)
+          ? "ready"
+          : ["complete", "completed"].includes(item.state)
+            ? "complete"
+            : ["running", "preparing", "pausing"].includes(item.state)
+              ? "running"
+              : ["pending", "skipped"].includes(item.state)
+                ? "pending"
+                : "failed";
+      const labels = {
+        ready: ["common.ready", "Ready"],
+        complete: ["exec.completed", "Completed"],
+        running: ["exec.running", "Running"],
+        paused: ["exec.paused", "Paused"],
+        pending: ["common.pending", "Pending"],
+        failed: ["exec.failed", "Failed"],
+      };
+      const id = item.tool_project_id || item.projectId;
+      return {
+        name:
+          item.name ||
+          this.projects?.find((project) => project.tool_project_id === id)
+            ?.name ||
+          id,
+        state,
+        label: this._text(...labels[state]),
+        detail:
+          !paused && item.error
+            ? this._text(`flowErrors.codes.${item.error}`, "")
+            : "",
+      };
+    });
+  }
+  async runAll(resume = null, skipProjectId = null) {
+    if (
+      this.batchStarting ||
+      !window.MotionBulkCreator ||
+      !window.MotionBatchSnapshot ||
+      !window.MotionBatchPreflight
+    )
+      return;
+    this.batchStarting = true;
+    try {
+      if ((await this.gateForAction()) !== true) {
+        await this.showAccessModal();
+        return;
+      }
+      const userId = Number(window.authManager?.getUser?.()?.id),
+        flowProjectId = window._currentProjectId;
+      if (!Number.isSafeInteger(userId) || userId < 1 || !flowProjectId)
+        throw new Error("MOTION_FLOW_PROJECT_MISMATCH");
+      const quota = resume
+        ? null
+        : await window.MotionBulkCreator.checkQuota({
+            userId,
+            flowProjectId,
+            count: 0,
+          });
+      if (!resume && !window.MotionBulkCreator.canRunMultiple(quota)) {
+        if (window.SystemConfig?.getBool?.("show_upgrade_ui") !== false) {
+          const accepted = await window.customDialog?.confirm?.(
+            this._text(
+              "gate.usageLimitUpgrade",
+              "Upgrade your plan to increase the limit.",
+            ),
+            {
+              title: this._text("gate.usageLimitTitle", "Usage limit reached"),
+              type: "warning",
+              confirmText: this._text("common.upgrade", "Upgrade"),
+              cancelText: this._text("common.later", "Later"),
+            },
+          );
+          if (accepted) {
+            if (typeof window.openUpgradeModal === "function")
+              window.openUpgradeModal();
+            else
+              await chrome.runtime.sendMessage({ action: "showUpgradeModal" });
+          }
+        } else
+          await window.customDialog?.alert?.(
+            this._text(
+              "gate.usageLimitContact",
+              "Please contact admin to increase the limit.",
+            ),
+            { type: "warning" },
+          );
+        return;
+      }
+      let items = [];
+      let dialogEntries =
+        resume?.items?.map((item) => ({
+          ...item,
+          state: item.state === "ready" ? "complete" : item.state,
+        })) || [];
+      if (!resume) {
+        const data = await window.authManager._apiCall(
+          "GET",
+          `tools/motion-studio/projects/batch-snapshot?flow_project_id=${encodeURIComponent(flowProjectId)}`,
+        );
+        const snapshot = await window.MotionBatchSnapshot.classify({
+          data,
+          userId,
+          flowProjectId,
+          artifactStore: window.MotionArtifactStore,
+        });
+        window.MotionBulkCreator._context(userId, flowProjectId);
+        const blocked = snapshot.entries.filter(
+          (item) => !["eligible", "complete"].includes(item.state),
+        );
+        if (blocked.length) {
+          await window.customDialog?.alert?.(
+            this._text("motionEditor.text146", "Not ready"),
+            {
+              title: this._text("workflow.runAll", "Run All"),
+              type: "warning",
+              statusItems: this._batchDialogItems(blocked),
+            },
+          );
+          return;
+        }
+        items = snapshot.entries.filter((item) => item.state === "eligible");
+        if (items.length) {
+          const initialTarget = await window.MotionBulkCreator._liveContext(
+            userId,
+            flowProjectId,
+          );
+          const assertScope = async () => {
+            const target = await window.MotionBulkCreator._liveContext(
+              userId,
+              flowProjectId,
+            );
+            if (
+              ["tabId", "projectId", "driverKey", "origin"].some(
+                (key) => target[key] !== initialTarget[key],
+              )
+            )
+              throw new Error("FLOW_EXECUTION_TARGET_CHANGED");
+          };
+          const profile = (
+            await window.RequestSigner.fetchProtected("motionTool", {
+              force: true,
+              promptVariant: "timeline",
+            })
+          )?.data;
+          if (
+            profile?.tool_key !== "motion_studio" ||
+            !Number.isSafeInteger(profile.revision)
+          )
+            throw new Error("MOTION_PROFILE_UNPINNED");
+          const workerConfig = (await window.ExecutionConfig.getConfig())
+            ?.parallel;
+          const checked = await window.MotionBatchPreflight.inspect({
+            entries: items,
+            userId,
+            flowProjectId,
+            profile,
+            api: (method, path) => window.authManager._apiCall(method, path),
+            artifactStore: window.MotionArtifactStore,
+            assertScope,
+            workerConfig,
+            resolveVoice: (slug) =>
+              window.MotionFlowQueueRequest.resolveVoice(slug),
+            resolveCaps: (current, currentProject) =>
+              window.ImagePickerModal.resolveCapsMulti({
+                provider: "flow",
+                mode: "video",
+                isFrames: false,
+                modelValue:
+                  currentProject.data_json?.preferences?.flow_model ||
+                  current.settings.flow_model,
+                duration: current.settings.flow_duration,
+              }),
+            checkAgents: () =>
+              chrome.runtime.sendMessage({
+                action: "i2p:checkProviders",
+                excludeWorkerTabs:
+                  profile.settings?.execution_mode === "parallel",
+              }),
+          });
+          dialogEntries = checked;
+          const invalid = checked.filter((item) => item.state !== "ready");
+          if (invalid.length)
+            console.info(
+              "[MotionBatchPreflight]",
+              invalid.map((item) => ({
+                projectId: item.tool_project_id,
+                state: item.state,
+                code: item.error,
+              })),
+            );
+        }
+      }
+      const projectId =
+        (skipProjectId &&
+          resume?.items?.find(
+            (item) =>
+              item.projectId === skipProjectId && item.state === "failed",
+          )?.projectId) ||
+        resume?.items?.find(
+          (item) =>
+            ["pending", "paused", "running"].includes(item.state) ||
+            (item.state === "failed" &&
+              (item.runId || item.failureStage === "preflight")),
+        )?.projectId ||
+        items[0]?.tool_project_id;
+      if (!projectId) {
+        window.showNotification?.(
+          this._text("motionBatch.noneEligible", "No Motion projects to run."),
+          "info",
+        );
+        return;
+      }
+      const prompt = window.I18n?.t?.("motionBatch.runAllConfirm", {
+        count: resume?.items?.length || items.length,
+      });
+      const text =
+        prompt && prompt !== "motionBatch.runAllConfirm"
+          ? prompt
+          : `Run ${resume?.items?.length || items.length} Motion projects sequentially?`;
+      const projectName =
+        window._currentProjectName ||
+        (await window.ProjectHelper?.getProjectList?.())?.[flowProjectId]
+          ?.name ||
+        this._text("project.current", "Current");
+      window.MotionBulkCreator._context(userId, flowProjectId);
+      if (
+        !(await window.customDialog?.confirm?.(
+          `${text}
 
-${this._text("project.currentProject","Current project")}: ${projectName}`,{title:this._text("workflow.runAll","Run All"),type:"play",statusItems:this._batchDialogItems(dialogEntries)}))return;window.MotionBulkCreator._context(userId,flowProjectId);this.activeBatchId=null;const result=await chrome.runtime.sendMessage({action:resume?"motionRunner:resumeBatch":"motionRunner:startBatch",batchId:resume?.batchId,projectId,flowProjectId,skipProjectId,screen:{screenLeft:window.screen?.availLeft,screenTop:window.screen?.availTop,screenWidth:window.screen?.availWidth,screenHeight:window.screen?.availHeight}});if(result?.success!==true)throw new Error(result?.error||"MOTION_BATCH_FAILED");window.MotionBulkCreator._context(userId,flowProjectId);this.activeBatchId=result.batchId;this.batchStatus={userId,flowProjectId,batchId:result.batchId,epoch:result.epoch,state:"preparing",items:resume?.items||[]};await this.refresh()}catch(error){window.showNotification?.(error?.code||error?.message||"MOTION_BATCH_FAILED","error")}finally{this.batchStarting=false}}async controlBatch(action){const batch=this.batchStatus;if(!batch||!["pause","stop"].includes(action)||this.batchControlPending)return;this.batchControlPending=true;try{const result=await chrome.runtime.sendMessage({action:action==="pause"?"motionRunner:pauseBatch":"motionRunner:stopBatch",batchId:batch.batchId});if(result?.success!==true)throw new Error(result?.error||"MOTION_BATCH_FAILED");if(this.batchStatus?.batchId===batch.batchId)this.batchStatus={...batch,state:"pausing"};await this.refresh()}catch(error){window.showNotification?.(error?.message||"MOTION_BATCH_FAILED","error")}finally{this.batchControlPending=false}}async _loadProjectUsage(label,project,ticket){const userId=Number(window.authManager?.getUser?.()?.id);const current=()=>label.isConnected&&!this.view.classList.contains("hidden")&&ticket===this.filterEpoch&&Number(window.authManager?.getUser?.()?.id)===userId;if(!Number.isSafeInteger(userId)||userId<1||!current())return;try{const usage=await window.MotionArtifactStore?.usage?.(userId,project.tool_project_id);if(current())label.textContent=Number.isFinite(usage?.bytes)?` \xB7 ${(usage.bytes/1024/1024).toFixed(1)} MB`:" \xB7 \u2014"}catch(_){if(current())label.textContent=" \xB7 \u2014"}}async _projectVideo(project){const userId=Number(window.authManager?.getUser?.()?.id);if(!Number.isSafeInteger(userId)||!window.MotionArtifactStore)return null;const sourceRevision=Number(project.data_json?.source_revision||0);const scope={userId,toolProjectId:project.tool_project_id,sourceRevision};const final=project.data_json?.final;let record=final?await window.MotionArtifactStore.get({...scope,kind:"merged_video",artifactRevision:final.artifact_revision}):null;if(!record?.blob)record=sourceRevision>0?await window.MotionArtifactStore.get({...scope,kind:"source_video"}):null;if(!record?.blob)record=await window.MotionArtifactStore.getSourceDraft(userId,project.tool_project_id);if(Number(window.authManager?.getUser?.()?.id)!==userId||record?.flowProjectId!==project.flow_project_id)return null;return record?.blob||null}async _loadThumbnail(button,project,ticket){if(!button.isConnected||ticket!==this.filterEpoch)return;const blob=await this._projectVideo(project);if(!blob||!button.isConnected||ticket!==this.filterEpoch)return;const url=URL.createObjectURL(blob),video=document.createElement("video");video.muted=true;video.preload="metadata";try{await new Promise(resolve=>{const timer=setTimeout(resolve,5e3);const done=()=>{clearTimeout(timer);resolve()};video.onerror=done;video.onloadedmetadata=()=>{video.currentTime=Math.max(0,Math.min(video.duration/2,video.duration-.05))};video.onseeked=done;video.src=url});if(!video.videoWidth||!video.videoHeight||!button.isConnected||ticket!==this.filterEpoch)return;const canvas=document.createElement("canvas");canvas.width=96;canvas.height=96;const size=Math.min(video.videoWidth,video.videoHeight);canvas.getContext("2d").drawImage(video,(video.videoWidth-size)/2,(video.videoHeight-size)/2,size,size,0,0,96,96);const img=document.createElement("img");img.alt=project.name||"";img.src=canvas.toDataURL("image/jpeg",.75);button.prepend(img);button.classList.add("has-video")}finally{video.onloadedmetadata=video.onseeked=video.onerror=null;video.removeAttribute("src");video.load();URL.revokeObjectURL(url)}}async _previewProject(project){this._closePreview();const previewTicket=this.previewEpoch;const ticket=this.filterEpoch;const blob=await this._projectVideo(project);if(ticket!==this.filterEpoch||previewTicket!==this.previewEpoch||this.view.classList.contains("hidden"))return;if(!blob)throw new Error("MOTION_VIDEO_LOCAL_MISSING");const overlay=document.createElement("div");overlay.className="video-split-preview";overlay.setAttribute("role","dialog");overlay.setAttribute("aria-modal","true");overlay.setAttribute("aria-label",project.name||this._text("videoSplit.preview","Preview video"));const video=document.createElement("video");video.controls=true;video.autoplay=true;video.playsInline=true;const url=URL.createObjectURL(blob);video.src=url;const close=document.createElement("button");close.className="video-split-preview-close";close.textContent="\xD7";close.type="button";close.setAttribute("aria-label",this._text("common.close","Close"));close.onclick=()=>this._closePreview();overlay.addEventListener("click",event=>{if(event.target===overlay)this._closePreview()});const keydown=event=>{if(event.key==="Escape"){event.preventDefault();this._closePreview()}};overlay.append(close,video);(this.view.closest(".flow-app")||this.view).append(overlay);document.addEventListener("keydown",keydown);this.preview={overlay,video,url,keydown};close.focus()}_closePreview(){this.previewEpoch=(this.previewEpoch||0)+1;if(!this.preview)return;const{overlay,video,url,keydown}=this.preview;this.preview=null;document.removeEventListener("keydown",keydown);video.pause();video.removeAttribute("src");video.load();URL.revokeObjectURL(url);overlay.remove()}async controlProject(project,action){if(this.projectControlPending)return;if(action==="resume")return this.runProject(project);const runner=this.runnerStatuses.get(project.tool_project_id);if(!runner?.runId){window.showNotification?.("MOTION_RUN_NOT_FOUND","error");return}this.projectControlPending=project.tool_project_id;try{const result=await chrome.runtime.sendMessage({action:action==="stop"?"motionRunner:stop":"motionRunner:pause",projectId:project.tool_project_id,flowProjectId:project.flow_project_id,runId:runner.runId});if(result?.success!==true)throw new Error(result?.error||"MOTION_PAUSE_FAILED");this.runnerStatuses.set(project.tool_project_id,{...runner,state:"pausing"});await this.refresh()}catch(error){window.showNotification?.(error?.message||"MOTION_PAUSE_FAILED","error")}finally{this.projectControlPending=null;if(!this.view.classList.contains("hidden"))void this._filter()}}async runProject(item){if(this.projectRunStarting)return;this.projectRunStarting=true;try{if(await this.gateForAction()!==true){await this.showAccessModal();return}const userId=Number(window.authManager?.getUser?.()?.id),flowProjectId=window._currentProjectId;const projectId=item?.tool_project_id;if(!flowProjectId||item?.flow_project_id!==flowProjectId)throw new Error("MOTION_FLOW_PROJECT_MISMATCH");let project=await window.authManager._apiCall("GET",`tools/motion-studio/projects/${encodeURIComponent(projectId)}`);if(Number(window.authManager?.getUser?.()?.id)!==userId||window._currentProjectId!==flowProjectId||project?.tool_project_id!==projectId||project.flow_project_id!==flowProjectId)throw new Error("MOTION_FLOW_PROJECT_MISMATCH");let pendingFinalDownload=false;if(project.data_json?.final&&project.data_json.preferences?.auto_download_final===true){const final=project.data_json.final;const local=await window.MotionArtifactStore.get({userId,toolProjectId:projectId,sourceRevision:Number(project.data_json.source_revision),kind:"merged_video",artifactRevision:final.artifact_revision});if(Number(window.authManager?.getUser?.()?.id)!==userId||window._currentProjectId!==flowProjectId)throw new Error("ACCOUNT_SCOPE_CHANGED");const checkpoint=local?.finalDownload;pendingFinalDownload=local?.flowProjectId===flowProjectId&&!!local.blob&&checkpoint?.artifactId===final.artifact_id&&["pending","running","failed"].includes(checkpoint.state)&&checkpoint.attempts<checkpoint.maxAttempts}const hasProgress=!!project.data_json?.final||Object.values(project.data_json?.frames||{}).some(frame=>Object.keys(frame.stages||{}).some(stage=>stage!=="split"));let choice="resume";if(hasProgress&&!pendingFinalDownload){choice=await window.customDialog?.confirmResumeOrRerun?.(`${project.name||""}: ${this._text("motionBatch.resumeOrRerun","Resume saved progress or run again? Existing videos are kept until new results are ready.")}`,{title:this._text("common.run","Run")});if(!choice)return;if(choice==="rerun")project=await this._rerunProject({project,userId,flowProjectId});else if(project.data_json?.final&&project.data_json.final.stale!==true){await window.customDialog?.alert?.(this._text("motionBatch.finalExists","This project already has a final video."),{title:this._text("common.run","Run")});return}}else if(!await window.customDialog?.confirm?.(`${this._text(pendingFinalDownload?"common.resume":"common.run",pendingFinalDownload?"Resume":"Run")}: ${project.name||""}?`,{title:this._text("common.run","Run")}))return;if(Number(window.authManager?.getUser?.()?.id)!==userId||window._currentProjectId!==flowProjectId)throw new Error("ACCOUNT_SCOPE_CHANGED");const dispatchAt=Date.now();console.info("[MotionSidebarRun]",JSON.stringify({stage:"dispatch",projectId,resume:project.data_json?.paused===true}));const response=await chrome.runtime.sendMessage({action:project.data_json?.paused?"motionRunner:resume":"motionRunner:start",projectId,flowProjectId,screen:{screenLeft:window.screen?.availLeft,screenTop:window.screen?.availTop,screenWidth:window.screen?.availWidth,screenHeight:window.screen?.availHeight}});console.info("[MotionSidebarRun]",JSON.stringify({stage:"ack",projectId,elapsedMs:Date.now()-dispatchAt,success:response?.success===true,runId:response?.runId||null,code:response?.error||null}));if(response?.success!==true)throw new Error(response?.error||"MOTION_RUN_FAILED");if(typeof response.runId==="string"){this.manualRunIds.add(response.runId);const status=this.runnerStatuses.get(projectId);if(status?.runId===response.runId&&["failed","needs_review"].includes(status.state)){this.manualRunIds.delete(response.runId);await this._showProjectFailure(status)}else if(status?.runId===response.runId&&["ready","paused","stopped"].includes(status.state))this.manualRunIds.delete(response.runId)}await this.refresh()}catch(error){window.showNotification?.(error?.code||error?.message||"MOTION_RUN_FAILED","error")}finally{this.projectRunStarting=false}}async _rerunProject({project,userId,flowProjectId}){if(!navigator.locks?.request)throw new Error("PROJECT_LOCK_UNAVAILABLE");return navigator.locks.request(`motion-run:${userId}:${project.tool_project_id}`,{ifAvailable:true},async lock=>{if(!lock)throw new Error("PROJECT_ALREADY_RUNNING");const scope={userId,toolProjectId:project.tool_project_id};const prior=await window.MotionRunJournal.get(scope);const outbox=await window.MotionRunJournal.listTranscriptOutbox(scope);if(outbox.length||prior&&(prior.ownerId&&prior.leaseUntil>Date.now()||Object.keys(prior.operations||{}).length||Object.values(prior.reservations||{}).some(item=>item.token||item.pendingAttemptId||item.pendingSettlement)))throw new Error("MOTION_RUN_DRAIN_REQUIRED");if(Number(window.authManager?.getUser?.()?.id)!==userId||window._currentProjectId!==flowProjectId)throw new Error("ACCOUNT_SCOPE_CHANGED");const endpoint=`tools/motion-studio/projects/${encodeURIComponent(project.tool_project_id)}`;const body={revision:project.revision,source_revision:Number(project.data_json.source_revision),rerun_id:crypto.randomUUID(),previous_project_run_id:prior?.runId||null};let saved;try{saved=await window.authManager._apiCall("POST",`${endpoint}/rerun`,body)}catch(error){saved=await window.authManager._apiCall("GET",endpoint).catch(()=>null);if(saved?.data_json?.rerun_operation?.rerun_id!==body.rerun_id)throw error}if(Number(window.authManager?.getUser?.()?.id)!==userId||window._currentProjectId!==flowProjectId||saved?.flow_project_id!==flowProjectId||saved?.data_json?.rerun_operation?.rerun_id!==body.rerun_id)throw new Error("MOTION_RERUN_UNVERIFIED");await window.MotionRunJournal.acknowledgeRerun(scope,saved);return saved})}async openProject(id,{newlyCreated=false}={}){if(!/^[0-9a-f-]{36}$/i.test(String(id))||this.openingProject)return;const project=(this.projects||[]).find(item=>item.tool_project_id===id);if(!project?.flow_project_id||!window.ProjectHelper)return;const userId=Number(window.authManager?.getUser?.()?.id);const current=()=>Number(window.authManager?.getUser?.()?.id)===userId&&this.openingProject===id;this.openingProject=id;let row;try{const allowed=await this.gateForAction();if(allowed===false){await this.showAccessModal();return}if(allowed!==true||!current())return;const flowProjectId=project.flow_project_id;let tabId=null;if(!await window.ProjectHelper.isCurrentProjectLive({project_id:flowProjectId})){const name=await window.ProjectHelper.getProjectName(flowProjectId);const message=window.I18n?.t?.("project.crossProjectMsg",{type:"Motion Studio",name})||`This Motion Studio belongs to Flow project "${name}". Open that project to continue.`;const confirmed=await window.customDialog?.confirm?.(message,{title:window.I18n?.t?.("project.crossProjectTitle")||"Different project",type:"warning",confirmText:window.I18n?.t?.("project.openProject")||"Open project",cancelText:window.I18n?.t?.("project.crossProjectCancel")||"Close"});if(!confirmed||!current())return;const navigation=await window.ProjectHelper.navigateToProject(flowProjectId,{preserveOtherProjects:true});if(!navigation?.success&&!navigation?.ok)throw new Error("FLOW_PROJECT_SWITCH_FAILED");tabId=navigation.tabId||null}if(!current())return;row=[...this.rows.querySelectorAll(".motion-project-row")].find(element=>element.dataset.motionProjectId===id);row?.classList.add("project-opening");row?.setAttribute("aria-busy","true");const ready=await window.ProjectHelper.waitForProjectReady(flowProjectId,{tabId,shouldContinue:current,readinessScope:"editor"});if(!current())return;if(!ready)throw new Error("FLOW_PROJECT_NOT_READY");const result=await chrome.runtime.sendMessage({action:"openMotionStudioEditor",toolProjectId:id,newlyCreated});if(result?.ok!==true)throw new Error(result?.error||"MOTION_EDITOR_OPEN_FAILED")}catch(error){console.warn("[Motion Studio] Open failed",error?.message);window.showNotification?.(`${this._text("common.error","Error")}: ${error?.message||"MOTION_EDITOR_OPEN_FAILED"}`,"warning")}finally{row?.classList.remove("project-opening");row?.removeAttribute("aria-busy");if(this.openingProject===id)this.openingProject=null}}async rename(project){const allowed=await this.gateForAction();if(allowed===false){await this.showAccessModal();return}if(allowed!==true)return;const name=await window.customDialog.prompt(this._text("motionList.newName","Enter a new name."),{title:this._text("motionList.renameTitle","Rename project"),defaultValue:project.name,icon:"video-creative",confirmText:this._text("common.save","Save"),cancelText:this._text("common.cancel","Cancel")});if(name===null||!name.trim()||name.length>160)return;try{await window.authManager._apiCall("PATCH",`tools/motion-studio/projects/${encodeURIComponent(project.tool_project_id)}`,{revision:project.revision,name:name.trim()});await this.refresh()}catch(error){this.rows.textContent=error?.message||this._text("motionEditor.text187","Could not rename project.")}}async reset(project){const userId=Number(window.authManager?.getUser?.()?.id);const id=project.tool_project_id;const messageKey="motionEditor.text254";const translatedMessage=window.I18n?.t?.(messageKey);const confirmed=await window.customDialog?.confirmDangerous?.(translatedMessage&&translatedMessage!==messageKey?translatedMessage:"Delete the source video, frames, speech and result videos? Settings and references are kept.",{title:this._text("motionBatch.resetTitle","Reset Motion project"),itemName:project.name,confirmText:this._text("common.reset","Reset"),cancelText:this._text("common.cancel","Cancel")});if(!confirmed||!Number.isSafeInteger(userId)||userId<1)return;if(!navigator.locks?.request||!window.MotionArtifactStore){window.showNotification?.("PROJECT_LOCK_UNAVAILABLE","error");return}const resetId=crypto.randomUUID();let committed=false;try{await navigator.locks.request(`motion-run:${userId}:${id}`,{ifAvailable:true},async runLock=>{if(!runLock)throw new Error("PROJECT_ALREADY_RUNNING");await navigator.locks.request(`motion:${userId}:${id}`,{ifAvailable:true},async lock=>{if(!lock)throw new Error("PROJECT_ALREADY_EDITING");if(Number(window.authManager?.getUser?.()?.id)!==userId)throw new Error("ACCOUNT_SCOPE_CHANGED");const path=`tools/motion-studio/projects/${encodeURIComponent(id)}`;const current=await window.authManager._apiCall("GET",path);let result;try{await window.MotionRunJournal.assertSourceResettable({userId,toolProjectId:id});result=await window.authManager._apiCall("POST",`${path}/reset`,{revision:current.revision,reset_id:resetId})}catch(error){result=await window.authManager._apiCall("GET",path).catch(()=>null);if(result?.data_json?.reset_id!==resetId)throw error}committed=true;if(Number(window.authManager?.getUser?.()?.id)!==userId)throw new Error("ACCOUNT_SCOPE_CHANGED");await window.MotionRunJournal.acknowledgeSourceChange({userId,toolProjectId:id},result);await this._clearRunnerStatus(userId,id);const records=await window.MotionArtifactStore.listProject(userId,id);const revision=Number(result.data_json.source_revision);const revisions=new Set(records.filter(record=>record.sourceRevision>0&&record.sourceRevision<revision).map(record=>record.sourceRevision));const splitRevisions=await window.MotionArtifactStore.clearSplitJournalsAfterReset({userId,toolProjectId:id,maxRevision:revision,serverResetVerified:true});for(const splitRevision of splitRevisions)revisions.add(splitRevision);for(const oldRevision of revisions)await window.MotionArtifactStore.deleteSourceRevision(userId,id,oldRevision);await window.MotionArtifactStore.deleteSourceDraft(userId,id)})});await this.refresh()}catch(error){window.showNotification?.(committed?this._text("motionBatch.resetCleanup","Project reset on server; local cleanup is incomplete."):error?.message||this._text("motionBatch.resetFailed","Could not reset project."),"error");await this.refresh().catch(()=>{})}}async remove(project){if(!await window.customDialog.confirmDangerous(this._text("motionList.deleteConfirm","Delete this project and its media on this device?"),{title:this._text("motionList.deleteTitle","Delete Motion project"),itemName:project.name,confirmText:this._text("common.delete","Delete"),cancelText:this._text("common.cancel","Cancel")}))return;const userId=Number(window.authManager?.getUser?.()?.id);try{await window.authManager._apiCall("DELETE",`tools/motion-studio/projects/${encodeURIComponent(project.tool_project_id)}`);if(Number(window.authManager?.getUser?.()?.id)===userId)await this._clearRunnerStatus(userId,project.tool_project_id);chrome.runtime.sendMessage({action:"motionProjectDeleted",toolProjectId:project.tool_project_id}).catch(()=>{});this.cleanupPending=!await this._cleanup(project.tool_project_id);await this.refresh()}catch(error){this.rows.textContent=error?.message||this._text("motionEditor.text256","Local cleanup is incomplete. Reopen the project to retry.")}}async _cleanup(projectId,expectedUserId=Number(window.authManager?.getUser?.()?.id)){const userId=Number(window.authManager?.getUser?.()?.id);if(!Number.isSafeInteger(userId)||userId<1||userId!==expectedUserId)return false;if(!navigator.locks?.request||!window.MotionArtifactStore)return false;return navigator.locks.request(`motion:${userId}:${projectId}`,{ifAvailable:true},async lock=>{if(!lock||Number(window.authManager?.getUser?.()?.id)!==userId)return false;await MotionArtifactStore.clearSplitJournalsAfterReset({userId,toolProjectId:projectId,maxRevision:Number.MAX_SAFE_INTEGER,serverResetVerified:true});await MotionArtifactStore.deleteProject(userId,projectId);return true})}async reconcileTombstones(){if(this.cleanupRunning||!window.MotionArtifactStore)return;this.cleanupRunning=true;const userId=Number(window.authManager?.getUser?.()?.id);try{if(!Number.isSafeInteger(userId)||userId<1)return;const deleted=[];let expectedTotal=null;for(let page=1;;page++){const result=await window.authManager._apiCall("GET",`tools/motion-studio/projects?include_deleted=1&per_page=100&page=${page}`);if(Number(window.authManager?.getUser?.()?.id)!==userId||!Array.isArray(result?.data)||!Number.isSafeInteger(result.last_page)||result.last_page<page||!Number.isSafeInteger(result.total)||expectedTotal!==null&&result.total!==expectedTotal)return;expectedTotal=result.total;deleted.push(...result.data.filter(row=>row.deleted_at&&row.tool_project_id));if(page>=result.last_page)break}for(const row of deleted){if(Number(window.authManager?.getUser?.()?.id)!==userId)return;if(!await this._cleanup(row.tool_project_id,userId))this.cleanupPending=true}}finally{this.cleanupRunning=false}}}globalThis.MotionStudioList=MotionStudioList;
+${this._text("project.currentProject", "Current project")}: ${projectName}`,
+          {
+            title: this._text("workflow.runAll", "Run All"),
+            type: "play",
+            statusItems: this._batchDialogItems(dialogEntries),
+          },
+        ))
+      )
+        return;
+      window.MotionBulkCreator._context(userId, flowProjectId);
+      this.activeBatchId = null;
+      const result = await chrome.runtime.sendMessage({
+        action: resume ? "motionRunner:resumeBatch" : "motionRunner:startBatch",
+        batchId: resume?.batchId,
+        projectId,
+        flowProjectId,
+        skipProjectId,
+        screen: {
+          screenLeft: window.screen?.availLeft,
+          screenTop: window.screen?.availTop,
+          screenWidth: window.screen?.availWidth,
+          screenHeight: window.screen?.availHeight,
+        },
+      });
+      if (result?.success !== true)
+        throw new Error(result?.error || "MOTION_BATCH_FAILED");
+      window.MotionBulkCreator._context(userId, flowProjectId);
+      this.activeBatchId = result.batchId;
+      this.batchStatus = {
+        userId,
+        flowProjectId,
+        batchId: result.batchId,
+        epoch: result.epoch,
+        state: "preparing",
+        items: resume?.items || [],
+      };
+      await this.refresh();
+    } catch (error) {
+      window.showNotification?.(
+        error?.code || error?.message || "MOTION_BATCH_FAILED",
+        "error",
+      );
+    } finally {
+      this.batchStarting = false;
+    }
+  }
+  async controlBatch(action) {
+    const batch = this.batchStatus;
+    if (
+      !batch ||
+      !["pause", "stop"].includes(action) ||
+      this.batchControlPending
+    )
+      return;
+    this.batchControlPending = true;
+    try {
+      const result = await chrome.runtime.sendMessage({
+        action:
+          action === "pause"
+            ? "motionRunner:pauseBatch"
+            : "motionRunner:stopBatch",
+        batchId: batch.batchId,
+      });
+      if (result?.success !== true)
+        throw new Error(result?.error || "MOTION_BATCH_FAILED");
+      if (this.batchStatus?.batchId === batch.batchId)
+        this.batchStatus = { ...batch, state: "pausing" };
+      await this.refresh();
+    } catch (error) {
+      window.showNotification?.(
+        error?.message || "MOTION_BATCH_FAILED",
+        "error",
+      );
+    } finally {
+      this.batchControlPending = false;
+    }
+  }
+  async _loadProjectUsage(label, project, ticket) {
+    const userId = Number(window.authManager?.getUser?.()?.id);
+    const current = () =>
+      label.isConnected &&
+      !this.view.classList.contains("hidden") &&
+      ticket === this.filterEpoch &&
+      Number(window.authManager?.getUser?.()?.id) === userId;
+    if (!Number.isSafeInteger(userId) || userId < 1 || !current()) return;
+    try {
+      const usage = await window.MotionArtifactStore?.usage?.(
+        userId,
+        project.tool_project_id,
+      );
+      if (current())
+        label.textContent = Number.isFinite(usage?.bytes)
+          ? ` \xB7 ${(usage.bytes / 1024 / 1024).toFixed(1)} MB`
+          : " \xB7 \u2014";
+    } catch (_) {
+      if (current()) label.textContent = " \xB7 \u2014";
+    }
+  }
+  async _projectVideo(project) {
+    const userId = Number(window.authManager?.getUser?.()?.id);
+    if (!Number.isSafeInteger(userId) || !window.MotionArtifactStore)
+      return null;
+    const sourceRevision = Number(project.data_json?.source_revision || 0);
+    const scope = {
+      userId,
+      toolProjectId: project.tool_project_id,
+      sourceRevision,
+    };
+    const final = project.data_json?.final;
+    let record = final
+      ? await window.MotionArtifactStore.get({
+          ...scope,
+          kind: "merged_video",
+          artifactRevision: final.artifact_revision,
+        })
+      : null;
+    if (!record?.blob)
+      record =
+        sourceRevision > 0
+          ? await window.MotionArtifactStore.get({
+              ...scope,
+              kind: "source_video",
+            })
+          : null;
+    if (!record?.blob)
+      record = await window.MotionArtifactStore.getSourceDraft(
+        userId,
+        project.tool_project_id,
+      );
+    if (
+      Number(window.authManager?.getUser?.()?.id) !== userId ||
+      record?.flowProjectId !== project.flow_project_id
+    )
+      return null;
+    return record?.blob || null;
+  }
+  async _loadThumbnail(button, project, ticket) {
+    if (!button.isConnected || ticket !== this.filterEpoch) return;
+    const blob = await this._projectVideo(project);
+    if (!blob || !button.isConnected || ticket !== this.filterEpoch) return;
+    const url = URL.createObjectURL(blob),
+      video = document.createElement("video");
+    video.muted = true;
+    video.preload = "metadata";
+    try {
+      await new Promise((resolve) => {
+        const timer = setTimeout(resolve, 5e3);
+        const done = () => {
+          clearTimeout(timer);
+          resolve();
+        };
+        video.onerror = done;
+        video.onloadedmetadata = () => {
+          video.currentTime = Math.max(
+            0,
+            Math.min(video.duration / 2, video.duration - 0.05),
+          );
+        };
+        video.onseeked = done;
+        video.src = url;
+      });
+      if (
+        !video.videoWidth ||
+        !video.videoHeight ||
+        !button.isConnected ||
+        ticket !== this.filterEpoch
+      )
+        return;
+      const canvas = document.createElement("canvas");
+      canvas.width = 96;
+      canvas.height = 96;
+      const size = Math.min(video.videoWidth, video.videoHeight);
+      canvas
+        .getContext("2d")
+        .drawImage(
+          video,
+          (video.videoWidth - size) / 2,
+          (video.videoHeight - size) / 2,
+          size,
+          size,
+          0,
+          0,
+          96,
+          96,
+        );
+      const img = document.createElement("img");
+      img.alt = project.name || "";
+      img.src = canvas.toDataURL("image/jpeg", 0.75);
+      button.prepend(img);
+      button.classList.add("has-video");
+    } finally {
+      video.onloadedmetadata = video.onseeked = video.onerror = null;
+      video.removeAttribute("src");
+      video.load();
+      URL.revokeObjectURL(url);
+    }
+  }
+  async _previewProject(project) {
+    this._closePreview();
+    const previewTicket = this.previewEpoch;
+    const ticket = this.filterEpoch;
+    const blob = await this._projectVideo(project);
+    if (
+      ticket !== this.filterEpoch ||
+      previewTicket !== this.previewEpoch ||
+      this.view.classList.contains("hidden")
+    )
+      return;
+    if (!blob) throw new Error("MOTION_VIDEO_LOCAL_MISSING");
+    const overlay = document.createElement("div");
+    overlay.className = "video-split-preview";
+    overlay.setAttribute("role", "dialog");
+    overlay.setAttribute("aria-modal", "true");
+    overlay.setAttribute(
+      "aria-label",
+      project.name || this._text("videoSplit.preview", "Preview video"),
+    );
+    const video = document.createElement("video");
+    video.controls = true;
+    video.autoplay = true;
+    video.playsInline = true;
+    const url = URL.createObjectURL(blob);
+    video.src = url;
+    const close = document.createElement("button");
+    close.className = "video-split-preview-close";
+    close.textContent = "\xD7";
+    close.type = "button";
+    close.setAttribute("aria-label", this._text("common.close", "Close"));
+    close.onclick = () => this._closePreview();
+    overlay.addEventListener("click", (event) => {
+      if (event.target === overlay) this._closePreview();
+    });
+    const keydown = (event) => {
+      if (event.key === "Escape") {
+        event.preventDefault();
+        this._closePreview();
+      }
+    };
+    overlay.append(close, video);
+    (this.view.closest(".flow-app") || this.view).append(overlay);
+    document.addEventListener("keydown", keydown);
+    this.preview = { overlay, video, url, keydown };
+    close.focus();
+  }
+  _closePreview() {
+    this.previewEpoch = (this.previewEpoch || 0) + 1;
+    if (!this.preview) return;
+    const { overlay, video, url, keydown } = this.preview;
+    this.preview = null;
+    document.removeEventListener("keydown", keydown);
+    video.pause();
+    video.removeAttribute("src");
+    video.load();
+    URL.revokeObjectURL(url);
+    overlay.remove();
+  }
+  async controlProject(project, action) {
+    if (this.projectControlPending) return;
+    if (action === "resume") return this.runProject(project);
+    const runner = this.runnerStatuses.get(project.tool_project_id);
+    if (!runner?.runId) {
+      window.showNotification?.("MOTION_RUN_NOT_FOUND", "error");
+      return;
+    }
+    this.projectControlPending = project.tool_project_id;
+    try {
+      const result = await chrome.runtime.sendMessage({
+        action: action === "stop" ? "motionRunner:stop" : "motionRunner:pause",
+        projectId: project.tool_project_id,
+        flowProjectId: project.flow_project_id,
+        runId: runner.runId,
+      });
+      if (result?.success !== true)
+        throw new Error(result?.error || "MOTION_PAUSE_FAILED");
+      this.runnerStatuses.set(project.tool_project_id, {
+        ...runner,
+        state: "pausing",
+      });
+      await this.refresh();
+    } catch (error) {
+      window.showNotification?.(
+        error?.message || "MOTION_PAUSE_FAILED",
+        "error",
+      );
+    } finally {
+      this.projectControlPending = null;
+      if (!this.view.classList.contains("hidden")) void this._filter();
+    }
+  }
+  async runProject(item) {
+    if (this.projectRunStarting) return;
+    this.projectRunStarting = true;
+    try {
+      if ((await this.gateForAction()) !== true) {
+        await this.showAccessModal();
+        return;
+      }
+      const userId = Number(window.authManager?.getUser?.()?.id),
+        flowProjectId = window._currentProjectId;
+      const projectId = item?.tool_project_id;
+      if (!flowProjectId || item?.flow_project_id !== flowProjectId)
+        throw new Error("MOTION_FLOW_PROJECT_MISMATCH");
+      let project = await window.authManager._apiCall(
+        "GET",
+        `tools/motion-studio/projects/${encodeURIComponent(projectId)}`,
+      );
+      if (
+        Number(window.authManager?.getUser?.()?.id) !== userId ||
+        window._currentProjectId !== flowProjectId ||
+        project?.tool_project_id !== projectId ||
+        project.flow_project_id !== flowProjectId
+      )
+        throw new Error("MOTION_FLOW_PROJECT_MISMATCH");
+      let pendingFinalDownload = false;
+      if (
+        project.data_json?.final &&
+        project.data_json.preferences?.auto_download_final === true
+      ) {
+        const final = project.data_json.final;
+        const local = await window.MotionArtifactStore.get({
+          userId,
+          toolProjectId: projectId,
+          sourceRevision: Number(project.data_json.source_revision),
+          kind: "merged_video",
+          artifactRevision: final.artifact_revision,
+        });
+        if (
+          Number(window.authManager?.getUser?.()?.id) !== userId ||
+          window._currentProjectId !== flowProjectId
+        )
+          throw new Error("ACCOUNT_SCOPE_CHANGED");
+        const checkpoint = local?.finalDownload;
+        pendingFinalDownload =
+          local?.flowProjectId === flowProjectId &&
+          !!local.blob &&
+          checkpoint?.artifactId === final.artifact_id &&
+          ["pending", "running", "failed"].includes(checkpoint.state) &&
+          checkpoint.attempts < checkpoint.maxAttempts;
+      }
+      const hasProgress =
+        !!project.data_json?.final ||
+        Object.values(project.data_json?.frames || {}).some((frame) =>
+          Object.keys(frame.stages || {}).some((stage) => stage !== "split"),
+        );
+      let choice = "resume";
+      if (hasProgress && !pendingFinalDownload) {
+        choice = await window.customDialog?.confirmResumeOrRerun?.(
+          `${project.name || ""}: ${this._text("motionBatch.resumeOrRerun", "Resume saved progress or run again? Existing videos are kept until new results are ready.")}`,
+          { title: this._text("common.run", "Run") },
+        );
+        if (!choice) return;
+        if (choice === "rerun")
+          project = await this._rerunProject({
+            project,
+            userId,
+            flowProjectId,
+          });
+        else if (
+          project.data_json?.final &&
+          project.data_json.final.stale !== true
+        ) {
+          await window.customDialog?.alert?.(
+            this._text(
+              "motionBatch.finalExists",
+              "This project already has a final video.",
+            ),
+            { title: this._text("common.run", "Run") },
+          );
+          return;
+        }
+      } else if (
+        !(await window.customDialog?.confirm?.(
+          `${this._text(pendingFinalDownload ? "common.resume" : "common.run", pendingFinalDownload ? "Resume" : "Run")}: ${project.name || ""}?`,
+          { title: this._text("common.run", "Run") },
+        ))
+      )
+        return;
+      if (
+        Number(window.authManager?.getUser?.()?.id) !== userId ||
+        window._currentProjectId !== flowProjectId
+      )
+        throw new Error("ACCOUNT_SCOPE_CHANGED");
+      const dispatchAt = Date.now();
+      console.info(
+        "[MotionSidebarRun]",
+        JSON.stringify({
+          stage: "dispatch",
+          projectId,
+          resume: project.data_json?.paused === true,
+        }),
+      );
+      const response = await chrome.runtime.sendMessage({
+        action: project.data_json?.paused
+          ? "motionRunner:resume"
+          : "motionRunner:start",
+        projectId,
+        flowProjectId,
+        screen: {
+          screenLeft: window.screen?.availLeft,
+          screenTop: window.screen?.availTop,
+          screenWidth: window.screen?.availWidth,
+          screenHeight: window.screen?.availHeight,
+        },
+      });
+      console.info(
+        "[MotionSidebarRun]",
+        JSON.stringify({
+          stage: "ack",
+          projectId,
+          elapsedMs: Date.now() - dispatchAt,
+          success: response?.success === true,
+          runId: response?.runId || null,
+          code: response?.error || null,
+        }),
+      );
+      if (response?.success !== true)
+        throw new Error(response?.error || "MOTION_RUN_FAILED");
+      if (typeof response.runId === "string") {
+        this.manualRunIds.add(response.runId);
+        const status = this.runnerStatuses.get(projectId);
+        if (
+          status?.runId === response.runId &&
+          ["failed", "needs_review"].includes(status.state)
+        ) {
+          this.manualRunIds.delete(response.runId);
+          await this._showProjectFailure(status);
+        } else if (
+          status?.runId === response.runId &&
+          ["ready", "paused", "stopped"].includes(status.state)
+        )
+          this.manualRunIds.delete(response.runId);
+      }
+      await this.refresh();
+    } catch (error) {
+      window.showNotification?.(
+        error?.code || error?.message || "MOTION_RUN_FAILED",
+        "error",
+      );
+    } finally {
+      this.projectRunStarting = false;
+    }
+  }
+  async _rerunProject({ project, userId, flowProjectId }) {
+    if (!navigator.locks?.request) throw new Error("PROJECT_LOCK_UNAVAILABLE");
+    return navigator.locks.request(
+      `motion-run:${userId}:${project.tool_project_id}`,
+      { ifAvailable: true },
+      async (lock) => {
+        if (!lock) throw new Error("PROJECT_ALREADY_RUNNING");
+        const scope = { userId, toolProjectId: project.tool_project_id };
+        const prior = await window.MotionRunJournal.get(scope);
+        const outbox =
+          await window.MotionRunJournal.listTranscriptOutbox(scope);
+        if (
+          outbox.length ||
+          (prior &&
+            ((prior.ownerId && prior.leaseUntil > Date.now()) ||
+              Object.keys(prior.operations || {}).length ||
+              Object.values(prior.reservations || {}).some(
+                (item) =>
+                  item.token || item.pendingAttemptId || item.pendingSettlement,
+              )))
+        )
+          throw new Error("MOTION_RUN_DRAIN_REQUIRED");
+        if (
+          Number(window.authManager?.getUser?.()?.id) !== userId ||
+          window._currentProjectId !== flowProjectId
+        )
+          throw new Error("ACCOUNT_SCOPE_CHANGED");
+        const endpoint = `tools/motion-studio/projects/${encodeURIComponent(project.tool_project_id)}`;
+        const body = {
+          revision: project.revision,
+          source_revision: Number(project.data_json.source_revision),
+          rerun_id: crypto.randomUUID(),
+          previous_project_run_id: prior?.runId || null,
+        };
+        let saved;
+        try {
+          saved = await window.authManager._apiCall(
+            "POST",
+            `${endpoint}/rerun`,
+            body,
+          );
+        } catch (error) {
+          saved = await window.authManager
+            ._apiCall("GET", endpoint)
+            .catch(() => null);
+          if (saved?.data_json?.rerun_operation?.rerun_id !== body.rerun_id)
+            throw error;
+        }
+        if (
+          Number(window.authManager?.getUser?.()?.id) !== userId ||
+          window._currentProjectId !== flowProjectId ||
+          saved?.flow_project_id !== flowProjectId ||
+          saved?.data_json?.rerun_operation?.rerun_id !== body.rerun_id
+        )
+          throw new Error("MOTION_RERUN_UNVERIFIED");
+        await window.MotionRunJournal.acknowledgeRerun(scope, saved);
+        return saved;
+      },
+    );
+  }
+  async openProject(id, { newlyCreated = false } = {}) {
+    if (!/^[0-9a-f-]{36}$/i.test(String(id)) || this.openingProject) return;
+    const project = (this.projects || []).find(
+      (item) => item.tool_project_id === id,
+    );
+    if (!project?.flow_project_id || !window.ProjectHelper) return;
+    const userId = Number(window.authManager?.getUser?.()?.id);
+    const current = () =>
+      Number(window.authManager?.getUser?.()?.id) === userId &&
+      this.openingProject === id;
+    this.openingProject = id;
+    let row;
+    try {
+      const allowed = await this.gateForAction();
+      if (allowed === false) {
+        await this.showAccessModal();
+        return;
+      }
+      if (allowed !== true || !current()) return;
+      const flowProjectId = project.flow_project_id;
+      let tabId = null;
+      if (
+        !(await window.ProjectHelper.isCurrentProjectLive({
+          project_id: flowProjectId,
+        }))
+      ) {
+        const name = await window.ProjectHelper.getProjectName(flowProjectId);
+        const message =
+          window.I18n?.t?.("project.crossProjectMsg", {
+            type: "Motion Studio",
+            name,
+          }) ||
+          `This Motion Studio belongs to Flow project "${name}". Open that project to continue.`;
+        const confirmed = await window.customDialog?.confirm?.(message, {
+          title:
+            window.I18n?.t?.("project.crossProjectTitle") ||
+            "Different project",
+          type: "warning",
+          confirmText:
+            window.I18n?.t?.("project.openProject") || "Open project",
+          cancelText: window.I18n?.t?.("project.crossProjectCancel") || "Close",
+        });
+        if (!confirmed || !current()) return;
+        const navigation = await window.ProjectHelper.navigateToProject(
+          flowProjectId,
+          { preserveOtherProjects: true },
+        );
+        if (!navigation?.success && !navigation?.ok)
+          throw new Error("FLOW_PROJECT_SWITCH_FAILED");
+        tabId = navigation.tabId || null;
+      }
+      if (!current()) return;
+      row = [...this.rows.querySelectorAll(".motion-project-row")].find(
+        (element) => element.dataset.motionProjectId === id,
+      );
+      row?.classList.add("project-opening");
+      row?.setAttribute("aria-busy", "true");
+      const ready = await window.ProjectHelper.waitForProjectReady(
+        flowProjectId,
+        { tabId, shouldContinue: current, readinessScope: "editor" },
+      );
+      if (!current()) return;
+      if (!ready) throw new Error("FLOW_PROJECT_NOT_READY");
+      const result = await chrome.runtime.sendMessage({
+        action: "openMotionStudioEditor",
+        toolProjectId: id,
+        newlyCreated,
+      });
+      if (result?.ok !== true)
+        throw new Error(result?.error || "MOTION_EDITOR_OPEN_FAILED");
+    } catch (error) {
+      console.warn("[Motion Studio] Open failed", error?.message);
+      window.showNotification?.(
+        `${this._text("common.error", "Error")}: ${error?.message || "MOTION_EDITOR_OPEN_FAILED"}`,
+        "warning",
+      );
+    } finally {
+      row?.classList.remove("project-opening");
+      row?.removeAttribute("aria-busy");
+      if (this.openingProject === id) this.openingProject = null;
+    }
+  }
+  async rename(project) {
+    const allowed = await this.gateForAction();
+    if (allowed === false) {
+      await this.showAccessModal();
+      return;
+    }
+    if (allowed !== true) return;
+    const name = await window.customDialog.prompt(
+      this._text("motionList.newName", "Enter a new name."),
+      {
+        title: this._text("motionList.renameTitle", "Rename project"),
+        defaultValue: project.name,
+        icon: "video-creative",
+        confirmText: this._text("common.save", "Save"),
+        cancelText: this._text("common.cancel", "Cancel"),
+      },
+    );
+    if (name === null || !name.trim() || name.length > 160) return;
+    try {
+      await window.authManager._apiCall(
+        "PATCH",
+        `tools/motion-studio/projects/${encodeURIComponent(project.tool_project_id)}`,
+        { revision: project.revision, name: name.trim() },
+      );
+      await this.refresh();
+    } catch (error) {
+      this.rows.textContent =
+        error?.message ||
+        this._text("motionEditor.text187", "Could not rename project.");
+    }
+  }
+  async reset(project) {
+    const userId = Number(window.authManager?.getUser?.()?.id);
+    const id = project.tool_project_id;
+    const messageKey = "motionEditor.text254";
+    const translatedMessage = window.I18n?.t?.(messageKey);
+    const confirmed = await window.customDialog?.confirmDangerous?.(
+      translatedMessage && translatedMessage !== messageKey
+        ? translatedMessage
+        : "Delete the source video, frames, speech and result videos? Settings and references are kept.",
+      {
+        title: this._text("motionBatch.resetTitle", "Reset Motion project"),
+        itemName: project.name,
+        confirmText: this._text("common.reset", "Reset"),
+        cancelText: this._text("common.cancel", "Cancel"),
+      },
+    );
+    if (!confirmed || !Number.isSafeInteger(userId) || userId < 1) return;
+    if (!navigator.locks?.request || !window.MotionArtifactStore) {
+      window.showNotification?.("PROJECT_LOCK_UNAVAILABLE", "error");
+      return;
+    }
+    const resetId = crypto.randomUUID();
+    let committed = false;
+    try {
+      await navigator.locks.request(
+        `motion-run:${userId}:${id}`,
+        { ifAvailable: true },
+        async (runLock) => {
+          if (!runLock) throw new Error("PROJECT_ALREADY_RUNNING");
+          await navigator.locks.request(
+            `motion:${userId}:${id}`,
+            { ifAvailable: true },
+            async (lock) => {
+              if (!lock) throw new Error("PROJECT_ALREADY_EDITING");
+              if (Number(window.authManager?.getUser?.()?.id) !== userId)
+                throw new Error("ACCOUNT_SCOPE_CHANGED");
+              const path = `tools/motion-studio/projects/${encodeURIComponent(id)}`;
+              const current = await window.authManager._apiCall("GET", path);
+              let result;
+              try {
+                await window.MotionRunJournal.assertSourceResettable({
+                  userId,
+                  toolProjectId: id,
+                });
+                result = await window.authManager._apiCall(
+                  "POST",
+                  `${path}/reset`,
+                  { revision: current.revision, reset_id: resetId },
+                );
+              } catch (error) {
+                result = await window.authManager
+                  ._apiCall("GET", path)
+                  .catch(() => null);
+                if (result?.data_json?.reset_id !== resetId) throw error;
+              }
+              committed = true;
+              if (Number(window.authManager?.getUser?.()?.id) !== userId)
+                throw new Error("ACCOUNT_SCOPE_CHANGED");
+              await window.MotionRunJournal.acknowledgeSourceChange(
+                { userId, toolProjectId: id },
+                result,
+              );
+              await this._clearRunnerStatus(userId, id);
+              const records = await window.MotionArtifactStore.listProject(
+                userId,
+                id,
+              );
+              const revision = Number(result.data_json.source_revision);
+              const revisions = new Set(
+                records
+                  .filter(
+                    (record) =>
+                      record.sourceRevision > 0 &&
+                      record.sourceRevision < revision,
+                  )
+                  .map((record) => record.sourceRevision),
+              );
+              const splitRevisions =
+                await window.MotionArtifactStore.clearSplitJournalsAfterReset({
+                  userId,
+                  toolProjectId: id,
+                  maxRevision: revision,
+                  serverResetVerified: true,
+                });
+              for (const splitRevision of splitRevisions)
+                revisions.add(splitRevision);
+              for (const oldRevision of revisions)
+                await window.MotionArtifactStore.deleteSourceRevision(
+                  userId,
+                  id,
+                  oldRevision,
+                );
+              await window.MotionArtifactStore.deleteSourceDraft(userId, id);
+            },
+          );
+        },
+      );
+      await this.refresh();
+    } catch (error) {
+      window.showNotification?.(
+        committed
+          ? this._text(
+              "motionBatch.resetCleanup",
+              "Project reset on server; local cleanup is incomplete.",
+            )
+          : error?.message ||
+              this._text("motionBatch.resetFailed", "Could not reset project."),
+        "error",
+      );
+      await this.refresh().catch(() => {});
+    }
+  }
+  async remove(project) {
+    if (
+      !(await window.customDialog.confirmDangerous(
+        this._text(
+          "motionList.deleteConfirm",
+          "Delete this project and its media on this device?",
+        ),
+        {
+          title: this._text("motionList.deleteTitle", "Delete Motion project"),
+          itemName: project.name,
+          confirmText: this._text("common.delete", "Delete"),
+          cancelText: this._text("common.cancel", "Cancel"),
+        },
+      ))
+    )
+      return;
+    const userId = Number(window.authManager?.getUser?.()?.id);
+    try {
+      await window.authManager._apiCall(
+        "DELETE",
+        `tools/motion-studio/projects/${encodeURIComponent(project.tool_project_id)}`,
+      );
+      if (Number(window.authManager?.getUser?.()?.id) === userId)
+        await this._clearRunnerStatus(userId, project.tool_project_id);
+      chrome.runtime
+        .sendMessage({
+          action: "motionProjectDeleted",
+          toolProjectId: project.tool_project_id,
+        })
+        .catch(() => {});
+      this.cleanupPending = !(await this._cleanup(project.tool_project_id));
+      await this.refresh();
+    } catch (error) {
+      this.rows.textContent =
+        error?.message ||
+        this._text(
+          "motionEditor.text256",
+          "Local cleanup is incomplete. Reopen the project to retry.",
+        );
+    }
+  }
+  async _cleanup(
+    projectId,
+    expectedUserId = Number(window.authManager?.getUser?.()?.id),
+  ) {
+    const userId = Number(window.authManager?.getUser?.()?.id);
+    if (
+      !Number.isSafeInteger(userId) ||
+      userId < 1 ||
+      userId !== expectedUserId
+    )
+      return false;
+    if (!navigator.locks?.request || !window.MotionArtifactStore) return false;
+    return navigator.locks.request(
+      `motion:${userId}:${projectId}`,
+      { ifAvailable: true },
+      async (lock) => {
+        if (!lock || Number(window.authManager?.getUser?.()?.id) !== userId)
+          return false;
+        await MotionArtifactStore.clearSplitJournalsAfterReset({
+          userId,
+          toolProjectId: projectId,
+          maxRevision: Number.MAX_SAFE_INTEGER,
+          serverResetVerified: true,
+        });
+        await MotionArtifactStore.deleteProject(userId, projectId);
+        return true;
+      },
+    );
+  }
+  async reconcileTombstones() {
+    if (this.cleanupRunning || !window.MotionArtifactStore) return;
+    this.cleanupRunning = true;
+    const userId = Number(window.authManager?.getUser?.()?.id);
+    try {
+      if (!Number.isSafeInteger(userId) || userId < 1) return;
+      const deleted = [];
+      let expectedTotal = null;
+      for (let page = 1; ; page++) {
+        const result = await window.authManager._apiCall(
+          "GET",
+          `tools/motion-studio/projects?include_deleted=1&per_page=100&page=${page}`,
+        );
+        if (
+          Number(window.authManager?.getUser?.()?.id) !== userId ||
+          !Array.isArray(result?.data) ||
+          !Number.isSafeInteger(result.last_page) ||
+          result.last_page < page ||
+          !Number.isSafeInteger(result.total) ||
+          (expectedTotal !== null && result.total !== expectedTotal)
+        )
+          return;
+        expectedTotal = result.total;
+        deleted.push(
+          ...result.data.filter((row) => row.deleted_at && row.tool_project_id),
+        );
+        if (page >= result.last_page) break;
+      }
+      for (const row of deleted) {
+        if (Number(window.authManager?.getUser?.()?.id) !== userId) return;
+        if (!(await this._cleanup(row.tool_project_id, userId)))
+          this.cleanupPending = true;
+      }
+    } finally {
+      this.cleanupRunning = false;
+    }
+  }
+}
+globalThis.MotionStudioList = MotionStudioList;

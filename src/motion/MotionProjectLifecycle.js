@@ -1,1 +1,253 @@
-class MotionProjectLifecycle{static async run({scope,initialRun,ownerId,leaseMs,journal,assertScope,recover,execute,beforeCreate=null,shouldStop=()=>false,refreshSettings=false}){if(!scope||!initialRun||!ownerId||!journal||!Number.isSafeInteger(leaseMs)||leaseMs<1e3||[assertScope,recover,execute,shouldStop].some(fn=>typeof fn!=="function"))throw new Error("MOTION_LIFECYCLE_CONFIG_INVALID");if(!navigator.locks?.request)throw new Error("PROJECT_LOCK_UNAVAILABLE");const snapshotMismatch=fields=>{const diagnostic={userId:scope.userId,toolProjectId:scope.toolProjectId,reason:"run_journal",fields};if(globalThis.MotionRunnerRuntime?.snapshotChanged)globalThis.MotionRunnerRuntime.snapshotChanged(diagnostic);else console.warn("[MotionSnapshotMismatch]",JSON.stringify({...diagnostic,code:"MOTION_RUN_SNAPSHOT_CHANGED"}));return{state:"needs_review",error:"MOTION_RUN_SNAPSHOT_CHANGED"}};return navigator.locks.request(`motion-run:${scope.userId}:${scope.toolProjectId}`,{ifAvailable:true},async lock=>{if(!lock)return{state:"busy",error:"PROJECT_ALREADY_RUNNING"};await assertScope();let record=await journal.get(scope);if(typeof beforeCreate==="function"){if(shouldStop())return{state:"paused"};await beforeCreate(record);await assertScope();record=await journal.get(scope)}if(!record||record.state==="completed"||initialRun.replaceDrained===true){await journal.create(initialRun);record=await journal.get(scope)}const scopePinned=["userId","toolProjectId","flowProjectId","sourceRevision","executionMode"];const scopeChanged=record?scopePinned.filter(key=>record[key]!==initialRun[key]):["runJournal"];if(scopeChanged.length)return snapshotMismatch(scopeChanged);const claim=await journal.claim({...scope,runId:record.runId,ownerId,leaseMs});if(!claim?.acquired)return{state:"busy",error:"PROJECT_ALREADY_RUNNING"};const owner={...scope,runId:record.runId,ownerId,epoch:claim.epoch};let lost=false,stopped=false,timer=null,renewal=Promise.resolve();const arm=()=>{timer=setTimeout(()=>{renewal=renewal.then(async()=>{if(stopped)return;await assertScope();await journal.renew({...owner,leaseMs})}).catch(()=>{lost=true}).finally(()=>{if(!stopped&&!lost)arm()})},Math.floor(leaseMs/3))};arm();try{if((record.flowTarget||record.preparationSnapshot)&&typeof journal.refreshTransport==="function"){await assertScope();const changingMode=refreshSettings&&record.settingsSnapshot!==initialRun.settingsSnapshot&&record.flowTarget?.mode!==initialRun.flowTarget?.mode;const transport=changingMode?{...initialRun,flowTarget:{...initialRun.flowTarget,mode:record.flowTarget.mode},...initialRun.preparationSnapshot&&{preparationSnapshot:{...initialRun.preparationSnapshot,flowTarget:{...initialRun.preparationSnapshot.flowTarget,mode:record.flowTarget.mode}}}}:initialRun;record=await journal.refreshTransport(owner,transport)}const reconciled=await recover(owner,claim);if(!reconciled?.ready)return{state:["failed","paused"].includes(reconciled?.state)?reconciled.state:"needs_review",error:reconciled?.state==="paused"?null:reconciled?.error||"MOTION_RUN_RECONCILE_REQUIRED"};record=await journal.get(scope);if(refreshSettings&&record?.settingsSnapshot!==initialRun.settingsSnapshot){if(lost||shouldStop())return{state:"paused"};await assertScope();record=await journal.refreshSettings(owner,initialRun);console.info("[MotionResume]",JSON.stringify({runId:owner.runId,stage:"settings_adopted",sourceRevision:record.sourceRevision}))}const changed=record?[...["profileRevision","settingsSnapshot"].filter(key=>record[key]!==initialRun[key]),...(record.profilePromptVariant||"legacy")!==(initialRun.profilePromptVariant||"legacy")?["profilePromptVariant"]:[],...record.profileKey!==void 0&&record.profileKey!==initialRun.profileKey?["profileKey"]:[],...record.preparationSnapshot&&JSON.stringify(record.preparationSnapshot)!==JSON.stringify(initialRun.preparationSnapshot)?["preparationSnapshot"]:[],...record.flowTarget?["tabId","projectId","driverKey","origin","mode"].filter(key=>record.flowTarget[key]!==initialRun.flowTarget?.[key]).map(key=>`flowTarget.${key}`):[]]:["runJournal"];if(changed.length)return snapshotMismatch(changed);if(lost||shouldStop())return{state:"paused"};await assertScope();await journal.resume(owner);const result=await execute(owner,()=>lost||shouldStop());if(lost)return{state:"needs_review",error:"MOTION_RUN_FENCED"};const current=await journal.get(scope);if(result?.state==="ready"&&current?.state!=="completed")return{state:"needs_review",error:"MOTION_FINAL_UNVERIFIED"};return result||{state:"failed",error:"MOTION_RUN_FAILED"}}catch(error){const current=await journal.get(scope).catch(()=>null);const outbox=typeof journal.listTranscriptOutbox==="function"?await journal.listTranscriptOutbox(scope).catch(()=>null):[];const unresolved=!current||!outbox||outbox.length||Object.keys(current.operations||{}).length||Object.values(current.reservations||{}).some(item=>item.token||item.pendingAttemptId||item.pendingSettlement);return{state:unresolved||lost?"needs_review":"failed",error:error?.code||error?.message||"MOTION_RUN_FAILED"}}finally{stopped=true;if(timer!==null)clearTimeout(timer);await renewal;if(!lost){try{const current=await journal.get(scope);if(current?.state!=="completed"){if(Object.keys(current?.operations||{}).length)await journal.yieldReview(owner);else await journal.release(owner)}}catch(_){}}}})}}globalThis.MotionProjectLifecycle=MotionProjectLifecycle;
+class MotionProjectLifecycle {
+  static async run({
+    scope,
+    initialRun,
+    ownerId,
+    leaseMs,
+    journal,
+    assertScope,
+    recover,
+    execute,
+    beforeCreate = null,
+    shouldStop = () => false,
+    refreshSettings = false,
+  }) {
+    if (
+      !scope ||
+      !initialRun ||
+      !ownerId ||
+      !journal ||
+      !Number.isSafeInteger(leaseMs) ||
+      leaseMs < 1e3 ||
+      [assertScope, recover, execute, shouldStop].some(
+        (fn) => typeof fn !== "function",
+      )
+    )
+      throw new Error("MOTION_LIFECYCLE_CONFIG_INVALID");
+    if (!navigator.locks?.request) throw new Error("PROJECT_LOCK_UNAVAILABLE");
+    const snapshotMismatch = (fields) => {
+      const diagnostic = {
+        userId: scope.userId,
+        toolProjectId: scope.toolProjectId,
+        reason: "run_journal",
+        fields,
+      };
+      if (globalThis.MotionRunnerRuntime?.snapshotChanged)
+        globalThis.MotionRunnerRuntime.snapshotChanged(diagnostic);
+      else
+        console.warn(
+          "[MotionSnapshotMismatch]",
+          JSON.stringify({
+            ...diagnostic,
+            code: "MOTION_RUN_SNAPSHOT_CHANGED",
+          }),
+        );
+      return { state: "needs_review", error: "MOTION_RUN_SNAPSHOT_CHANGED" };
+    };
+    return navigator.locks.request(
+      `motion-run:${scope.userId}:${scope.toolProjectId}`,
+      { ifAvailable: true },
+      async (lock) => {
+        if (!lock) return { state: "busy", error: "PROJECT_ALREADY_RUNNING" };
+        await assertScope();
+        let record = await journal.get(scope);
+        if (typeof beforeCreate === "function") {
+          if (shouldStop()) return { state: "paused" };
+          await beforeCreate(record);
+          await assertScope();
+          record = await journal.get(scope);
+        }
+        if (
+          !record ||
+          record.state === "completed" ||
+          initialRun.replaceDrained === true
+        ) {
+          await journal.create(initialRun);
+          record = await journal.get(scope);
+        }
+        const scopePinned = [
+          "userId",
+          "toolProjectId",
+          "flowProjectId",
+          "sourceRevision",
+          "executionMode",
+        ];
+        const scopeChanged = record
+          ? scopePinned.filter((key) => record[key] !== initialRun[key])
+          : ["runJournal"];
+        if (scopeChanged.length) return snapshotMismatch(scopeChanged);
+        const claim = await journal.claim({
+          ...scope,
+          runId: record.runId,
+          ownerId,
+          leaseMs,
+        });
+        if (!claim?.acquired)
+          return { state: "busy", error: "PROJECT_ALREADY_RUNNING" };
+        const owner = {
+          ...scope,
+          runId: record.runId,
+          ownerId,
+          epoch: claim.epoch,
+        };
+        let lost = false,
+          stopped = false,
+          timer = null,
+          renewal = Promise.resolve();
+        const arm = () => {
+          timer = setTimeout(
+            () => {
+              renewal = renewal
+                .then(async () => {
+                  if (stopped) return;
+                  await assertScope();
+                  await journal.renew({ ...owner, leaseMs });
+                })
+                .catch(() => {
+                  lost = true;
+                })
+                .finally(() => {
+                  if (!stopped && !lost) arm();
+                });
+            },
+            Math.floor(leaseMs / 3),
+          );
+        };
+        arm();
+        try {
+          if (
+            (record.flowTarget || record.preparationSnapshot) &&
+            typeof journal.refreshTransport === "function"
+          ) {
+            await assertScope();
+            const changingMode =
+              refreshSettings &&
+              record.settingsSnapshot !== initialRun.settingsSnapshot &&
+              record.flowTarget?.mode !== initialRun.flowTarget?.mode;
+            const transport = changingMode
+              ? {
+                  ...initialRun,
+                  flowTarget: {
+                    ...initialRun.flowTarget,
+                    mode: record.flowTarget.mode,
+                  },
+                  ...(initialRun.preparationSnapshot && {
+                    preparationSnapshot: {
+                      ...initialRun.preparationSnapshot,
+                      flowTarget: {
+                        ...initialRun.preparationSnapshot.flowTarget,
+                        mode: record.flowTarget.mode,
+                      },
+                    },
+                  }),
+                }
+              : initialRun;
+            record = await journal.refreshTransport(owner, transport);
+          }
+          const reconciled = await recover(owner, claim);
+          if (!reconciled?.ready)
+            return {
+              state: ["failed", "paused"].includes(reconciled?.state)
+                ? reconciled.state
+                : "needs_review",
+              error:
+                reconciled?.state === "paused"
+                  ? null
+                  : reconciled?.error || "MOTION_RUN_RECONCILE_REQUIRED",
+            };
+          record = await journal.get(scope);
+          if (
+            refreshSettings &&
+            record?.settingsSnapshot !== initialRun.settingsSnapshot
+          ) {
+            if (lost || shouldStop()) return { state: "paused" };
+            await assertScope();
+            record = await journal.refreshSettings(owner, initialRun);
+            console.info(
+              "[MotionResume]",
+              JSON.stringify({
+                runId: owner.runId,
+                stage: "settings_adopted",
+                sourceRevision: record.sourceRevision,
+              }),
+            );
+          }
+          const changed = record
+            ? [
+                ...["profileRevision", "settingsSnapshot"].filter(
+                  (key) => record[key] !== initialRun[key],
+                ),
+                ...((record.profilePromptVariant || "legacy") !==
+                (initialRun.profilePromptVariant || "legacy")
+                  ? ["profilePromptVariant"]
+                  : []),
+                ...(record.profileKey !== void 0 &&
+                record.profileKey !== initialRun.profileKey
+                  ? ["profileKey"]
+                  : []),
+                ...(record.preparationSnapshot &&
+                JSON.stringify(record.preparationSnapshot) !==
+                  JSON.stringify(initialRun.preparationSnapshot)
+                  ? ["preparationSnapshot"]
+                  : []),
+                ...(record.flowTarget
+                  ? ["tabId", "projectId", "driverKey", "origin", "mode"]
+                      .filter(
+                        (key) =>
+                          record.flowTarget[key] !==
+                          initialRun.flowTarget?.[key],
+                      )
+                      .map((key) => `flowTarget.${key}`)
+                  : []),
+              ]
+            : ["runJournal"];
+          if (changed.length) return snapshotMismatch(changed);
+          if (lost || shouldStop()) return { state: "paused" };
+          await assertScope();
+          await journal.resume(owner);
+          const result = await execute(owner, () => lost || shouldStop());
+          if (lost)
+            return { state: "needs_review", error: "MOTION_RUN_FENCED" };
+          const current = await journal.get(scope);
+          if (result?.state === "ready" && current?.state !== "completed")
+            return { state: "needs_review", error: "MOTION_FINAL_UNVERIFIED" };
+          return result || { state: "failed", error: "MOTION_RUN_FAILED" };
+        } catch (error) {
+          const current = await journal.get(scope).catch(() => null);
+          const outbox =
+            typeof journal.listTranscriptOutbox === "function"
+              ? await journal.listTranscriptOutbox(scope).catch(() => null)
+              : [];
+          const unresolved =
+            !current ||
+            !outbox ||
+            outbox.length ||
+            Object.keys(current.operations || {}).length ||
+            Object.values(current.reservations || {}).some(
+              (item) =>
+                item.token || item.pendingAttemptId || item.pendingSettlement,
+            );
+          return {
+            state: unresolved || lost ? "needs_review" : "failed",
+            error: error?.code || error?.message || "MOTION_RUN_FAILED",
+          };
+        } finally {
+          stopped = true;
+          if (timer !== null) clearTimeout(timer);
+          await renewal;
+          if (!lost) {
+            try {
+              const current = await journal.get(scope);
+              if (current?.state !== "completed") {
+                if (Object.keys(current?.operations || {}).length)
+                  await journal.yieldReview(owner);
+                else await journal.release(owner);
+              }
+            } catch (_) {}
+          }
+        }
+      },
+    );
+  }
+}
+globalThis.MotionProjectLifecycle = MotionProjectLifecycle;

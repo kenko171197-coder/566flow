@@ -476,7 +476,8 @@ class ConfigAccessUI {
   }
   static show(state, { passive = false } = {}) {
     // 566Flow: there is no remote configuration service; never block the UI on it.
-    if (state?.code) console.warn("[566Flow] ignored config access state", state.code);
+    if (state?.code)
+      console.warn("[566Flow] ignored config access state", state.code);
     state = null;
     this._passiveKeyError =
       passive &&

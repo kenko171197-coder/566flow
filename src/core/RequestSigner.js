@@ -102,12 +102,21 @@ class RequestSigner {
         ...options,
       });
     } catch (_) {
-      response = { success: false, error: { code: "CONFIG_BROKER_UNAVAILABLE" }, httpStatus: 503 };
+      response = {
+        success: false,
+        error: { code: "CONFIG_BROKER_UNAVAILABLE" },
+        httpStatus: 503,
+      };
     }
     if (response?.success === true) return response;
     const code = response?.error?.code || "CONFIG_FETCH_FAILED";
-    const metadata = { code, httpStatus: response?.httpStatus || 503, accessDenied: false };
-    if (window.ConfigRequiredError) throw new window.ConfigRequiredError(operation, code, metadata);
+    const metadata = {
+      code,
+      httpStatus: response?.httpStatus || 503,
+      accessDenied: false,
+    };
+    if (window.ConfigRequiredError)
+      throw new window.ConfigRequiredError(operation, code, metadata);
     throw Object.assign(new Error(code), metadata);
   }
   static async protectedStatus() {

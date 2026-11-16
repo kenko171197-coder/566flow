@@ -1,1 +1,82 @@
-(()=>{class MotionSplitPolicy{static limit(project,profile){const modelValue=project?.data_json?.preferences?.flow_model||profile?.settings?.flow_model;const adminMax=Number(profile?.settings?.max_split_clip_seconds);if(!Number.isFinite(adminMax)||adminMax<1)throw new Error("INVALID_SPLIT_PROFILE");let modelMax=NaN;try{const value=window.ModelRegistry?.findModel?.("flow",modelValue)?.config?.max_edit_video_duration;if(typeof value==="number"||typeof value==="string")modelMax=Number(value)}catch(_){}if(!Number.isFinite(modelMax)||modelMax<1){console.warn("[MotionSplitLimit]",JSON.stringify({stage:"tool_settings_fallback",modelValue,adminMax,field:"max_edit_video_duration"}));return adminMax}return Math.min(adminMax,modelMax)}static assertFrameLimits(project,profile){const maxSeconds=this.limit(project,profile);const oversized=Object.entries(project?.data_json?.frames||{}).filter(([,frame])=>frame.stages?.monitor?.state!=="ready"&&frame.stages?.persist?.state!=="ready"&&Number(frame.end)-Number(frame.start)>maxSeconds+.0015);if(oversized.length){console.warn("[MotionSplitLimit]",JSON.stringify({stage:"resplit_required",maxSeconds,frameCount:oversized.length}));throw new Error("MOTION_SOURCE_REQUIRES_RESPLIT")}return maxSeconds}static desired(preferences={}){return preferences.voice_enabled===true||preferences.subtitle_enabled===true?"silence":"duration"}static applied(project){if(!project?.data_json?.source||!Object.keys(project.data_json.frames||{}).length)return null;return project.data_json.source.split_strategy||"silence"}static needsDecision(project,preferences){return this.applied(project)==="duration"&&this.desired(project.data_json.preferences)==="duration"&&this.desired(preferences)==="silence"}static resultCount(project){return Object.values(project?.data_json?.frames||{}).filter(frame=>frame.stages?.persist?.state==="ready"||frame.stages?.monitor?.state==="ready").length}}window.MotionSplitPolicy=MotionSplitPolicy})();
+(() => {
+  class MotionSplitPolicy {
+    static limit(project, profile) {
+      const modelValue =
+        project?.data_json?.preferences?.flow_model ||
+        profile?.settings?.flow_model;
+      const adminMax = Number(profile?.settings?.max_split_clip_seconds);
+      if (!Number.isFinite(adminMax) || adminMax < 1)
+        throw new Error("INVALID_SPLIT_PROFILE");
+      let modelMax = NaN;
+      try {
+        const value = window.ModelRegistry?.findModel?.("flow", modelValue)
+          ?.config?.max_edit_video_duration;
+        if (typeof value === "number" || typeof value === "string")
+          modelMax = Number(value);
+      } catch (_) {}
+      if (!Number.isFinite(modelMax) || modelMax < 1) {
+        console.warn(
+          "[MotionSplitLimit]",
+          JSON.stringify({
+            stage: "tool_settings_fallback",
+            modelValue,
+            adminMax,
+            field: "max_edit_video_duration",
+          }),
+        );
+        return adminMax;
+      }
+      return Math.min(adminMax, modelMax);
+    }
+    static assertFrameLimits(project, profile) {
+      const maxSeconds = this.limit(project, profile);
+      const oversized = Object.entries(project?.data_json?.frames || {}).filter(
+        ([, frame]) =>
+          frame.stages?.monitor?.state !== "ready" &&
+          frame.stages?.persist?.state !== "ready" &&
+          Number(frame.end) - Number(frame.start) > maxSeconds + 0.0015,
+      );
+      if (oversized.length) {
+        console.warn(
+          "[MotionSplitLimit]",
+          JSON.stringify({
+            stage: "resplit_required",
+            maxSeconds,
+            frameCount: oversized.length,
+          }),
+        );
+        throw new Error("MOTION_SOURCE_REQUIRES_RESPLIT");
+      }
+      return maxSeconds;
+    }
+    static desired(preferences = {}) {
+      return preferences.voice_enabled === true ||
+        preferences.subtitle_enabled === true
+        ? "silence"
+        : "duration";
+    }
+    static applied(project) {
+      if (
+        !project?.data_json?.source ||
+        !Object.keys(project.data_json.frames || {}).length
+      )
+        return null;
+      return project.data_json.source.split_strategy || "silence";
+    }
+    static needsDecision(project, preferences) {
+      return (
+        this.applied(project) === "duration" &&
+        this.desired(project.data_json.preferences) === "duration" &&
+        this.desired(preferences) === "silence"
+      );
+    }
+    static resultCount(project) {
+      return Object.values(project?.data_json?.frames || {}).filter(
+        (frame) =>
+          frame.stages?.persist?.state === "ready" ||
+          frame.stages?.monitor?.state === "ready",
+      ).length;
+    }
+  }
+  window.MotionSplitPolicy = MotionSplitPolicy;
+})();

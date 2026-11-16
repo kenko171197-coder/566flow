@@ -18,7 +18,8 @@
     const isLocal =
       parsed.hostname === LOCAL_HOST || /\/api\/v1\//.test(parsed.pathname);
     if (!isLocal) return nativeFetch(input, init);
-    const endpoint = parsed.pathname.replace(/^.*?\/api\/v1\//, "") + parsed.search;
+    const endpoint =
+      parsed.pathname.replace(/^.*?\/api\/v1\//, "") + parsed.search;
     let data;
     try {
       if (typeof init?.body === "string") data = JSON.parse(init.body);
@@ -30,8 +31,15 @@
       data,
     });
     const body = res?.success
-      ? { success: true, data: res.data, ...(res.meta ? { meta: res.meta } : {}) }
-      : { success: false, error: res?.error || { code: "LOCAL_BACKEND_ERROR" } };
+      ? {
+          success: true,
+          data: res.data,
+          ...(res.meta ? { meta: res.meta } : {}),
+        }
+      : {
+          success: false,
+          error: res?.error || { code: "LOCAL_BACKEND_ERROR" },
+        };
     return new Response(JSON.stringify(body), {
       status: res?.success ? 200 : res?.httpStatus || 500,
       headers: { "Content-Type": "application/json" },

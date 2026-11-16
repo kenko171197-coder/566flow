@@ -1,1 +1,511 @@
-class MotionBulkVideoPicker{constructor({host,maxBytes,text,onChange=()=>{}}){if(!host||!Number.isSafeInteger(maxBytes)||maxBytes<1||typeof text!=="function"){throw new Error("MOTION_BULK_PICKER_CONFIG_INVALID")}this.host=host;this.maxBytes=maxBytes;this.text=text;this.onChange=onChange;this.items=new Map;this.queue=Promise.resolve();this.closed=false;this.quota=null;this.previewUrl=null;this.activeProbe=null;this._render()}_render(){const drop=document.createElement("label");drop.className="wmtool-drop video-split-drop motion-bulk-drop";drop.tabIndex=0;const icon=document.createElementNS("http://www.w3.org/2000/svg","svg");icon.setAttribute("class","wmtool-drop-ico");icon.setAttribute("width","28");icon.setAttribute("height","28");icon.setAttribute("viewBox","0 0 24 24");icon.setAttribute("fill","none");icon.setAttribute("stroke","currentColor");icon.setAttribute("stroke-width","1.6");icon.setAttribute("stroke-linecap","round");icon.setAttribute("stroke-linejoin","round");icon.setAttribute("aria-hidden","true");for(const d of["M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4","M12 3v13","m7 8 5-5 5 5"]){const path=document.createElementNS("http://www.w3.org/2000/svg","path");path.setAttribute("d",d);icon.append(path)}const hint=document.createElement("p");hint.textContent=this.text("drop");const choose=document.createElement("span");choose.className="btn btn-secondary";choose.textContent=this.text("choose");const chooseIcon=document.createElement("span");chooseIcon.className="motion-bulk-choose-video-icon";chooseIcon.setAttribute("aria-hidden","true");choose.prepend(chooseIcon);const input=document.createElement("input");input.type="file";input.multiple=true;input.accept="video/mp4,video/webm,video/quicktime,video/*";input.hidden=true;drop.append(icon,hint,choose,input);const status=document.createElement("p");status.className="motion-bulk-file-status";status.setAttribute("role","status");const quota=document.createElement("p");quota.className="motion-bulk-quota";quota.setAttribute("role","status");const grid=document.createElement("div");grid.className="motion-bulk-video-grid";const preview=document.createElement("dialog");preview.className="motion-bulk-preview video-split-preview";preview.setAttribute("aria-label",this.text("play"));const close=document.createElement("button");close.type="button";close.className="video-split-preview-close";close.textContent="\xD7";close.setAttribute("aria-label",this.text("close"));const video=document.createElement("video");video.controls=true;video.playsInline=true;preview.append(close,video);this.host.append(drop,quota,status,grid,preview);this.input=input;this.grid=grid;this.status=status;this.quotaLabel=quota;this.preview=preview;this.previewVideo=video;input.addEventListener("change",()=>{this.add(input.files);input.value=""});drop.addEventListener("keydown",event=>{if(event.key==="Enter"||event.key===" "){event.preventDefault();input.click()}});drop.addEventListener("dragover",event=>{event.preventDefault();drop.classList.add("dragover")});drop.addEventListener("dragleave",event=>{if(!drop.contains(event.relatedTarget))drop.classList.remove("dragover")});drop.addEventListener("drop",event=>{event.preventDefault();drop.classList.remove("dragover");this.add(event.dataTransfer?.files)});close.addEventListener("click",()=>this.closePreview());preview.addEventListener("click",event=>{if(event.target===preview)this.closePreview()});preview.addEventListener("cancel",event=>{event.preventDefault();this.closePreview()})}add(files){if(this.closed)return;for(const file of Array.from(files||[])){if(!(file.type.startsWith("video/")||/\.(mp4|m4v|mov|webm)$/i.test(file.name))||!file.name||file.name.length>255||file.size===0||file.size>this.maxBytes){this.status.textContent=this.text("invalid");continue}const id=crypto.randomUUID();const item={itemId:id,file,fileName:file.name,duration:null,state:"loading",card:null,removed:false};this.items.set(id,item);this._card(item);this.queue=this.queue.catch(()=>{}).then(()=>this._probe(item)).catch(()=>{if(!this.closed&&!item.removed){item.state="invalid";item.durationLabel.textContent=this.text("invalid");this.onChange(this.values())}})}this._applyQuota();this.onChange(this.values())}restore({itemId,blob,fileName}){if(this.closed||!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(String(itemId||""))||!(blob instanceof Blob)||!blob.size||typeof fileName!=="string"||!fileName||this.items.has(itemId)){throw new Error("MOTION_BULK_SOURCE_MISMATCH")}const file=new File([blob],fileName,{type:blob.type});const item={itemId,file,fileName,duration:null,state:"loading",card:null,removed:false};this.items.set(itemId,item);this._card(item);this.queue=this.queue.catch(()=>{}).then(()=>this._probe(item)).catch(()=>{if(!this.closed&&!item.removed){item.state="invalid";item.durationLabel.textContent=this.text("invalid");this.onChange(this.values())}});this._applyQuota();this.onChange(this.values())}_card(item){const card=document.createElement("article");card.className="motion-bulk-video-card";const image=document.createElement("div");image.className="motion-bulk-video-thumb";const poster=document.createElement("img");poster.alt="";poster.hidden=true;const play=document.createElement("button");play.type="button";play.className="motion-bulk-video-play";play.textContent="\u25B6";play.setAttribute("aria-label",this.text("play"));const duration=document.createElement("span");duration.className="motion-bulk-video-duration";duration.textContent="\u2014";image.append(poster,play,duration);const name=document.createElement("strong");name.textContent=item.file.name;name.title=item.file.name;const size=document.createElement("small");size.textContent=`${(item.file.size/1048576).toFixed(1)} MB`;const remove=document.createElement("button");remove.type="button";remove.className="motion-bulk-video-remove";remove.setAttribute("aria-label",this.text("remove"));remove.title=this.text("remove");const trash=document.createElementNS("http://www.w3.org/2000/svg","svg");trash.setAttribute("width","16");trash.setAttribute("height","16");trash.setAttribute("viewBox","0 0 24 24");trash.setAttribute("fill","none");trash.setAttribute("stroke","currentColor");trash.setAttribute("stroke-width","1.8");trash.setAttribute("stroke-linecap","round");trash.setAttribute("stroke-linejoin","round");trash.setAttribute("aria-hidden","true");const trashPath=document.createElementNS("http://www.w3.org/2000/svg","path");trashPath.setAttribute("d","M3 6h18M9 6V3h6v3M5 6l1 15h12l1-15M10 10v7M14 10v7");trash.append(trashPath);remove.append(trash);remove.addEventListener("click",()=>this.remove(item.itemId));play.addEventListener("click",()=>this.openPreview(item.itemId));const thumbnailStatus=document.createElement("small");thumbnailStatus.className="motion-bulk-thumbnail-status";thumbnailStatus.setAttribute("role","status");thumbnailStatus.hidden=true;image.append(remove);card.append(image,name,size,thumbnailStatus);this.grid.append(card);Object.assign(item,{card,poster,durationLabel:duration,thumbnailStatus})}static _duration(seconds){const n=Math.floor(seconds),hours=Math.floor(n/3600),minutes=Math.floor(n%3600/60);return hours?`${hours}:${String(minutes).padStart(2,"0")}:${String(n%60).padStart(2,"0")}`:`${minutes}:${String(n%60).padStart(2,"0")}`}async _probe(item){if(this.closed||item.removed)return;const url=URL.createObjectURL(item.file);const video=document.createElement("video");video.preload="metadata";video.muted=true;video.playsInline=true;await new Promise(resolve=>{let timer;const finish=error=>{if(timer===null)return;clearTimeout(timer);timer=null;video.onloadedmetadata=video.onloadeddata=video.onseeked=video.onerror=null;if(!this.closed&&!item.removed){if(!error&&Number.isFinite(video.duration)&&video.duration>0){item.duration=video.duration;item.durationLabel.textContent=MotionBulkVideoPicker._duration(video.duration);item.state="ready";const canvas=document.createElement("canvas");canvas.width=160;canvas.height=160;try{const context=canvas.getContext("2d");const scale=Math.max(160/video.videoWidth,160/video.videoHeight);const width=video.videoWidth*scale,height=video.videoHeight*scale;if(context&&Number.isFinite(width)&&Number.isFinite(height)){context.drawImage(video,(160-width)/2,(160-height)/2,width,height);item.poster.src=canvas.toDataURL("image/jpeg",.7);item.poster.hidden=false}}catch(_){}finally{canvas.width=0;canvas.height=0}if(item.poster.hidden){item.thumbnailStatus.textContent=this.text("thumbnailUnavailable");item.thumbnailStatus.hidden=false}}else{item.state="invalid";item.durationLabel.textContent=this.text("invalid")}try{this.onChange(this.values())}catch(error2){console.warn("[MotionBulkVideoPicker] change callback:",error2?.message)}}video.removeAttribute("src");video.load();URL.revokeObjectURL(url);this.activeProbe=null;this.activeProbeItem=null;resolve()};timer=setTimeout(()=>finish(true),15e3);this.activeProbe=()=>finish(true);this.activeProbeItem=item.itemId;const captureReadyFrame=()=>{if(video.seeking||video.readyState<2||!video.videoWidth||!video.videoHeight)return;finish(false)};video.onloadedmetadata=()=>{if(!Number.isFinite(video.duration)||video.duration<=0){finish(true);return}video.preload="auto";try{video.currentTime=Math.min(.1,video.duration/2)}catch(_){captureReadyFrame()}};video.onloadeddata=video.onseeked=captureReadyFrame;video.onerror=()=>finish(true);video.src=url;video.load()})}setQuota(quota){if(!quota||!Number.isSafeInteger(quota.used)||quota.used<0||!Number.isSafeInteger(quota.limit)||quota.limit<-1||quota.limit!==-1&&(!Number.isSafeInteger(quota.remaining)||quota.remaining<0||quota.remaining!==Math.max(0,quota.limit-quota.used)))throw new Error("MOTION_PROJECT_QUOTA_INVALID");this.quota={...quota};this.quotaLabel.textContent=quota.limit===-1?`${this.text("quota")}: ${quota.used} / \u221E`:`${this.text("quota")}: ${quota.used} / ${quota.limit} \xB7 ${this.text("remaining")}: ${quota.remaining}`;this._applyQuota();this.onChange(this.values())}_applyQuota(){let index=0;const existing=new Set(this.quota?.existingItemIds||[]);for(const item of this.items.values()){const consumesSlot=!existing.has(item.itemId);item.overLimit=consumesSlot&&!!this.quota&&this.quota.limit!==-1&&index>=this.quota.remaining;item.card.classList.toggle("over-limit",item.overLimit);item.card.dataset.overLimit=String(item.overLimit);item.card.title=item.overLimit?this.text("overLimit"):"";if(consumesSlot)index++}}values(){return[...this.items.values()].map(({itemId,file,fileName,duration,state,overLimit})=>({itemId,file,fileName,duration,state,overLimit:overLimit===true}))}releaseFile(id,loadStagedSource){const item=this.items.get(id);if(!item||typeof loadStagedSource!=="function")return;item.file=null;item.loadStagedSource=loadStagedSource}remove(id){const item=this.items.get(id);if(!item)return;item.removed=true;item.card.remove();this.items.delete(id);if(this.activeProbeItem===id)this.activeProbe?.();if(this.previewItemId===id)this.closePreview();item.file=null;this._applyQuota();this.onChange(this.values())}openPreview(id){const item=this.items.get(id);if(!item)return;this.closePreview();this.previewItemId=id;const ticket=this.previewTicket;const open=blob=>{if(this.closed||this.previewTicket!==ticket||this.items.get(id)!==item)return;if(!(blob instanceof Blob)||!blob.size){this.status.textContent=this.text("invalid");return}this.previewUrl=URL.createObjectURL(blob);this.previewVideo.src=this.previewUrl;this.preview.showModal();Promise.resolve(this.previewVideo.play()).catch(()=>{})};if(item.file)open(item.file);else Promise.resolve().then(()=>item.loadStagedSource?.()).then(open).catch(()=>{if(!this.closed&&this.previewTicket===ticket)this.status.textContent=this.text("invalid")})}closePreview(){this.previewTicket=(this.previewTicket||0)+1;this.previewVideo.pause();this.previewVideo.removeAttribute("src");this.previewVideo.load();if(this.preview.open)this.preview.close();if(this.previewUrl)URL.revokeObjectURL(this.previewUrl);this.previewUrl=null;this.previewItemId=null}destroy(){if(this.closed)return;this.closed=true;this.activeProbe?.();this.closePreview();for(const item of this.items.values()){item.removed=true;item.file=null}this.items.clear();this.host.replaceChildren()}}globalThis.MotionBulkVideoPicker=MotionBulkVideoPicker;
+class MotionBulkVideoPicker {
+  constructor({ host, maxBytes, text, onChange = () => {} }) {
+    if (
+      !host ||
+      !Number.isSafeInteger(maxBytes) ||
+      maxBytes < 1 ||
+      typeof text !== "function"
+    ) {
+      throw new Error("MOTION_BULK_PICKER_CONFIG_INVALID");
+    }
+    this.host = host;
+    this.maxBytes = maxBytes;
+    this.text = text;
+    this.onChange = onChange;
+    this.items = new Map();
+    this.queue = Promise.resolve();
+    this.closed = false;
+    this.quota = null;
+    this.previewUrl = null;
+    this.activeProbe = null;
+    this._render();
+  }
+  _render() {
+    const drop = document.createElement("label");
+    drop.className = "wmtool-drop video-split-drop motion-bulk-drop";
+    drop.tabIndex = 0;
+    const icon = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    icon.setAttribute("class", "wmtool-drop-ico");
+    icon.setAttribute("width", "28");
+    icon.setAttribute("height", "28");
+    icon.setAttribute("viewBox", "0 0 24 24");
+    icon.setAttribute("fill", "none");
+    icon.setAttribute("stroke", "currentColor");
+    icon.setAttribute("stroke-width", "1.6");
+    icon.setAttribute("stroke-linecap", "round");
+    icon.setAttribute("stroke-linejoin", "round");
+    icon.setAttribute("aria-hidden", "true");
+    for (const d of [
+      "M21 15v4a2 2 0 0 1-2 2H5a2 2 0 0 1-2-2v-4",
+      "M12 3v13",
+      "m7 8 5-5 5 5",
+    ]) {
+      const path = document.createElementNS(
+        "http://www.w3.org/2000/svg",
+        "path",
+      );
+      path.setAttribute("d", d);
+      icon.append(path);
+    }
+    const hint = document.createElement("p");
+    hint.textContent = this.text("drop");
+    const choose = document.createElement("span");
+    choose.className = "btn btn-secondary";
+    choose.textContent = this.text("choose");
+    const chooseIcon = document.createElement("span");
+    chooseIcon.className = "motion-bulk-choose-video-icon";
+    chooseIcon.setAttribute("aria-hidden", "true");
+    choose.prepend(chooseIcon);
+    const input = document.createElement("input");
+    input.type = "file";
+    input.multiple = true;
+    input.accept = "video/mp4,video/webm,video/quicktime,video/*";
+    input.hidden = true;
+    drop.append(icon, hint, choose, input);
+    const status = document.createElement("p");
+    status.className = "motion-bulk-file-status";
+    status.setAttribute("role", "status");
+    const quota = document.createElement("p");
+    quota.className = "motion-bulk-quota";
+    quota.setAttribute("role", "status");
+    const grid = document.createElement("div");
+    grid.className = "motion-bulk-video-grid";
+    const preview = document.createElement("dialog");
+    preview.className = "motion-bulk-preview video-split-preview";
+    preview.setAttribute("aria-label", this.text("play"));
+    const close = document.createElement("button");
+    close.type = "button";
+    close.className = "video-split-preview-close";
+    close.textContent = "\xD7";
+    close.setAttribute("aria-label", this.text("close"));
+    const video = document.createElement("video");
+    video.controls = true;
+    video.playsInline = true;
+    preview.append(close, video);
+    this.host.append(drop, quota, status, grid, preview);
+    this.input = input;
+    this.grid = grid;
+    this.status = status;
+    this.quotaLabel = quota;
+    this.preview = preview;
+    this.previewVideo = video;
+    input.addEventListener("change", () => {
+      this.add(input.files);
+      input.value = "";
+    });
+    drop.addEventListener("keydown", (event) => {
+      if (event.key === "Enter" || event.key === " ") {
+        event.preventDefault();
+        input.click();
+      }
+    });
+    drop.addEventListener("dragover", (event) => {
+      event.preventDefault();
+      drop.classList.add("dragover");
+    });
+    drop.addEventListener("dragleave", (event) => {
+      if (!drop.contains(event.relatedTarget))
+        drop.classList.remove("dragover");
+    });
+    drop.addEventListener("drop", (event) => {
+      event.preventDefault();
+      drop.classList.remove("dragover");
+      this.add(event.dataTransfer?.files);
+    });
+    close.addEventListener("click", () => this.closePreview());
+    preview.addEventListener("click", (event) => {
+      if (event.target === preview) this.closePreview();
+    });
+    preview.addEventListener("cancel", (event) => {
+      event.preventDefault();
+      this.closePreview();
+    });
+  }
+  add(files) {
+    if (this.closed) return;
+    for (const file of Array.from(files || [])) {
+      if (
+        !(
+          file.type.startsWith("video/") ||
+          /\.(mp4|m4v|mov|webm)$/i.test(file.name)
+        ) ||
+        !file.name ||
+        file.name.length > 255 ||
+        file.size === 0 ||
+        file.size > this.maxBytes
+      ) {
+        this.status.textContent = this.text("invalid");
+        continue;
+      }
+      const id = crypto.randomUUID();
+      const item = {
+        itemId: id,
+        file,
+        fileName: file.name,
+        duration: null,
+        state: "loading",
+        card: null,
+        removed: false,
+      };
+      this.items.set(id, item);
+      this._card(item);
+      this.queue = this.queue
+        .catch(() => {})
+        .then(() => this._probe(item))
+        .catch(() => {
+          if (!this.closed && !item.removed) {
+            item.state = "invalid";
+            item.durationLabel.textContent = this.text("invalid");
+            this.onChange(this.values());
+          }
+        });
+    }
+    this._applyQuota();
+    this.onChange(this.values());
+  }
+  restore({ itemId, blob, fileName }) {
+    if (
+      this.closed ||
+      !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+        String(itemId || ""),
+      ) ||
+      !(blob instanceof Blob) ||
+      !blob.size ||
+      typeof fileName !== "string" ||
+      !fileName ||
+      this.items.has(itemId)
+    ) {
+      throw new Error("MOTION_BULK_SOURCE_MISMATCH");
+    }
+    const file = new File([blob], fileName, { type: blob.type });
+    const item = {
+      itemId,
+      file,
+      fileName,
+      duration: null,
+      state: "loading",
+      card: null,
+      removed: false,
+    };
+    this.items.set(itemId, item);
+    this._card(item);
+    this.queue = this.queue
+      .catch(() => {})
+      .then(() => this._probe(item))
+      .catch(() => {
+        if (!this.closed && !item.removed) {
+          item.state = "invalid";
+          item.durationLabel.textContent = this.text("invalid");
+          this.onChange(this.values());
+        }
+      });
+    this._applyQuota();
+    this.onChange(this.values());
+  }
+  _card(item) {
+    const card = document.createElement("article");
+    card.className = "motion-bulk-video-card";
+    const image = document.createElement("div");
+    image.className = "motion-bulk-video-thumb";
+    const poster = document.createElement("img");
+    poster.alt = "";
+    poster.hidden = true;
+    const play = document.createElement("button");
+    play.type = "button";
+    play.className = "motion-bulk-video-play";
+    play.textContent = "\u25B6";
+    play.setAttribute("aria-label", this.text("play"));
+    const duration = document.createElement("span");
+    duration.className = "motion-bulk-video-duration";
+    duration.textContent = "\u2014";
+    image.append(poster, play, duration);
+    const name = document.createElement("strong");
+    name.textContent = item.file.name;
+    name.title = item.file.name;
+    const size = document.createElement("small");
+    size.textContent = `${(item.file.size / 1048576).toFixed(1)} MB`;
+    const remove = document.createElement("button");
+    remove.type = "button";
+    remove.className = "motion-bulk-video-remove";
+    remove.setAttribute("aria-label", this.text("remove"));
+    remove.title = this.text("remove");
+    const trash = document.createElementNS("http://www.w3.org/2000/svg", "svg");
+    trash.setAttribute("width", "16");
+    trash.setAttribute("height", "16");
+    trash.setAttribute("viewBox", "0 0 24 24");
+    trash.setAttribute("fill", "none");
+    trash.setAttribute("stroke", "currentColor");
+    trash.setAttribute("stroke-width", "1.8");
+    trash.setAttribute("stroke-linecap", "round");
+    trash.setAttribute("stroke-linejoin", "round");
+    trash.setAttribute("aria-hidden", "true");
+    const trashPath = document.createElementNS(
+      "http://www.w3.org/2000/svg",
+      "path",
+    );
+    trashPath.setAttribute(
+      "d",
+      "M3 6h18M9 6V3h6v3M5 6l1 15h12l1-15M10 10v7M14 10v7",
+    );
+    trash.append(trashPath);
+    remove.append(trash);
+    remove.addEventListener("click", () => this.remove(item.itemId));
+    play.addEventListener("click", () => this.openPreview(item.itemId));
+    const thumbnailStatus = document.createElement("small");
+    thumbnailStatus.className = "motion-bulk-thumbnail-status";
+    thumbnailStatus.setAttribute("role", "status");
+    thumbnailStatus.hidden = true;
+    image.append(remove);
+    card.append(image, name, size, thumbnailStatus);
+    this.grid.append(card);
+    Object.assign(item, {
+      card,
+      poster,
+      durationLabel: duration,
+      thumbnailStatus,
+    });
+  }
+  static _duration(seconds) {
+    const n = Math.floor(seconds),
+      hours = Math.floor(n / 3600),
+      minutes = Math.floor((n % 3600) / 60);
+    return hours
+      ? `${hours}:${String(minutes).padStart(2, "0")}:${String(n % 60).padStart(2, "0")}`
+      : `${minutes}:${String(n % 60).padStart(2, "0")}`;
+  }
+  async _probe(item) {
+    if (this.closed || item.removed) return;
+    const url = URL.createObjectURL(item.file);
+    const video = document.createElement("video");
+    video.preload = "metadata";
+    video.muted = true;
+    video.playsInline = true;
+    await new Promise((resolve) => {
+      let timer;
+      const finish = (error) => {
+        if (timer === null) return;
+        clearTimeout(timer);
+        timer = null;
+        video.onloadedmetadata =
+          video.onloadeddata =
+          video.onseeked =
+          video.onerror =
+            null;
+        if (!this.closed && !item.removed) {
+          if (!error && Number.isFinite(video.duration) && video.duration > 0) {
+            item.duration = video.duration;
+            item.durationLabel.textContent = MotionBulkVideoPicker._duration(
+              video.duration,
+            );
+            item.state = "ready";
+            const canvas = document.createElement("canvas");
+            canvas.width = 160;
+            canvas.height = 160;
+            try {
+              const context = canvas.getContext("2d");
+              const scale = Math.max(
+                160 / video.videoWidth,
+                160 / video.videoHeight,
+              );
+              const width = video.videoWidth * scale,
+                height = video.videoHeight * scale;
+              if (
+                context &&
+                Number.isFinite(width) &&
+                Number.isFinite(height)
+              ) {
+                context.drawImage(
+                  video,
+                  (160 - width) / 2,
+                  (160 - height) / 2,
+                  width,
+                  height,
+                );
+                item.poster.src = canvas.toDataURL("image/jpeg", 0.7);
+                item.poster.hidden = false;
+              }
+            } catch (_) {
+            } finally {
+              canvas.width = 0;
+              canvas.height = 0;
+            }
+            if (item.poster.hidden) {
+              item.thumbnailStatus.textContent = this.text(
+                "thumbnailUnavailable",
+              );
+              item.thumbnailStatus.hidden = false;
+            }
+          } else {
+            item.state = "invalid";
+            item.durationLabel.textContent = this.text("invalid");
+          }
+          try {
+            this.onChange(this.values());
+          } catch (error2) {
+            console.warn(
+              "[MotionBulkVideoPicker] change callback:",
+              error2?.message,
+            );
+          }
+        }
+        video.removeAttribute("src");
+        video.load();
+        URL.revokeObjectURL(url);
+        this.activeProbe = null;
+        this.activeProbeItem = null;
+        resolve();
+      };
+      timer = setTimeout(() => finish(true), 15e3);
+      this.activeProbe = () => finish(true);
+      this.activeProbeItem = item.itemId;
+      const captureReadyFrame = () => {
+        if (
+          video.seeking ||
+          video.readyState < 2 ||
+          !video.videoWidth ||
+          !video.videoHeight
+        )
+          return;
+        finish(false);
+      };
+      video.onloadedmetadata = () => {
+        if (!Number.isFinite(video.duration) || video.duration <= 0) {
+          finish(true);
+          return;
+        }
+        video.preload = "auto";
+        try {
+          video.currentTime = Math.min(0.1, video.duration / 2);
+        } catch (_) {
+          captureReadyFrame();
+        }
+      };
+      video.onloadeddata = video.onseeked = captureReadyFrame;
+      video.onerror = () => finish(true);
+      video.src = url;
+      video.load();
+    });
+  }
+  setQuota(quota) {
+    if (
+      !quota ||
+      !Number.isSafeInteger(quota.used) ||
+      quota.used < 0 ||
+      !Number.isSafeInteger(quota.limit) ||
+      quota.limit < -1 ||
+      (quota.limit !== -1 &&
+        (!Number.isSafeInteger(quota.remaining) ||
+          quota.remaining < 0 ||
+          quota.remaining !== Math.max(0, quota.limit - quota.used)))
+    )
+      throw new Error("MOTION_PROJECT_QUOTA_INVALID");
+    this.quota = { ...quota };
+    this.quotaLabel.textContent =
+      quota.limit === -1
+        ? `${this.text("quota")}: ${quota.used} / \u221E`
+        : `${this.text("quota")}: ${quota.used} / ${quota.limit} \xB7 ${this.text("remaining")}: ${quota.remaining}`;
+    this._applyQuota();
+    this.onChange(this.values());
+  }
+  _applyQuota() {
+    let index = 0;
+    const existing = new Set(this.quota?.existingItemIds || []);
+    for (const item of this.items.values()) {
+      const consumesSlot = !existing.has(item.itemId);
+      item.overLimit =
+        consumesSlot &&
+        !!this.quota &&
+        this.quota.limit !== -1 &&
+        index >= this.quota.remaining;
+      item.card.classList.toggle("over-limit", item.overLimit);
+      item.card.dataset.overLimit = String(item.overLimit);
+      item.card.title = item.overLimit ? this.text("overLimit") : "";
+      if (consumesSlot) index++;
+    }
+  }
+  values() {
+    return [...this.items.values()].map(
+      ({ itemId, file, fileName, duration, state, overLimit }) => ({
+        itemId,
+        file,
+        fileName,
+        duration,
+        state,
+        overLimit: overLimit === true,
+      }),
+    );
+  }
+  releaseFile(id, loadStagedSource) {
+    const item = this.items.get(id);
+    if (!item || typeof loadStagedSource !== "function") return;
+    item.file = null;
+    item.loadStagedSource = loadStagedSource;
+  }
+  remove(id) {
+    const item = this.items.get(id);
+    if (!item) return;
+    item.removed = true;
+    item.card.remove();
+    this.items.delete(id);
+    if (this.activeProbeItem === id) this.activeProbe?.();
+    if (this.previewItemId === id) this.closePreview();
+    item.file = null;
+    this._applyQuota();
+    this.onChange(this.values());
+  }
+  openPreview(id) {
+    const item = this.items.get(id);
+    if (!item) return;
+    this.closePreview();
+    this.previewItemId = id;
+    const ticket = this.previewTicket;
+    const open = (blob) => {
+      if (
+        this.closed ||
+        this.previewTicket !== ticket ||
+        this.items.get(id) !== item
+      )
+        return;
+      if (!(blob instanceof Blob) || !blob.size) {
+        this.status.textContent = this.text("invalid");
+        return;
+      }
+      this.previewUrl = URL.createObjectURL(blob);
+      this.previewVideo.src = this.previewUrl;
+      this.preview.showModal();
+      Promise.resolve(this.previewVideo.play()).catch(() => {});
+    };
+    if (item.file) open(item.file);
+    else
+      Promise.resolve()
+        .then(() => item.loadStagedSource?.())
+        .then(open)
+        .catch(() => {
+          if (!this.closed && this.previewTicket === ticket)
+            this.status.textContent = this.text("invalid");
+        });
+  }
+  closePreview() {
+    this.previewTicket = (this.previewTicket || 0) + 1;
+    this.previewVideo.pause();
+    this.previewVideo.removeAttribute("src");
+    this.previewVideo.load();
+    if (this.preview.open) this.preview.close();
+    if (this.previewUrl) URL.revokeObjectURL(this.previewUrl);
+    this.previewUrl = null;
+    this.previewItemId = null;
+  }
+  destroy() {
+    if (this.closed) return;
+    this.closed = true;
+    this.activeProbe?.();
+    this.closePreview();
+    for (const item of this.items.values()) {
+      item.removed = true;
+      item.file = null;
+    }
+    this.items.clear();
+    this.host.replaceChildren();
+  }
+}
+globalThis.MotionBulkVideoPicker = MotionBulkVideoPicker;

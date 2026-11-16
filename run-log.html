@@ -1,6 +1,41 @@
-<!doctype html><html><head><meta charset="utf-8"><meta name="viewport" content="width=device-width,initial-scale=1"><title>566Flow — Workflow log</title><link rel="stylesheet" href="run-window.css"></head><body>
-<div class="rw-header"><div class="rw-title" id="rwTitle">Workflow log</div><span class="rw-status" id="rwStatus">Saved log</span></div>
-<div class="rw-progress" id="rwProgress">Loading saved log…</div>
-<div class="rw-log-wrap rw-log-wrap--open rw-log-archive" id="rwLogWrap"><div class="rw-log-toolbar"><span class="rw-log-heading">Detailed log</span><button type="button" class="rw-copy-log" id="rwCopyLog" disabled><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg><span>Copy log</span></button></div><div class="rw-log" id="rwLog"></div></div>
-<script src="src/core/Diag566.js"></script>
-<script src="src/core/WorkflowRunLogStore.js"></script><script src="run-log-ui.js"></script><script src="run-log.js"></script></body></html>
+<!doctype html>
+<html>
+  <head>
+    <meta charset="utf-8" />
+    <meta name="viewport" content="width=device-width,initial-scale=1" />
+    <title>566Flow — Workflow log</title>
+    <link rel="stylesheet" href="run-window.css" />
+  </head>
+  <body>
+    <div class="rw-header">
+      <div class="rw-title" id="rwTitle">Workflow log</div>
+      <span class="rw-status" id="rwStatus">Saved log</span>
+    </div>
+    <div class="rw-progress" id="rwProgress">Loading saved log…</div>
+    <div class="rw-log-wrap rw-log-wrap--open rw-log-archive" id="rwLogWrap">
+      <div class="rw-log-toolbar">
+        <span class="rw-log-heading">Detailed log</span
+        ><button type="button" class="rw-copy-log" id="rwCopyLog" disabled>
+          <svg
+            width="14"
+            height="14"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+          >
+            <rect x="9" y="9" width="13" height="13" rx="2" />
+            <path
+              d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"
+            /></svg
+          ><span>Copy log</span>
+        </button>
+      </div>
+      <div class="rw-log" id="rwLog"></div>
+    </div>
+    <script src="src/core/Diag566.js"></script>
+    <script src="src/core/WorkflowRunLogStore.js"></script>
+    <script src="run-log-ui.js"></script>
+    <script src="run-log.js"></script>
+  </body>
+</html>

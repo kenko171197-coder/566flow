@@ -1,1 +1,702 @@
-class MotionTranscriptBatchRunner{static async run({userId,toolProjectId,flowProjectId,runId,hostEpoch,resume=false,frameIds=null,screen={},shouldStop=()=>false,onStage=()=>{}}){await MotionRunnerRuntime.ensureReady(userId);const auth=(await chrome.storage.local.get("af_auth"))?.af_auth;const target=await MessageBridge.getProjectTargetContext(flowProjectId);const sourceTab=target&&await chrome.tabs.get(target.tabId);if(target?.projectId!==flowProjectId||sourceTab?.id!==target.tabId||!Number.isInteger(sourceTab.windowId))throw new Error("MOTION_FLOW_PROJECT_MISMATCH");const scope={userId,toolProjectId},endpoint=`tools/motion-studio/projects/${encodeURIComponent(toolProjectId)}`;const assertScope=async()=>{const current=(await chrome.storage.local.get("af_auth"))?.af_auth;const live=await MessageBridge.getTargetContext(target);if(!auth?.token||current?.token!==auth.token||Number(current.user?.id)!==userId)throw new Error("ACCOUNT_SCOPE_CHANGED");if(!live||["tabId","projectId","driverKey","origin"].some(key=>live[key]!==target[key]))throw new Error("FLOW_EXECUTION_TARGET_CHANGED")};let apiPhase="load";const api=async(method,path,body)=>{await assertScope();const started=Date.now();const framePath=path.startsWith(`${endpoint}/frames/`);const frameId=framePath?path.slice(`${endpoint}/frames/`.length).split("/")[0]:/^[A-Za-z0-9_-]{1,80}$/.test(body?.motion_frame_id||"")?body.motion_frame_id:null;const operation=framePath?path.split("/").at(-1):path===endpoint?typeof body?.pause==="boolean"?"pause":"project":path===`${endpoint}/rerun`&&body?.scope==="transcript"?"transcript_restart":/^execution\/provider-web\/(reserve|intent|settle)$/.test(path)?path.split("/").at(-1):"execution";const context={runId,phase:apiPhase,method,operation,frameId,revision:body?.revision??null,sourceRevision:body?.source_revision??body?.motion_source_revision??null,inputRevision:body?.input_revision??body?.motion_input_revision??null,eventState:body?.state??null};if(method!=="GET")console.info("[MotionTranscriptApi]",JSON.stringify({...context,state:"start"}));try{const value=await window.authManager._apiCall(method,path,body);await assertScope();if(method!=="GET")console.info("[MotionTranscriptApi]",JSON.stringify({...context,state:"saved",elapsedMs:Date.now()-started,savedRevision:value?.revision??null}));return value}catch(error){const raw=String(error?.code||error?.message||"MOTION_API_FAILED");const code=/^[A-Za-z][A-Za-z0-9_:-]{0,99}$/.test(raw)?raw:"MOTION_API_FAILED";const server=error?.serverData?.data||error?.serverData;const diagnostic={...context,state:"failed",code,httpStatus:Number(error?.httpStatus)||null,elapsedMs:Date.now()-started,serverRevision:Number(server?.revision)||null,conflictReason:/^[a-z_]{1,80}$/.test(server?.conflict_reason||"")?server.conflict_reason:null};console.warn("[MotionTranscriptApi]",JSON.stringify(diagnostic));onStage({stage:"transcript",frameId,apiDiagnostic:diagnostic});throw error}};let project=await api("GET",endpoint);if(project?.tool_project_id!==toolProjectId||project.flow_project_id!==flowProjectId||!Number.isSafeInteger(project.data_json?.source_revision)||project.data_json.source_revision<1||project.data_json.requires_resplit)throw new Error("MOTION_SOURCE_REQUIRES_RESPLIT");const prior=await MotionRunJournal.get(scope);const continuing=resume&&prior?.taskKind==="transcript_batch"&&prior.state!=="completed";if(continuing&&prior.runId!==runId)throw new Error("MOTION_RUN_FENCED");const response=await window.RequestSigner.fetchProtected("motionTool",{force:true,promptVariant:continuing?prior.profilePromptVariant||"legacy":"timeline",...continuing?{revision:prior.profileRevision,...prior.profileKey&&{profileKey:prior.profileKey}}:{}});await assertScope();const profile=response?.data;if(profile?.tool_key!=="motion_studio"||!Number.isSafeInteger(profile.revision)||profile.settings?.execution_mode!=="parallel")throw new Error("MOTION_PROFILE_UNPINNED");if(continuing&&(profile.prompt_variant||"legacy")!==(prior.profilePromptVariant||"legacy"))throw new Error("MOTION_PROFILE_UNPINNED");const config=await window.ExecutionConfig.getConfig();const settings=project.data_json.preferences||{},provider=settings.transcription_provider||profile.settings.transcription_provider;const executionMode=continuing?prior.executionMode:window.ExecutionConfig.resolveMotionExecutionMode(profile.settings.execution_mode,config,provider);console.info("[MotionExecutionMode]",JSON.stringify({stage:"transcript_batch",runId,configuredMode:profile.settings.execution_mode,effectiveMode:executionMode,pinned:continuing,workerEnabled:config.parallel?.provider_web_enabled??null,motionEnabled:config.parallel?.provider_web_motion_enabled??null}));const ids=continuing?prior.transcriptFrameIds:frameIds||Object.keys(project.data_json.frames||{});if(!Array.isArray(ids)||!ids.length||ids.length>500||new Set(ids).size!==ids.length||ids.some(id=>!/^[A-Za-z0-9_-]{1,80}$/.test(id)||!project.data_json.frames?.[id]))throw new Error("MOTION_SPLIT_NOT_READY");for(const id of ids){const frame=project.data_json.frames[id],submit=frame.stages?.submit;if(["running","needs_review"].includes(submit?.state)||submit?.state==="ready"&&!["ready","failed"].includes(frame.stages?.monitor?.state))throw new Error("FRAME_OPERATION_MUST_RECONCILE")}const limit=config.parallel?.provider_web_max_concurrent_workers;const pending=continuing?await MotionRunJournal.listTranscriptOutbox(scope):[];await assertScope();const audioNeeded=ids.some(id=>{const frame=project.data_json.frames[id];if(frame.stages?.split?.audio_state!=="audio_present")return false;if(!continuing)return true;if(frame.stages.transcribe?.state==="ready"&&frame.transcript&&frame.stages.transcribe.worker?.project_run_id===prior.runId)return false;return!pending.some(event=>event.state==="ready"&&event.projectRunId===prior.runId&&event.sourceRevision===project.data_json.source_revision&&event.frameId===id&&event.frameRunId===frame.run_id&&event.inputRevision===frame.input_revision&&prior.completedOperations?.[event.attemptId]?.eventId===event.eventId)});let accountTabId=continuing?prior.preparationSnapshot?.accountTabId??null:null;if(audioNeeded){if(!["chatgpt","gemini"].includes(provider)||executionMode==="parallel"&&(config.parallel?.provider_web_enabled!==true||config.parallel?.provider_web_motion_enabled!==true||!config.parallel?.provider_web_enabled_providers?.includes(provider)||!Number.isSafeInteger(limit)||limit<1||limit>4))throw new Error("PROVIDER_WORKER_CONFIG_INVALID");const agents=await chrome.runtime.sendMessage({action:"i2p:checkProviders",excludeWorkerTabs:executionMode==="parallel"});await assertScope();if(agents?.providers?.[provider]?.ready!==true)throw new Error("MOTION_AGENT_NOT_READY");if(provider==="gemini"&&executionMode==="parallel"){const tabId=agents.providers.gemini.tabId;if(!Number.isInteger(tabId)||continuing&&tabId!==accountTabId)throw new Error("MOTION_AGENT_NOT_READY");accountTabId=tabId}}const policy=continuing?prior.preparationSnapshot?.workflow:config.workflow;if(!Number.isSafeInteger(policy?.max_retries)||policy.max_retries<0||!Number.isFinite(policy.delay_nodes_sec)||policy.delay_nodes_sec<0)throw new Error("EXECUTION_RETRY_CONFIG_INVALID");const retryEnabled=continuing?prior.retryEnabled:window.featureGate.canUse("retry_on_fail")===true;const waitBeforeRetry=async()=>{await new Promise(resolve=>setTimeout(resolve,policy.delay_nodes_sec*1e3));await assertScope()};const fingerprint=await MotionProjectExecution.settingsFingerprint(project);const layout=continuing?{...prior.preparationSnapshot?.layout,sourceWindowId:sourceTab.windowId}:{sourceWindowId:sourceTab.windowId,screen:Object.fromEntries(["screenLeft","screenTop","screenWidth","screenHeight"].map(key=>[key,Number.isSafeInteger(screen[key])?screen[key]:null]))};const initialRun=continuing?{...prior,preparationSnapshot:{...prior.preparationSnapshot,layout}}:{...scope,runId,flowProjectId,sourceRevision:project.data_json.source_revision,profileRevision:profile.revision,...profile.profile_key&&{profileKey:profile.profile_key},...profile.prompt_variant&&{profilePromptVariant:profile.prompt_variant},executionMode,fullAudioTranscription:executionMode==="parallel"&&profile.settings.full_audio_transcription===true,taskKind:"transcript_batch",transcriptFrameIds:[...ids],replaceDrained:true,autoDownloadFinal:settings.auto_download_final===true,useOriginalAudio:settings.use_original_audio===true,settingsSnapshot:fingerprint,transcriptMaxRetries:policy.max_retries,retryEnabled,transcriptionProvider:provider,transcriptSettings:{transcription_provider:provider,translate_enabled:settings.translate_enabled===true,target_language:settings.translate_enabled?settings.target_language||null:null},preparationSnapshot:{version:1,userId,executionMode,layout,accountTabId,retryEnabled,workflow:{max_retries:policy.max_retries,delay_nodes_sec:policy.delay_nodes_sec},settingsFingerprint:fingerprint,configFingerprint:await MotionRunnerRuntime.configFingerprint(config)}};const publishStage=info=>{console.info("[MotionTranscriptBatch]",JSON.stringify({runId,sourceRevision:initialRun.sourceRevision,mode:initialRun.executionMode,maxRetries:initialRun.transcriptMaxRetries,retryEnabled:initialRun.retryEnabled,workerLimit:initialRun.executionMode==="parallel"&&audioNeeded?initialRun.fullAudioTranscription?1:limit:0,frameCount:ids.length,frameId:info.frameId||null,stage:info.stage,state:info.state||info.detail||null}));onStage({...info,sourceRevision:initialRun.sourceRevision,transcriptMaxRetries:initialRun.transcriptMaxRetries})};publishStage({stage:"transcript",state:"preparing"});const leaseMs=Number(window.SystemConfig.safeGetTimeout("api_timeout_ms"));const unused=async()=>{throw new Error("MOTION_TRANSCRIPT_ONLY_EFFECT_FORBIDDEN")};const originalPaused=project.data_json.paused===true;const setPaused=async paused=>{for(let retries=0;;retries++){const current=await api("GET",endpoint);if(current?.tool_project_id!==toolProjectId||current.flow_project_id!==flowProjectId||current.data_json?.source_revision!==initialRun.sourceRevision||await MotionProjectExecution.settingsFingerprint(current)!==fingerprint||ids.some(id=>current.data_json?.frames?.[id]?.run_id!==project.data_json.frames[id]?.run_id||current.data_json.frames[id]?.input_revision!==project.data_json.frames[id]?.input_revision))throw new Error("MOTION_RUN_SNAPSHOT_CHANGED");if(!paused&&shouldStop())return current;if(current.data_json.paused===true===paused)return current;try{return await api("PATCH",endpoint,{revision:current.revision,pause:paused})}catch(error){if(error?.code!=="REVISION_CONFLICT"&&error?.message!=="REVISION_CONFLICT"||retries>=policy.max_retries)throw error;console.info("[MotionTranscriptBatch]",JSON.stringify({runId,stage:apiPhase,state:"revision_retry",attempt:retries+1,maxRetries:policy.max_retries,revision:current.revision}));await waitBeforeRetry()}}};let restorePause=false;const restartLocked=async previous=>{apiPhase="restart";let cleanupOwner=null;const settled=[];const renew=async()=>{await assertScope();if(cleanupOwner)await MotionRunJournal.renew({...cleanupOwner,leaseMs})};try{if(previous&&previous.state!=="completed"){if(previous.flowProjectId!==flowProjectId||Object.values(previous.operations||{}).some(item=>!["transcribe","direct_transcribe"].includes(item.stage)))throw new Error("FRAME_OPERATION_MUST_RECONCILE");const ownerId=crypto.randomUUID();const claimed=await MotionRunJournal.claim({...scope,runId:previous.runId,ownerId,leaseMs});if(!claimed?.acquired)throw new Error("PROJECT_ALREADY_RUNNING");cleanupOwner={...scope,runId:previous.runId,ownerId,epoch:claimed.epoch};const closed=await chrome.runtime.sendMessage({action:"motionWorker:reconcile",hostEpoch,toolProjectId,runId:cleanupOwner.runId,ownerId,epoch:claimed.epoch,resetTranscript:true});await renew();if(closed?.success!==true||!Array.isArray(closed.pending)||closed.pending.length)throw new Error(closed?.error||"MOTION_WORKER_CLOSE_PENDING");const old=await MotionRunJournal.get(scope);MotionRunJournal._owned(old,cleanupOwner);for(const[frameId,reservation]of Object.entries(old.reservations||{})){if(!reservation.token)continue;const completed=Object.values(old.completedOperations||{}).some(item=>item.frameId===frameId&&item.frameRunId===reservation.frameRunId&&item.inputRevision===reservation.inputRevision);const status=reservation.pendingSettlement||reservation.settlementStatus||(completed?"success":"failed");let confirmed=false;for(let attempt=0;;attempt++){await renew();try{const value=await api("POST","execution/complete",{token:reservation.token,status,request_nonce:crypto.randomUUID()});confirmed=value?.status===status}catch(_){}if(!confirmed){await renew();try{const value=await api("POST","execution/settlement",{token:reservation.token,request_nonce:crypto.randomUUID()});confirmed=value?.provider_web?.run_id===reservation.reservationId&&value.provider_web.source==="motion"&&["used","cancelled","expired"].includes(value.token_status)}catch(_){}}if(confirmed)break;if(attempt>=policy.max_retries)throw new Error("MOTION_SETTLEMENT_UNCONFIRMED");await waitBeforeRetry()}settled.push(reservation.reservationId)}}for(let retries=0;;retries++){await renew();const current=await api("GET",endpoint);if(current?.tool_project_id!==toolProjectId||current.flow_project_id!==flowProjectId||current.data_json?.source_revision!==initialRun.sourceRevision||await MotionProjectExecution.settingsFingerprint(current)!==fingerprint||ids.some(id=>current.data_json?.frames?.[id]?.run_id!==project.data_json.frames[id]?.run_id||current.data_json.frames[id]?.input_revision!==project.data_json.frames[id]?.input_revision))throw new Error("MOTION_RUN_SNAPSHOT_CHANGED");let saved;try{saved=await api("POST",`${endpoint}/rerun`,{scope:"transcript",revision:current.revision,source_revision:initialRun.sourceRevision,rerun_id:runId,previous_project_run_id:previous?.runId||null,frame_ids:ids})}catch(error){if(error?.code!=="REVISION_CONFLICT"&&error?.message!=="REVISION_CONFLICT"||retries>=policy.max_retries)throw error;await waitBeforeRetry();continue}const receipt=saved?.data_json?.transcript_reset;if(saved?.tool_project_id!==toolProjectId||saved.flow_project_id!==flowProjectId||receipt?.rerun_id!==runId||receipt.source_revision!==initialRun.sourceRevision||receipt.previous_project_run_id!==(previous?.runId||null)||JSON.stringify(receipt.frame_ids)!==JSON.stringify(ids)||ids.some(id=>saved.data_json.frames?.[id]?.stages?.transcribe))throw new Error("MOTION_RERUN_UNVERIFIED");await renew();if(cleanupOwner)await MotionRunJournal.retireTranscriptRun({owner:cleanupOwner,project:saved,newRunId:runId,settledReservationIds:settled});project=saved;console.info("[MotionTranscriptBatch]",JSON.stringify({runId,stage:"restart",state:"ready",previousRunId:previous?.runId||null,frameCount:ids.length,settledReservations:settled.length}));break}}finally{if(cleanupOwner){const old=await MotionRunJournal.get(scope).catch(()=>null);if(old?.ownerId===cleanupOwner.ownerId)await MotionRunJournal.release(cleanupOwner).catch(()=>{})}}};const restart=previous=>navigator.locks.request(`motion-outbox:${userId}:${toolProjectId}`,{mode:"exclusive"},()=>restartLocked(previous));const result=await MotionProjectLifecycle.run({scope,initialRun,ownerId:crypto.randomUUID(),leaseMs,journal:MotionRunJournal,assertScope,shouldStop,beforeCreate:continuing?null:restart,recover:async owner=>{apiPhase="recover_unpause";if(originalPaused&&!shouldStop()){project=await setPaused(false);restorePause=true}apiPhase="recover";return MotionProjectRecovery.run({owner,journal:MotionRunJournal,api,assertScope,flowTarget:target,mode:project.data_json.flow_run_mode,transcriptOnly:true,shouldStop,waitBeforeRetry,download:unused,hostEpoch,onStage:publishStage})},execute:async(owner,stopped)=>{apiPhase="execute";project=await api("GET",endpoint);const modelValue=profile.settings.transcription_model,catalog=modelValue?window.ModelRegistry.findModel(provider,modelValue):null;return MotionProjectExecution.run({owner,project,profile,flowTarget:target,api,journal:MotionRunJournal,maxWorkers:audioNeeded&&executionMode==="parallel"?limit:1,getVideoMonitorLimit:unused,shouldStop:stopped,waitBeforeRetry,waitForSlot:waitBeforeRetry,assertScope,retryable:error=>window.FlowApiDownloadRetry.retryable(error),validateReferences:unused,queue:{submitJob:unused},download:unused,hostEpoch,flowTabId:target.tabId,accountTabId,screen:layout.screen,model:provider==="chatgpt"?catalog?.value||null:catalog||null,deleteAfter:true,transcriptOnly:true,onStage:publishStage})}});apiPhase="restore_pause";if(restorePause&&!shouldStop())await setPaused(true);return{...result,stage:result?.state==="ready"?"transcript_batch":result?.stage||"transcript",completedCount:result?.state==="ready"?ids.length:null}}}globalThis.MotionTranscriptBatchRunner=MotionTranscriptBatchRunner;
+class MotionTranscriptBatchRunner {
+  static async run({
+    userId,
+    toolProjectId,
+    flowProjectId,
+    runId,
+    hostEpoch,
+    resume = false,
+    frameIds = null,
+    screen = {},
+    shouldStop = () => false,
+    onStage = () => {},
+  }) {
+    await MotionRunnerRuntime.ensureReady(userId);
+    const auth = (await chrome.storage.local.get("af_auth"))?.af_auth;
+    const target = await MessageBridge.getProjectTargetContext(flowProjectId);
+    const sourceTab = target && (await chrome.tabs.get(target.tabId));
+    if (
+      target?.projectId !== flowProjectId ||
+      sourceTab?.id !== target.tabId ||
+      !Number.isInteger(sourceTab.windowId)
+    )
+      throw new Error("MOTION_FLOW_PROJECT_MISMATCH");
+    const scope = { userId, toolProjectId },
+      endpoint = `tools/motion-studio/projects/${encodeURIComponent(toolProjectId)}`;
+    const assertScope = async () => {
+      const current = (await chrome.storage.local.get("af_auth"))?.af_auth;
+      const live = await MessageBridge.getTargetContext(target);
+      if (
+        !auth?.token ||
+        current?.token !== auth.token ||
+        Number(current.user?.id) !== userId
+      )
+        throw new Error("ACCOUNT_SCOPE_CHANGED");
+      if (
+        !live ||
+        ["tabId", "projectId", "driverKey", "origin"].some(
+          (key) => live[key] !== target[key],
+        )
+      )
+        throw new Error("FLOW_EXECUTION_TARGET_CHANGED");
+    };
+    let apiPhase = "load";
+    const api = async (method, path, body) => {
+      await assertScope();
+      const started = Date.now();
+      const framePath = path.startsWith(`${endpoint}/frames/`);
+      const frameId = framePath
+        ? path.slice(`${endpoint}/frames/`.length).split("/")[0]
+        : /^[A-Za-z0-9_-]{1,80}$/.test(body?.motion_frame_id || "")
+          ? body.motion_frame_id
+          : null;
+      const operation = framePath
+        ? path.split("/").at(-1)
+        : path === endpoint
+          ? typeof body?.pause === "boolean"
+            ? "pause"
+            : "project"
+          : path === `${endpoint}/rerun` && body?.scope === "transcript"
+            ? "transcript_restart"
+            : /^execution\/provider-web\/(reserve|intent|settle)$/.test(path)
+              ? path.split("/").at(-1)
+              : "execution";
+      const context = {
+        runId,
+        phase: apiPhase,
+        method,
+        operation,
+        frameId,
+        revision: body?.revision ?? null,
+        sourceRevision:
+          body?.source_revision ?? body?.motion_source_revision ?? null,
+        inputRevision:
+          body?.input_revision ?? body?.motion_input_revision ?? null,
+        eventState: body?.state ?? null,
+      };
+      if (method !== "GET")
+        console.info(
+          "[MotionTranscriptApi]",
+          JSON.stringify({ ...context, state: "start" }),
+        );
+      try {
+        const value = await window.authManager._apiCall(method, path, body);
+        await assertScope();
+        if (method !== "GET")
+          console.info(
+            "[MotionTranscriptApi]",
+            JSON.stringify({
+              ...context,
+              state: "saved",
+              elapsedMs: Date.now() - started,
+              savedRevision: value?.revision ?? null,
+            }),
+          );
+        return value;
+      } catch (error) {
+        const raw = String(
+          error?.code || error?.message || "MOTION_API_FAILED",
+        );
+        const code = /^[A-Za-z][A-Za-z0-9_:-]{0,99}$/.test(raw)
+          ? raw
+          : "MOTION_API_FAILED";
+        const server = error?.serverData?.data || error?.serverData;
+        const diagnostic = {
+          ...context,
+          state: "failed",
+          code,
+          httpStatus: Number(error?.httpStatus) || null,
+          elapsedMs: Date.now() - started,
+          serverRevision: Number(server?.revision) || null,
+          conflictReason: /^[a-z_]{1,80}$/.test(server?.conflict_reason || "")
+            ? server.conflict_reason
+            : null,
+        };
+        console.warn("[MotionTranscriptApi]", JSON.stringify(diagnostic));
+        onStage({ stage: "transcript", frameId, apiDiagnostic: diagnostic });
+        throw error;
+      }
+    };
+    let project = await api("GET", endpoint);
+    if (
+      project?.tool_project_id !== toolProjectId ||
+      project.flow_project_id !== flowProjectId ||
+      !Number.isSafeInteger(project.data_json?.source_revision) ||
+      project.data_json.source_revision < 1 ||
+      project.data_json.requires_resplit
+    )
+      throw new Error("MOTION_SOURCE_REQUIRES_RESPLIT");
+    const prior = await MotionRunJournal.get(scope);
+    const continuing =
+      resume &&
+      prior?.taskKind === "transcript_batch" &&
+      prior.state !== "completed";
+    if (continuing && prior.runId !== runId)
+      throw new Error("MOTION_RUN_FENCED");
+    const response = await window.RequestSigner.fetchProtected("motionTool", {
+      force: true,
+      promptVariant: continuing
+        ? prior.profilePromptVariant || "legacy"
+        : "timeline",
+      ...(continuing
+        ? {
+            revision: prior.profileRevision,
+            ...(prior.profileKey && { profileKey: prior.profileKey }),
+          }
+        : {}),
+    });
+    await assertScope();
+    const profile = response?.data;
+    if (
+      profile?.tool_key !== "motion_studio" ||
+      !Number.isSafeInteger(profile.revision) ||
+      profile.settings?.execution_mode !== "parallel"
+    )
+      throw new Error("MOTION_PROFILE_UNPINNED");
+    if (
+      continuing &&
+      (profile.prompt_variant || "legacy") !==
+        (prior.profilePromptVariant || "legacy")
+    )
+      throw new Error("MOTION_PROFILE_UNPINNED");
+    const config = await window.ExecutionConfig.getConfig();
+    const settings = project.data_json.preferences || {},
+      provider =
+        settings.transcription_provider ||
+        profile.settings.transcription_provider;
+    const executionMode = continuing
+      ? prior.executionMode
+      : window.ExecutionConfig.resolveMotionExecutionMode(
+          profile.settings.execution_mode,
+          config,
+          provider,
+        );
+    console.info(
+      "[MotionExecutionMode]",
+      JSON.stringify({
+        stage: "transcript_batch",
+        runId,
+        configuredMode: profile.settings.execution_mode,
+        effectiveMode: executionMode,
+        pinned: continuing,
+        workerEnabled: config.parallel?.provider_web_enabled ?? null,
+        motionEnabled: config.parallel?.provider_web_motion_enabled ?? null,
+      }),
+    );
+    const ids = continuing
+      ? prior.transcriptFrameIds
+      : frameIds || Object.keys(project.data_json.frames || {});
+    if (
+      !Array.isArray(ids) ||
+      !ids.length ||
+      ids.length > 500 ||
+      new Set(ids).size !== ids.length ||
+      ids.some(
+        (id) =>
+          !/^[A-Za-z0-9_-]{1,80}$/.test(id) || !project.data_json.frames?.[id],
+      )
+    )
+      throw new Error("MOTION_SPLIT_NOT_READY");
+    for (const id of ids) {
+      const frame = project.data_json.frames[id],
+        submit = frame.stages?.submit;
+      if (
+        ["running", "needs_review"].includes(submit?.state) ||
+        (submit?.state === "ready" &&
+          !["ready", "failed"].includes(frame.stages?.monitor?.state))
+      )
+        throw new Error("FRAME_OPERATION_MUST_RECONCILE");
+    }
+    const limit = config.parallel?.provider_web_max_concurrent_workers;
+    const pending = continuing
+      ? await MotionRunJournal.listTranscriptOutbox(scope)
+      : [];
+    await assertScope();
+    const audioNeeded = ids.some((id) => {
+      const frame = project.data_json.frames[id];
+      if (frame.stages?.split?.audio_state !== "audio_present") return false;
+      if (!continuing) return true;
+      if (
+        frame.stages.transcribe?.state === "ready" &&
+        frame.transcript &&
+        frame.stages.transcribe.worker?.project_run_id === prior.runId
+      )
+        return false;
+      return !pending.some(
+        (event) =>
+          event.state === "ready" &&
+          event.projectRunId === prior.runId &&
+          event.sourceRevision === project.data_json.source_revision &&
+          event.frameId === id &&
+          event.frameRunId === frame.run_id &&
+          event.inputRevision === frame.input_revision &&
+          prior.completedOperations?.[event.attemptId]?.eventId ===
+            event.eventId,
+      );
+    });
+    let accountTabId = continuing
+      ? (prior.preparationSnapshot?.accountTabId ?? null)
+      : null;
+    if (audioNeeded) {
+      if (
+        !["chatgpt", "gemini"].includes(provider) ||
+        (executionMode === "parallel" &&
+          (config.parallel?.provider_web_enabled !== true ||
+            config.parallel?.provider_web_motion_enabled !== true ||
+            !config.parallel?.provider_web_enabled_providers?.includes(
+              provider,
+            ) ||
+            !Number.isSafeInteger(limit) ||
+            limit < 1 ||
+            limit > 4))
+      )
+        throw new Error("PROVIDER_WORKER_CONFIG_INVALID");
+      const agents = await chrome.runtime.sendMessage({
+        action: "i2p:checkProviders",
+        excludeWorkerTabs: executionMode === "parallel",
+      });
+      await assertScope();
+      if (agents?.providers?.[provider]?.ready !== true)
+        throw new Error("MOTION_AGENT_NOT_READY");
+      if (provider === "gemini" && executionMode === "parallel") {
+        const tabId = agents.providers.gemini.tabId;
+        if (!Number.isInteger(tabId) || (continuing && tabId !== accountTabId))
+          throw new Error("MOTION_AGENT_NOT_READY");
+        accountTabId = tabId;
+      }
+    }
+    const policy = continuing
+      ? prior.preparationSnapshot?.workflow
+      : config.workflow;
+    if (
+      !Number.isSafeInteger(policy?.max_retries) ||
+      policy.max_retries < 0 ||
+      !Number.isFinite(policy.delay_nodes_sec) ||
+      policy.delay_nodes_sec < 0
+    )
+      throw new Error("EXECUTION_RETRY_CONFIG_INVALID");
+    const retryEnabled = continuing
+      ? prior.retryEnabled
+      : window.featureGate.canUse("retry_on_fail") === true;
+    const waitBeforeRetry = async () => {
+      await new Promise((resolve) =>
+        setTimeout(resolve, policy.delay_nodes_sec * 1e3),
+      );
+      await assertScope();
+    };
+    const fingerprint =
+      await MotionProjectExecution.settingsFingerprint(project);
+    const layout = continuing
+      ? {
+          ...prior.preparationSnapshot?.layout,
+          sourceWindowId: sourceTab.windowId,
+        }
+      : {
+          sourceWindowId: sourceTab.windowId,
+          screen: Object.fromEntries(
+            ["screenLeft", "screenTop", "screenWidth", "screenHeight"].map(
+              (key) => [
+                key,
+                Number.isSafeInteger(screen[key]) ? screen[key] : null,
+              ],
+            ),
+          ),
+        };
+    const initialRun = continuing
+      ? {
+          ...prior,
+          preparationSnapshot: { ...prior.preparationSnapshot, layout },
+        }
+      : {
+          ...scope,
+          runId,
+          flowProjectId,
+          sourceRevision: project.data_json.source_revision,
+          profileRevision: profile.revision,
+          ...(profile.profile_key && { profileKey: profile.profile_key }),
+          ...(profile.prompt_variant && {
+            profilePromptVariant: profile.prompt_variant,
+          }),
+          executionMode,
+          fullAudioTranscription:
+            executionMode === "parallel" &&
+            profile.settings.full_audio_transcription === true,
+          taskKind: "transcript_batch",
+          transcriptFrameIds: [...ids],
+          replaceDrained: true,
+          autoDownloadFinal: settings.auto_download_final === true,
+          useOriginalAudio: settings.use_original_audio === true,
+          settingsSnapshot: fingerprint,
+          transcriptMaxRetries: policy.max_retries,
+          retryEnabled,
+          transcriptionProvider: provider,
+          transcriptSettings: {
+            transcription_provider: provider,
+            translate_enabled: settings.translate_enabled === true,
+            target_language: settings.translate_enabled
+              ? settings.target_language || null
+              : null,
+          },
+          preparationSnapshot: {
+            version: 1,
+            userId,
+            executionMode,
+            layout,
+            accountTabId,
+            retryEnabled,
+            workflow: {
+              max_retries: policy.max_retries,
+              delay_nodes_sec: policy.delay_nodes_sec,
+            },
+            settingsFingerprint: fingerprint,
+            configFingerprint:
+              await MotionRunnerRuntime.configFingerprint(config),
+          },
+        };
+    const publishStage = (info) => {
+      console.info(
+        "[MotionTranscriptBatch]",
+        JSON.stringify({
+          runId,
+          sourceRevision: initialRun.sourceRevision,
+          mode: initialRun.executionMode,
+          maxRetries: initialRun.transcriptMaxRetries,
+          retryEnabled: initialRun.retryEnabled,
+          workerLimit:
+            initialRun.executionMode === "parallel" && audioNeeded
+              ? initialRun.fullAudioTranscription
+                ? 1
+                : limit
+              : 0,
+          frameCount: ids.length,
+          frameId: info.frameId || null,
+          stage: info.stage,
+          state: info.state || info.detail || null,
+        }),
+      );
+      onStage({
+        ...info,
+        sourceRevision: initialRun.sourceRevision,
+        transcriptMaxRetries: initialRun.transcriptMaxRetries,
+      });
+    };
+    publishStage({ stage: "transcript", state: "preparing" });
+    const leaseMs = Number(
+      window.SystemConfig.safeGetTimeout("api_timeout_ms"),
+    );
+    const unused = async () => {
+      throw new Error("MOTION_TRANSCRIPT_ONLY_EFFECT_FORBIDDEN");
+    };
+    const originalPaused = project.data_json.paused === true;
+    const setPaused = async (paused) => {
+      for (let retries = 0; ; retries++) {
+        const current = await api("GET", endpoint);
+        if (
+          current?.tool_project_id !== toolProjectId ||
+          current.flow_project_id !== flowProjectId ||
+          current.data_json?.source_revision !== initialRun.sourceRevision ||
+          (await MotionProjectExecution.settingsFingerprint(current)) !==
+            fingerprint ||
+          ids.some(
+            (id) =>
+              current.data_json?.frames?.[id]?.run_id !==
+                project.data_json.frames[id]?.run_id ||
+              current.data_json.frames[id]?.input_revision !==
+                project.data_json.frames[id]?.input_revision,
+          )
+        )
+          throw new Error("MOTION_RUN_SNAPSHOT_CHANGED");
+        if (!paused && shouldStop()) return current;
+        if ((current.data_json.paused === true) === paused) return current;
+        try {
+          return await api("PATCH", endpoint, {
+            revision: current.revision,
+            pause: paused,
+          });
+        } catch (error) {
+          if (
+            (error?.code !== "REVISION_CONFLICT" &&
+              error?.message !== "REVISION_CONFLICT") ||
+            retries >= policy.max_retries
+          )
+            throw error;
+          console.info(
+            "[MotionTranscriptBatch]",
+            JSON.stringify({
+              runId,
+              stage: apiPhase,
+              state: "revision_retry",
+              attempt: retries + 1,
+              maxRetries: policy.max_retries,
+              revision: current.revision,
+            }),
+          );
+          await waitBeforeRetry();
+        }
+      }
+    };
+    let restorePause = false;
+    const restartLocked = async (previous) => {
+      apiPhase = "restart";
+      let cleanupOwner = null;
+      const settled = [];
+      const renew = async () => {
+        await assertScope();
+        if (cleanupOwner)
+          await MotionRunJournal.renew({ ...cleanupOwner, leaseMs });
+      };
+      try {
+        if (previous && previous.state !== "completed") {
+          if (
+            previous.flowProjectId !== flowProjectId ||
+            Object.values(previous.operations || {}).some(
+              (item) =>
+                !["transcribe", "direct_transcribe"].includes(item.stage),
+            )
+          )
+            throw new Error("FRAME_OPERATION_MUST_RECONCILE");
+          const ownerId = crypto.randomUUID();
+          const claimed = await MotionRunJournal.claim({
+            ...scope,
+            runId: previous.runId,
+            ownerId,
+            leaseMs,
+          });
+          if (!claimed?.acquired) throw new Error("PROJECT_ALREADY_RUNNING");
+          cleanupOwner = {
+            ...scope,
+            runId: previous.runId,
+            ownerId,
+            epoch: claimed.epoch,
+          };
+          const closed = await chrome.runtime.sendMessage({
+            action: "motionWorker:reconcile",
+            hostEpoch,
+            toolProjectId,
+            runId: cleanupOwner.runId,
+            ownerId,
+            epoch: claimed.epoch,
+            resetTranscript: true,
+          });
+          await renew();
+          if (
+            closed?.success !== true ||
+            !Array.isArray(closed.pending) ||
+            closed.pending.length
+          )
+            throw new Error(closed?.error || "MOTION_WORKER_CLOSE_PENDING");
+          const old = await MotionRunJournal.get(scope);
+          MotionRunJournal._owned(old, cleanupOwner);
+          for (const [frameId, reservation] of Object.entries(
+            old.reservations || {},
+          )) {
+            if (!reservation.token) continue;
+            const completed = Object.values(old.completedOperations || {}).some(
+              (item) =>
+                item.frameId === frameId &&
+                item.frameRunId === reservation.frameRunId &&
+                item.inputRevision === reservation.inputRevision,
+            );
+            const status =
+              reservation.pendingSettlement ||
+              reservation.settlementStatus ||
+              (completed ? "success" : "failed");
+            let confirmed = false;
+            for (let attempt = 0; ; attempt++) {
+              await renew();
+              try {
+                const value = await api("POST", "execution/complete", {
+                  token: reservation.token,
+                  status,
+                  request_nonce: crypto.randomUUID(),
+                });
+                confirmed = value?.status === status;
+              } catch (_) {}
+              if (!confirmed) {
+                await renew();
+                try {
+                  const value = await api("POST", "execution/settlement", {
+                    token: reservation.token,
+                    request_nonce: crypto.randomUUID(),
+                  });
+                  confirmed =
+                    value?.provider_web?.run_id === reservation.reservationId &&
+                    value.provider_web.source === "motion" &&
+                    ["used", "cancelled", "expired"].includes(
+                      value.token_status,
+                    );
+                } catch (_) {}
+              }
+              if (confirmed) break;
+              if (attempt >= policy.max_retries)
+                throw new Error("MOTION_SETTLEMENT_UNCONFIRMED");
+              await waitBeforeRetry();
+            }
+            settled.push(reservation.reservationId);
+          }
+        }
+        for (let retries = 0; ; retries++) {
+          await renew();
+          const current = await api("GET", endpoint);
+          if (
+            current?.tool_project_id !== toolProjectId ||
+            current.flow_project_id !== flowProjectId ||
+            current.data_json?.source_revision !== initialRun.sourceRevision ||
+            (await MotionProjectExecution.settingsFingerprint(current)) !==
+              fingerprint ||
+            ids.some(
+              (id) =>
+                current.data_json?.frames?.[id]?.run_id !==
+                  project.data_json.frames[id]?.run_id ||
+                current.data_json.frames[id]?.input_revision !==
+                  project.data_json.frames[id]?.input_revision,
+            )
+          )
+            throw new Error("MOTION_RUN_SNAPSHOT_CHANGED");
+          let saved;
+          try {
+            saved = await api("POST", `${endpoint}/rerun`, {
+              scope: "transcript",
+              revision: current.revision,
+              source_revision: initialRun.sourceRevision,
+              rerun_id: runId,
+              previous_project_run_id: previous?.runId || null,
+              frame_ids: ids,
+            });
+          } catch (error) {
+            if (
+              (error?.code !== "REVISION_CONFLICT" &&
+                error?.message !== "REVISION_CONFLICT") ||
+              retries >= policy.max_retries
+            )
+              throw error;
+            await waitBeforeRetry();
+            continue;
+          }
+          const receipt = saved?.data_json?.transcript_reset;
+          if (
+            saved?.tool_project_id !== toolProjectId ||
+            saved.flow_project_id !== flowProjectId ||
+            receipt?.rerun_id !== runId ||
+            receipt.source_revision !== initialRun.sourceRevision ||
+            receipt.previous_project_run_id !== (previous?.runId || null) ||
+            JSON.stringify(receipt.frame_ids) !== JSON.stringify(ids) ||
+            ids.some((id) => saved.data_json.frames?.[id]?.stages?.transcribe)
+          )
+            throw new Error("MOTION_RERUN_UNVERIFIED");
+          await renew();
+          if (cleanupOwner)
+            await MotionRunJournal.retireTranscriptRun({
+              owner: cleanupOwner,
+              project: saved,
+              newRunId: runId,
+              settledReservationIds: settled,
+            });
+          project = saved;
+          console.info(
+            "[MotionTranscriptBatch]",
+            JSON.stringify({
+              runId,
+              stage: "restart",
+              state: "ready",
+              previousRunId: previous?.runId || null,
+              frameCount: ids.length,
+              settledReservations: settled.length,
+            }),
+          );
+          break;
+        }
+      } finally {
+        if (cleanupOwner) {
+          const old = await MotionRunJournal.get(scope).catch(() => null);
+          if (old?.ownerId === cleanupOwner.ownerId)
+            await MotionRunJournal.release(cleanupOwner).catch(() => {});
+        }
+      }
+    };
+    const restart = (previous) =>
+      navigator.locks.request(
+        `motion-outbox:${userId}:${toolProjectId}`,
+        { mode: "exclusive" },
+        () => restartLocked(previous),
+      );
+    const result = await MotionProjectLifecycle.run({
+      scope,
+      initialRun,
+      ownerId: crypto.randomUUID(),
+      leaseMs,
+      journal: MotionRunJournal,
+      assertScope,
+      shouldStop,
+      beforeCreate: continuing ? null : restart,
+      recover: async (owner) => {
+        apiPhase = "recover_unpause";
+        if (originalPaused && !shouldStop()) {
+          project = await setPaused(false);
+          restorePause = true;
+        }
+        apiPhase = "recover";
+        return MotionProjectRecovery.run({
+          owner,
+          journal: MotionRunJournal,
+          api,
+          assertScope,
+          flowTarget: target,
+          mode: project.data_json.flow_run_mode,
+          transcriptOnly: true,
+          shouldStop,
+          waitBeforeRetry,
+          download: unused,
+          hostEpoch,
+          onStage: publishStage,
+        });
+      },
+      execute: async (owner, stopped) => {
+        apiPhase = "execute";
+        project = await api("GET", endpoint);
+        const modelValue = profile.settings.transcription_model,
+          catalog = modelValue
+            ? window.ModelRegistry.findModel(provider, modelValue)
+            : null;
+        return MotionProjectExecution.run({
+          owner,
+          project,
+          profile,
+          flowTarget: target,
+          api,
+          journal: MotionRunJournal,
+          maxWorkers: audioNeeded && executionMode === "parallel" ? limit : 1,
+          getVideoMonitorLimit: unused,
+          shouldStop: stopped,
+          waitBeforeRetry,
+          waitForSlot: waitBeforeRetry,
+          assertScope,
+          retryable: (error) => window.FlowApiDownloadRetry.retryable(error),
+          validateReferences: unused,
+          queue: { submitJob: unused },
+          download: unused,
+          hostEpoch,
+          flowTabId: target.tabId,
+          accountTabId,
+          screen: layout.screen,
+          model:
+            provider === "chatgpt" ? catalog?.value || null : catalog || null,
+          deleteAfter: true,
+          transcriptOnly: true,
+          onStage: publishStage,
+        });
+      },
+    });
+    apiPhase = "restore_pause";
+    if (restorePause && !shouldStop()) await setPaused(true);
+    return {
+      ...result,
+      stage:
+        result?.state === "ready"
+          ? "transcript_batch"
+          : result?.stage || "transcript",
+      completedCount: result?.state === "ready" ? ids.length : null,
+    };
+  }
+}
+globalThis.MotionTranscriptBatchRunner = MotionTranscriptBatchRunner;

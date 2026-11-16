@@ -1,1 +1,45 @@
-.prompts-subtab[data-subtab=subtab-templates],.tobyflow-workflow-subtab[data-subtab=templates],#motionTemplatesSubtab,#motionTemplateBtn{position:relative;padding-right:15px;overflow:visible}.prompts-subtab .template-subtab-badge,.tobyflow-workflow-subtab .template-subtab-badge,.studio-subtab .template-subtab-badge,#motionTemplateBtn .template-subtab-badge,.tobyflow-tab .studio-tab-badge{position:absolute;top:-6px;right:0px;display:inline-flex;align-items:center;justify-content:center;box-sizing:border-box;min-width:18px;height:12px;padding:0 2px;border:1px solid #ffffff14;border-radius:3px;background:radial-gradient(39.71% 136.54% at 51.64% 117.31%,#f920d1 0%,#ed1572 100%);color:#fff;line-height:13px;font-size:8px;font-weight:bold;transform:skew(-12deg);pointer-events:none}.studio-tab-badge{background:linear-gradient(135deg,#7e6ffe 0%,#c3a2ff 50%,#3d4ae3 100%)!important}
+.prompts-subtab[data-subtab="subtab-templates"],
+.tobyflow-workflow-subtab[data-subtab="templates"],
+#motionTemplatesSubtab,
+#motionTemplateBtn {
+  position: relative;
+  padding-right: 15px;
+  overflow: visible;
+}
+.prompts-subtab .template-subtab-badge,
+.tobyflow-workflow-subtab .template-subtab-badge,
+.studio-subtab .template-subtab-badge,
+#motionTemplateBtn .template-subtab-badge,
+.tobyflow-tab .studio-tab-badge {
+  position: absolute;
+  top: -6px;
+  right: 0px;
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  box-sizing: border-box;
+  min-width: 18px;
+  height: 12px;
+  padding: 0 2px;
+  border: 1px solid #ffffff14;
+  border-radius: 3px;
+  background: radial-gradient(
+    39.71% 136.54% at 51.64% 117.31%,
+    #f920d1 0%,
+    #ed1572 100%
+  );
+  color: #fff;
+  line-height: 13px;
+  font-size: 8px;
+  font-weight: bold;
+  transform: skew(-12deg);
+  pointer-events: none;
+}
+.studio-tab-badge {
+  background: linear-gradient(
+    135deg,
+    #7e6ffe 0%,
+    #c3a2ff 50%,
+    #3d4ae3 100%
+  ) !important;
+}

@@ -1,1 +1,546 @@
-class MotionProjectUpload{static async run({owner,frameId,flowTarget,mode,maxRetries,maxSeconds,api,journal,assertScope,shouldStop,waitBeforeRetry,onStage=()=>{},parallelApi=false}){if(!owner||typeof frameId!=="string"||!frameId||!["web","api"].includes(mode)||!Number.isSafeInteger(maxRetries)||maxRetries<0||[api,assertScope,shouldStop,waitBeforeRetry].some(fn=>typeof fn!=="function")||!journal){throw new Error("MOTION_UPLOAD_CONFIG_INVALID")}const endpoint=`tools/motion-studio/projects/${encodeURIComponent(owner.toolProjectId)}`;const startedAt=Date.now();const audit=(operation,eventState,error=null,extra={})=>{const raw=String(error?.code||error?.message||error||"");const code=/^[A-Za-z][A-Za-z0-9_:-]{0,99}$/.test(raw)?raw:null;const info={phase:"upload",operation,eventState,code,elapsedMs:Date.now()-startedAt,...extra};console.info("[MotionUploadStage]",JSON.stringify({runId:owner.runId,frameId,...info}));try{onStage({stage:"upload",detail:eventState==="retrying"?"retrying":"running",frameId,apiDiagnostic:info})}catch(_){}};await assertScope();let run=await journal.get(owner);if(!run||run.runId!==owner.runId||!["running","needs_review"].includes(run.state)||run.flowProjectId!==flowTarget?.projectId)throw new Error("MOTION_UPLOAD_SCOPE_INVALID");journal._owned(run,owner);const fresh=async()=>{await assertScope();journal._owned(await journal.get(owner),owner);const project2=await api("GET",endpoint);await assertScope();journal._owned(await journal.get(owner),owner);if(project2?.tool_project_id!==owner.toolProjectId||project2.flow_project_id!==run.flowProjectId||Number(project2.data_json?.source_revision)!==run.sourceRevision||project2.data_json?.flow_run_mode!==mode||project2.data_json?.requires_resplit)throw new Error("MOTION_UPLOAD_SCOPE_CHANGED");return project2};const project=await fresh();const frame=project.data_json?.frames?.[frameId];if(!frame||frame.stages?.split?.state!=="ready")throw new Error("MOTION_SPLIT_NOT_READY");if(frame.source_edit)await MotionArtifactStore.syncFlowSources({userId:owner.userId,project});await MotionArtifactStore.hydrateUploadReceipt({userId:owner.userId,project,frameId});const source=await MotionArtifactStore.get({userId:owner.userId,toolProjectId:owner.toolProjectId,sourceRevision:run.sourceRevision,frameId,kind:"source_clip"})||{flowProjectId:run.flowProjectId};audit("source_read","returned");if(source.flowProjectId&&source.flowProjectId!==run.flowProjectId)throw new Error("MOTION_UPLOAD_SCOPE_CHANGED");const matchesFrame=current=>current?.run_id===frame.run_id&&current?.input_revision===frame.input_revision;const checkpoint=async(state,extra={})=>{const body={source_revision:run.sourceRevision,run_id:frame.run_id,input_revision:frame.input_revision,stage:"upload",state,...extra,request_nonce:crypto.randomUUID()};try{await assertScope();journal._owned(await journal.get(owner),owner);return await api("PATCH",`${endpoint}/frames/${encodeURIComponent(frameId)}/checkpoint`,body)}catch(error){const checked=await fresh().catch(()=>null);const current=checked?.data_json?.frames?.[frameId];const stage=current?.stages?.upload;if(matchesFrame(current)&&stage?.state===state&&Object.entries(extra).every(([key,value])=>key==="replace_existing"||(stage[key]??null)===(value??null)))return checked;throw error}};const receiptFields=receipt=>({...MotionArtifactStore.uploadMetadata(receipt),provider_media_id:receipt.mediaId,flow_mode:receipt.mode,api_driver:receipt.apiDriver||null,protocol_revision:receipt.protocolRevision||null,protocol_fingerprint:receipt.protocolFingerprint||null});const matchesReceipt=receipt=>Object.entries(receiptFields(receipt)).every(([key,value])=>{if(["upload_name","display_name","persistent_media_id"].includes(key))return true;const stored=frame.stages?.upload?.[key];if(key==="media_uuid")return stored==null||String(stored).toLowerCase()===String(value).toLowerCase();return(stored??null)===(value??null)});const validReceipt=receipt=>!!receipt?.mediaId&&receipt.projectId===run.flowProjectId&&["web","api"].includes(receipt.mode)&&/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(String(receipt.mediaUuid||""));let operations=Object.entries(run.operations||{}).filter(([,op2])=>op2.stage==="upload"&&op2.frameId===frameId);if(source.flowProjectId===run.flowProjectId&&frame.stages?.upload?.state==="ready"&&validReceipt(source.uploadReceipt)&&matchesReceipt(source.uploadReceipt)&&typeof journal.supersedeFrameUpload==="function"){for(const[operationId,operation]of operations){if(operation.frameRunId===frame.run_id||operation.inputRevision>=frame.input_revision)continue;await assertScope();await journal.supersedeFrameUpload({...owner,operationId,project});audit("superseded_upload","verified")}run=await journal.get(owner);journal._owned(run,owner);operations=Object.entries(run.operations||{}).filter(([,op2])=>op2.stage==="upload"&&op2.frameId===frameId)}const matching=operations.filter(([,op2])=>op2.frameRunId===frame.run_id&&op2.inputRevision===frame.input_revision);const review=reason=>{console.warn("[MotionUploadAudit]",JSON.stringify({stage:"receipt_reconcile_required",reason,frameId,runId:owner.runId,sourceRevision:run.sourceRevision,inputRevision:frame.input_revision,mode,uploadState:frame.stages?.upload?.state||null,receiptMode:source.uploadReceipt?.mode||null,hasReceipt:!!source.uploadReceipt,hasBlob:!!source.blob,operations:operations.length,matching:matching.length}));try{onStage({stage:"upload",detail:"needs_review",frameId,apiDiagnostic:{phase:"upload",operation:reason,eventState:"needs_review",sourceRevision:run.sourceRevision,inputRevision:frame.input_revision}})}catch(_){}return{state:"needs_review",error:"MOTION_UPLOAD_RECEIPT_RECONCILE_REQUIRED"}};if(operations.length!==matching.length||matching.length>1)return review("operation_identity_mismatch");const settleReceipt=async()=>{if(matching.length)await journal.settle({...owner,operationId:matching[0][0],frameId,frameRunId:frame.run_id,inputRevision:frame.input_revision,stage:"upload",outcome:"received"})};if(frame.stages?.upload?.state==="ready"&&validReceipt(source.uploadReceipt)){audit("cached_receipt","verified");if(!matchesReceipt(source.uploadReceipt)){review("ready_receipt_mismatch");throw new Error("MOTION_UPLOAD_RECEIPT_RECONCILE_REQUIRED")}const cachedFields=receiptFields(source.uploadReceipt);for(const key of["display_name","upload_name"]){if(frame.stages.upload[key])cachedFields[key]=frame.stages.upload[key]}await checkpoint("ready",cachedFields);await settleReceipt();return{state:"ready",receipt:source.uploadReceipt}}if(validReceipt(source.uploadReceipt)){await checkpoint("ready",receiptFields(source.uploadReceipt));await settleReceipt();return{state:"ready",receipt:source.uploadReceipt}}if(matching.length)audit("recover_upload_without_receipt","started");if(shouldStop()||project.data_json?.paused)return{state:"failed",error:"MOTION_CANCELLED",terminal:true};const previous=frame.stages?.upload;const op={...owner,operationId:matching[0]?.[0]||crypto.randomUUID(),frameId,frameRunId:frame.run_id,inputRevision:frame.input_revision,stage:"upload"};if(!matching.length)await journal.markSubmitted(op);let dispatched=false;try{let restored=false;if(!source.blob){if(frame.source_edit)throw new Error("MOTION_SOURCE_NOT_AVAILABLE");const original=await MotionArtifactStore.get({userId:owner.userId,toolProjectId:owner.toolProjectId,sourceRevision:run.sourceRevision,kind:"source_video"});if(!original?.blob||original.flowProjectId!==run.flowProjectId)throw new Error("MOTION_SOURCE_NOT_AVAILABLE");audit("restore_source_clip","started");source.blob=await MotionFlowUpload.restoreSourceClip({blob:original.blob,start:Number(frame.start),end:Number(frame.end),maxSeconds,abortFn:shouldStop,maxRetries,waitBeforeRetry,beforeRetry:async()=>{const current=await fresh();if(shouldStop()||current.data_json?.paused)throw new Error("MOTION_CANCELLED");if(!matchesFrame(current.data_json?.frames?.[frameId]))throw new Error("MOTION_UPLOAD_SCOPE_CHANGED")},onRetry:(retryCount,maxRetries2,error)=>audit("restore_source_clip_retry","retrying",error,{retryCount,maxRetries:maxRetries2})});const restoredProject=await fresh();if(!matchesFrame(restoredProject.data_json?.frames?.[frameId]))throw new Error("MOTION_UPLOAD_SCOPE_CHANGED");restored=true;audit("restore_source_clip","returned")}await checkpoint("running",previous?.state==="ready"?{replace_existing:true,provider_media_id:previous.provider_media_id}:{});audit("checkpoint","running");if(source.uploadReceipt){await MotionArtifactStore.clearUploadReceipt({userId:owner.userId,toolProjectId:owner.toolProjectId,sourceRevision:run.sourceRevision,frameId,projectId:run.flowProjectId,expectedMediaId:source.uploadReceipt.mediaId,blob:source.blob});delete source.uploadReceipt}else if(restored)await MotionArtifactStore.put({userId:owner.userId,toolProjectId:owner.toolProjectId,flowProjectId:run.flowProjectId,sourceRevision:run.sourceRevision,frameId,kind:"source_clip",blob:source.blob,duration:Number(frame.end)-Number(frame.start)});if(shouldStop()){await checkpoint("failed",{error_code:"UPLOAD_STOPPED",retry_exhausted:false});await journal.settle({...op,outcome:"rejected",notDispatched:true,errorCode:"UPLOAD_STOPPED"});return{state:"failed",error:"MOTION_CANCELLED",terminal:true}}const currentTarget=await MessageBridge.getTargetContext(flowTarget);if(!currentTarget||["tabId","projectId","driverKey","origin"].some(key=>currentTarget[key]!==flowTarget[key])){throw Object.assign(new Error("FLOW_EXECUTION_TARGET_CHANGED"),{notDispatched:true})}const execute=async()=>{audit(mode==="web"?"dom_lock":"transport","acquired");if(shouldStop())throw Object.assign(new Error("MOTION_CANCELLED"),{notDispatched:true});const latest=await fresh();if(shouldStop()||latest.data_json?.paused||!matchesFrame(latest.data_json?.frames?.[frameId]))throw Object.assign(new Error("MOTION_CANCELLED"),{notDispatched:true});const targetAfterWait=await MessageBridge.getTargetContext(flowTarget);if(!targetAfterWait||["tabId","projectId","driverKey","origin"].some(key=>targetAfterWait[key]!==flowTarget[key]))throw Object.assign(new Error("FLOW_EXECUTION_TARGET_CHANGED"),{notDispatched:true});return MotionFlowUpload.retryPreDispatch(async()=>{dispatched=false;try{return await MotionFlowUpload.upload({blob:source.blob,name:`motion_${frameId}.mp4`,target:flowTarget,mode,parallelApi,stopScope:{userId:owner.userId,toolProjectId:owner.toolProjectId,runId:owner.runId},abortFn:()=>!dispatched&&shouldStop(),onDispatch:async()=>{await assertScope();journal._owned(await journal.get(owner),owner);if(shouldStop())throw Object.assign(new Error("MOTION_CANCELLED"),{notDispatched:true,noRetry:true,noReplay:true});dispatched=true;audit("transport","started")}})}catch(error){if(!dispatched&&error&&typeof error==="object")error.notDispatched=true;throw error}},{maxRetries,retryTransientUpload:true,beforeRetry:async()=>{const current=await fresh();if(shouldStop()||current.data_json?.paused||!matchesFrame(current.data_json?.frames?.[frameId]))throw new Error("MOTION_CANCELLED")},onRetry:(retryCount,maxRetries2,error)=>audit("transport_retry","retrying",error,{retryCount,maxRetries:maxRetries2}),delay:waitBeforeRetry})};if(mode==="web"&&!navigator.locks?.request)throw Object.assign(new Error("PROVIDER_DOM_LOCK_UNAVAILABLE"),{notDispatched:true});if(mode==="web")audit("dom_lock","waiting");const receipt=mode==="web"?await navigator.locks.request("tobyflow-provider-web-dom",execute):await execute();audit("transport","returned");if(!validReceipt(receipt)||receipt.mode!==mode)throw new Error("MOTION_UPLOAD_RECEIPT_INVALID");await MotionArtifactStore.setUploadReceipt({userId:owner.userId,toolProjectId:owner.toolProjectId,sourceRevision:run.sourceRevision,frameId,receipt});await checkpoint("ready",receiptFields(receipt));audit("checkpoint","ready");await journal.settle({...op,outcome:"received"});return{state:"ready",receipt}}catch(error){audit("upload","failed",error);const rawCode=String(error?.code||error?.message||"MOTION_UPLOAD_FAILED");const failureCode=/^[A-Za-z][A-Za-z0-9_:-]{0,99}$/.test(rawCode)?rawCode:"MOTION_UPLOAD_FAILED";const knownUnsent=matching.length===0&&(!dispatched||error?.notDispatched===true);if(knownUnsent){try{await assertScope();await journal.settle({...op,outcome:"rejected",notDispatched:true,errorCode:"MOTION_UPLOAD_FAILED"})}catch(_){return{state:"needs_review",error:"MOTION_UPLOAD_CHECKPOINT_UNVERIFIED"}}let checkpointVerified=true;try{await checkpoint("failed",{error_code:failureCode,retry_exhausted:false})}catch(checkpointError){checkpointVerified=false;audit("failure_checkpoint","unverified",checkpointError)}return{state:"failed",error:error?.code||error?.message||"MOTION_UPLOAD_FAILED",...!checkpointVerified&&{checkpointPending:true}}}try{await checkpoint("needs_review")}catch(_){}return{state:"needs_review",error:error?.code||error?.message||"MOTION_UPLOAD_UNVERIFIED"}}}}globalThis.MotionProjectUpload=MotionProjectUpload;
+class MotionProjectUpload {
+  static async run({
+    owner,
+    frameId,
+    flowTarget,
+    mode,
+    maxRetries,
+    maxSeconds,
+    api,
+    journal,
+    assertScope,
+    shouldStop,
+    waitBeforeRetry,
+    onStage = () => {},
+    parallelApi = false,
+  }) {
+    if (
+      !owner ||
+      typeof frameId !== "string" ||
+      !frameId ||
+      !["web", "api"].includes(mode) ||
+      !Number.isSafeInteger(maxRetries) ||
+      maxRetries < 0 ||
+      [api, assertScope, shouldStop, waitBeforeRetry].some(
+        (fn) => typeof fn !== "function",
+      ) ||
+      !journal
+    ) {
+      throw new Error("MOTION_UPLOAD_CONFIG_INVALID");
+    }
+    const endpoint = `tools/motion-studio/projects/${encodeURIComponent(owner.toolProjectId)}`;
+    const startedAt = Date.now();
+    const audit = (operation, eventState, error = null, extra = {}) => {
+      const raw = String(error?.code || error?.message || error || "");
+      const code = /^[A-Za-z][A-Za-z0-9_:-]{0,99}$/.test(raw) ? raw : null;
+      const info = {
+        phase: "upload",
+        operation,
+        eventState,
+        code,
+        elapsedMs: Date.now() - startedAt,
+        ...extra,
+      };
+      console.info(
+        "[MotionUploadStage]",
+        JSON.stringify({ runId: owner.runId, frameId, ...info }),
+      );
+      try {
+        onStage({
+          stage: "upload",
+          detail: eventState === "retrying" ? "retrying" : "running",
+          frameId,
+          apiDiagnostic: info,
+        });
+      } catch (_) {}
+    };
+    await assertScope();
+    let run = await journal.get(owner);
+    if (
+      !run ||
+      run.runId !== owner.runId ||
+      !["running", "needs_review"].includes(run.state) ||
+      run.flowProjectId !== flowTarget?.projectId
+    )
+      throw new Error("MOTION_UPLOAD_SCOPE_INVALID");
+    journal._owned(run, owner);
+    const fresh = async () => {
+      await assertScope();
+      journal._owned(await journal.get(owner), owner);
+      const project2 = await api("GET", endpoint);
+      await assertScope();
+      journal._owned(await journal.get(owner), owner);
+      if (
+        project2?.tool_project_id !== owner.toolProjectId ||
+        project2.flow_project_id !== run.flowProjectId ||
+        Number(project2.data_json?.source_revision) !== run.sourceRevision ||
+        project2.data_json?.flow_run_mode !== mode ||
+        project2.data_json?.requires_resplit
+      )
+        throw new Error("MOTION_UPLOAD_SCOPE_CHANGED");
+      return project2;
+    };
+    const project = await fresh();
+    const frame = project.data_json?.frames?.[frameId];
+    if (!frame || frame.stages?.split?.state !== "ready")
+      throw new Error("MOTION_SPLIT_NOT_READY");
+    if (frame.source_edit)
+      await MotionArtifactStore.syncFlowSources({
+        userId: owner.userId,
+        project,
+      });
+    await MotionArtifactStore.hydrateUploadReceipt({
+      userId: owner.userId,
+      project,
+      frameId,
+    });
+    const source = (await MotionArtifactStore.get({
+      userId: owner.userId,
+      toolProjectId: owner.toolProjectId,
+      sourceRevision: run.sourceRevision,
+      frameId,
+      kind: "source_clip",
+    })) || { flowProjectId: run.flowProjectId };
+    audit("source_read", "returned");
+    if (source.flowProjectId && source.flowProjectId !== run.flowProjectId)
+      throw new Error("MOTION_UPLOAD_SCOPE_CHANGED");
+    const matchesFrame = (current) =>
+      current?.run_id === frame.run_id &&
+      current?.input_revision === frame.input_revision;
+    const checkpoint = async (state, extra = {}) => {
+      const body = {
+        source_revision: run.sourceRevision,
+        run_id: frame.run_id,
+        input_revision: frame.input_revision,
+        stage: "upload",
+        state,
+        ...extra,
+        request_nonce: crypto.randomUUID(),
+      };
+      try {
+        await assertScope();
+        journal._owned(await journal.get(owner), owner);
+        return await api(
+          "PATCH",
+          `${endpoint}/frames/${encodeURIComponent(frameId)}/checkpoint`,
+          body,
+        );
+      } catch (error) {
+        const checked = await fresh().catch(() => null);
+        const current = checked?.data_json?.frames?.[frameId];
+        const stage = current?.stages?.upload;
+        if (
+          matchesFrame(current) &&
+          stage?.state === state &&
+          Object.entries(extra).every(
+            ([key, value]) =>
+              key === "replace_existing" ||
+              (stage[key] ?? null) === (value ?? null),
+          )
+        )
+          return checked;
+        throw error;
+      }
+    };
+    const receiptFields = (receipt) => ({
+      ...MotionArtifactStore.uploadMetadata(receipt),
+      provider_media_id: receipt.mediaId,
+      flow_mode: receipt.mode,
+      api_driver: receipt.apiDriver || null,
+      protocol_revision: receipt.protocolRevision || null,
+      protocol_fingerprint: receipt.protocolFingerprint || null,
+    });
+    const matchesReceipt = (receipt) =>
+      Object.entries(receiptFields(receipt)).every(([key, value]) => {
+        if (
+          ["upload_name", "display_name", "persistent_media_id"].includes(key)
+        )
+          return true;
+        const stored = frame.stages?.upload?.[key];
+        if (key === "media_uuid")
+          return (
+            stored == null ||
+            String(stored).toLowerCase() === String(value).toLowerCase()
+          );
+        return (stored ?? null) === (value ?? null);
+      });
+    const validReceipt = (receipt) =>
+      !!receipt?.mediaId &&
+      receipt.projectId === run.flowProjectId &&
+      ["web", "api"].includes(receipt.mode) &&
+      /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(
+        String(receipt.mediaUuid || ""),
+      );
+    let operations = Object.entries(run.operations || {}).filter(
+      ([, op2]) => op2.stage === "upload" && op2.frameId === frameId,
+    );
+    if (
+      source.flowProjectId === run.flowProjectId &&
+      frame.stages?.upload?.state === "ready" &&
+      validReceipt(source.uploadReceipt) &&
+      matchesReceipt(source.uploadReceipt) &&
+      typeof journal.supersedeFrameUpload === "function"
+    ) {
+      for (const [operationId, operation] of operations) {
+        if (
+          operation.frameRunId === frame.run_id ||
+          operation.inputRevision >= frame.input_revision
+        )
+          continue;
+        await assertScope();
+        await journal.supersedeFrameUpload({ ...owner, operationId, project });
+        audit("superseded_upload", "verified");
+      }
+      run = await journal.get(owner);
+      journal._owned(run, owner);
+      operations = Object.entries(run.operations || {}).filter(
+        ([, op2]) => op2.stage === "upload" && op2.frameId === frameId,
+      );
+    }
+    const matching = operations.filter(
+      ([, op2]) =>
+        op2.frameRunId === frame.run_id &&
+        op2.inputRevision === frame.input_revision,
+    );
+    const review = (reason) => {
+      console.warn(
+        "[MotionUploadAudit]",
+        JSON.stringify({
+          stage: "receipt_reconcile_required",
+          reason,
+          frameId,
+          runId: owner.runId,
+          sourceRevision: run.sourceRevision,
+          inputRevision: frame.input_revision,
+          mode,
+          uploadState: frame.stages?.upload?.state || null,
+          receiptMode: source.uploadReceipt?.mode || null,
+          hasReceipt: !!source.uploadReceipt,
+          hasBlob: !!source.blob,
+          operations: operations.length,
+          matching: matching.length,
+        }),
+      );
+      try {
+        onStage({
+          stage: "upload",
+          detail: "needs_review",
+          frameId,
+          apiDiagnostic: {
+            phase: "upload",
+            operation: reason,
+            eventState: "needs_review",
+            sourceRevision: run.sourceRevision,
+            inputRevision: frame.input_revision,
+          },
+        });
+      } catch (_) {}
+      return {
+        state: "needs_review",
+        error: "MOTION_UPLOAD_RECEIPT_RECONCILE_REQUIRED",
+      };
+    };
+    if (operations.length !== matching.length || matching.length > 1)
+      return review("operation_identity_mismatch");
+    const settleReceipt = async () => {
+      if (matching.length)
+        await journal.settle({
+          ...owner,
+          operationId: matching[0][0],
+          frameId,
+          frameRunId: frame.run_id,
+          inputRevision: frame.input_revision,
+          stage: "upload",
+          outcome: "received",
+        });
+    };
+    if (
+      frame.stages?.upload?.state === "ready" &&
+      validReceipt(source.uploadReceipt)
+    ) {
+      audit("cached_receipt", "verified");
+      if (!matchesReceipt(source.uploadReceipt)) {
+        review("ready_receipt_mismatch");
+        throw new Error("MOTION_UPLOAD_RECEIPT_RECONCILE_REQUIRED");
+      }
+      const cachedFields = receiptFields(source.uploadReceipt);
+      for (const key of ["display_name", "upload_name"]) {
+        if (frame.stages.upload[key])
+          cachedFields[key] = frame.stages.upload[key];
+      }
+      await checkpoint("ready", cachedFields);
+      await settleReceipt();
+      return { state: "ready", receipt: source.uploadReceipt };
+    }
+    if (validReceipt(source.uploadReceipt)) {
+      await checkpoint("ready", receiptFields(source.uploadReceipt));
+      await settleReceipt();
+      return { state: "ready", receipt: source.uploadReceipt };
+    }
+    if (matching.length) audit("recover_upload_without_receipt", "started");
+    if (shouldStop() || project.data_json?.paused)
+      return { state: "failed", error: "MOTION_CANCELLED", terminal: true };
+    const previous = frame.stages?.upload;
+    const op = {
+      ...owner,
+      operationId: matching[0]?.[0] || crypto.randomUUID(),
+      frameId,
+      frameRunId: frame.run_id,
+      inputRevision: frame.input_revision,
+      stage: "upload",
+    };
+    if (!matching.length) await journal.markSubmitted(op);
+    let dispatched = false;
+    try {
+      let restored = false;
+      if (!source.blob) {
+        if (frame.source_edit) throw new Error("MOTION_SOURCE_NOT_AVAILABLE");
+        const original = await MotionArtifactStore.get({
+          userId: owner.userId,
+          toolProjectId: owner.toolProjectId,
+          sourceRevision: run.sourceRevision,
+          kind: "source_video",
+        });
+        if (!original?.blob || original.flowProjectId !== run.flowProjectId)
+          throw new Error("MOTION_SOURCE_NOT_AVAILABLE");
+        audit("restore_source_clip", "started");
+        source.blob = await MotionFlowUpload.restoreSourceClip({
+          blob: original.blob,
+          start: Number(frame.start),
+          end: Number(frame.end),
+          maxSeconds,
+          abortFn: shouldStop,
+          maxRetries,
+          waitBeforeRetry,
+          beforeRetry: async () => {
+            const current = await fresh();
+            if (shouldStop() || current.data_json?.paused)
+              throw new Error("MOTION_CANCELLED");
+            if (!matchesFrame(current.data_json?.frames?.[frameId]))
+              throw new Error("MOTION_UPLOAD_SCOPE_CHANGED");
+          },
+          onRetry: (retryCount, maxRetries2, error) =>
+            audit("restore_source_clip_retry", "retrying", error, {
+              retryCount,
+              maxRetries: maxRetries2,
+            }),
+        });
+        const restoredProject = await fresh();
+        if (!matchesFrame(restoredProject.data_json?.frames?.[frameId]))
+          throw new Error("MOTION_UPLOAD_SCOPE_CHANGED");
+        restored = true;
+        audit("restore_source_clip", "returned");
+      }
+      await checkpoint(
+        "running",
+        previous?.state === "ready"
+          ? {
+              replace_existing: true,
+              provider_media_id: previous.provider_media_id,
+            }
+          : {},
+      );
+      audit("checkpoint", "running");
+      if (source.uploadReceipt) {
+        await MotionArtifactStore.clearUploadReceipt({
+          userId: owner.userId,
+          toolProjectId: owner.toolProjectId,
+          sourceRevision: run.sourceRevision,
+          frameId,
+          projectId: run.flowProjectId,
+          expectedMediaId: source.uploadReceipt.mediaId,
+          blob: source.blob,
+        });
+        delete source.uploadReceipt;
+      } else if (restored)
+        await MotionArtifactStore.put({
+          userId: owner.userId,
+          toolProjectId: owner.toolProjectId,
+          flowProjectId: run.flowProjectId,
+          sourceRevision: run.sourceRevision,
+          frameId,
+          kind: "source_clip",
+          blob: source.blob,
+          duration: Number(frame.end) - Number(frame.start),
+        });
+      if (shouldStop()) {
+        await checkpoint("failed", {
+          error_code: "UPLOAD_STOPPED",
+          retry_exhausted: false,
+        });
+        await journal.settle({
+          ...op,
+          outcome: "rejected",
+          notDispatched: true,
+          errorCode: "UPLOAD_STOPPED",
+        });
+        return { state: "failed", error: "MOTION_CANCELLED", terminal: true };
+      }
+      const currentTarget = await MessageBridge.getTargetContext(flowTarget);
+      if (
+        !currentTarget ||
+        ["tabId", "projectId", "driverKey", "origin"].some(
+          (key) => currentTarget[key] !== flowTarget[key],
+        )
+      ) {
+        throw Object.assign(new Error("FLOW_EXECUTION_TARGET_CHANGED"), {
+          notDispatched: true,
+        });
+      }
+      const execute = async () => {
+        audit(mode === "web" ? "dom_lock" : "transport", "acquired");
+        if (shouldStop())
+          throw Object.assign(new Error("MOTION_CANCELLED"), {
+            notDispatched: true,
+          });
+        const latest = await fresh();
+        if (
+          shouldStop() ||
+          latest.data_json?.paused ||
+          !matchesFrame(latest.data_json?.frames?.[frameId])
+        )
+          throw Object.assign(new Error("MOTION_CANCELLED"), {
+            notDispatched: true,
+          });
+        const targetAfterWait =
+          await MessageBridge.getTargetContext(flowTarget);
+        if (
+          !targetAfterWait ||
+          ["tabId", "projectId", "driverKey", "origin"].some(
+            (key) => targetAfterWait[key] !== flowTarget[key],
+          )
+        )
+          throw Object.assign(new Error("FLOW_EXECUTION_TARGET_CHANGED"), {
+            notDispatched: true,
+          });
+        return MotionFlowUpload.retryPreDispatch(
+          async () => {
+            dispatched = false;
+            try {
+              return await MotionFlowUpload.upload({
+                blob: source.blob,
+                name: `motion_${frameId}.mp4`,
+                target: flowTarget,
+                mode,
+                parallelApi,
+                stopScope: {
+                  userId: owner.userId,
+                  toolProjectId: owner.toolProjectId,
+                  runId: owner.runId,
+                },
+                abortFn: () => !dispatched && shouldStop(),
+                onDispatch: async () => {
+                  await assertScope();
+                  journal._owned(await journal.get(owner), owner);
+                  if (shouldStop())
+                    throw Object.assign(new Error("MOTION_CANCELLED"), {
+                      notDispatched: true,
+                      noRetry: true,
+                      noReplay: true,
+                    });
+                  dispatched = true;
+                  audit("transport", "started");
+                },
+              });
+            } catch (error) {
+              if (!dispatched && error && typeof error === "object")
+                error.notDispatched = true;
+              throw error;
+            }
+          },
+          {
+            maxRetries,
+            retryTransientUpload: true,
+            beforeRetry: async () => {
+              const current = await fresh();
+              if (
+                shouldStop() ||
+                current.data_json?.paused ||
+                !matchesFrame(current.data_json?.frames?.[frameId])
+              )
+                throw new Error("MOTION_CANCELLED");
+            },
+            onRetry: (retryCount, maxRetries2, error) =>
+              audit("transport_retry", "retrying", error, {
+                retryCount,
+                maxRetries: maxRetries2,
+              }),
+            delay: waitBeforeRetry,
+          },
+        );
+      };
+      if (mode === "web" && !navigator.locks?.request)
+        throw Object.assign(new Error("PROVIDER_DOM_LOCK_UNAVAILABLE"), {
+          notDispatched: true,
+        });
+      if (mode === "web") audit("dom_lock", "waiting");
+      const receipt =
+        mode === "web"
+          ? await navigator.locks.request("tobyflow-provider-web-dom", execute)
+          : await execute();
+      audit("transport", "returned");
+      if (!validReceipt(receipt) || receipt.mode !== mode)
+        throw new Error("MOTION_UPLOAD_RECEIPT_INVALID");
+      await MotionArtifactStore.setUploadReceipt({
+        userId: owner.userId,
+        toolProjectId: owner.toolProjectId,
+        sourceRevision: run.sourceRevision,
+        frameId,
+        receipt,
+      });
+      await checkpoint("ready", receiptFields(receipt));
+      audit("checkpoint", "ready");
+      await journal.settle({ ...op, outcome: "received" });
+      return { state: "ready", receipt };
+    } catch (error) {
+      audit("upload", "failed", error);
+      const rawCode = String(
+        error?.code || error?.message || "MOTION_UPLOAD_FAILED",
+      );
+      const failureCode = /^[A-Za-z][A-Za-z0-9_:-]{0,99}$/.test(rawCode)
+        ? rawCode
+        : "MOTION_UPLOAD_FAILED";
+      const knownUnsent =
+        matching.length === 0 && (!dispatched || error?.notDispatched === true);
+      if (knownUnsent) {
+        try {
+          await assertScope();
+          await journal.settle({
+            ...op,
+            outcome: "rejected",
+            notDispatched: true,
+            errorCode: "MOTION_UPLOAD_FAILED",
+          });
+        } catch (_) {
+          return {
+            state: "needs_review",
+            error: "MOTION_UPLOAD_CHECKPOINT_UNVERIFIED",
+          };
+        }
+        let checkpointVerified = true;
+        try {
+          await checkpoint("failed", {
+            error_code: failureCode,
+            retry_exhausted: false,
+          });
+        } catch (checkpointError) {
+          checkpointVerified = false;
+          audit("failure_checkpoint", "unverified", checkpointError);
+        }
+        return {
+          state: "failed",
+          error: error?.code || error?.message || "MOTION_UPLOAD_FAILED",
+          ...(!checkpointVerified && { checkpointPending: true }),
+        };
+      }
+      try {
+        await checkpoint("needs_review");
+      } catch (_) {}
+      return {
+        state: "needs_review",
+        error: error?.code || error?.message || "MOTION_UPLOAD_UNVERIFIED",
+      };
+    }
+  }
+}
+globalThis.MotionProjectUpload = MotionProjectUpload;

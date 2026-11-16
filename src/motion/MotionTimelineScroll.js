@@ -1,1 +1,176 @@
-(()=>{const viewport=document.querySelector(".timeline-scroll");if(!viewport)return;let drag=null;let suppressClick=false;viewport.addEventListener("wheel",event=>{if(event.ctrlKey||event.metaKey||event.altKey||Math.abs(event.deltaX)>Math.abs(event.deltaY))return;const max=Math.max(0,viewport.scrollWidth-viewport.clientWidth);if(!max)return;const scale=event.deltaMode===1?16:event.deltaMode===2?viewport.clientWidth:1;const next=Math.max(0,Math.min(max,viewport.scrollLeft+event.deltaY*scale));if(next!==viewport.scrollLeft){viewport.scrollLeft=next;event.preventDefault()}},{passive:false});viewport.addEventListener("pointerdown",event=>{if(event.button!==0||!["mouse","pen"].includes(event.pointerType))return;if(event.target===viewport)return;drag={id:event.pointerId,x:event.clientX,y:event.clientY,left:viewport.scrollLeft,top:viewport.scrollTop,moved:false};suppressClick=false});viewport.addEventListener("pointermove",event=>{if(!drag||event.pointerId!==drag.id)return;const dx=event.clientX-drag.x,dy=event.clientY-drag.y;if(!drag.moved&&Math.hypot(dx,dy)<5)return;if(!drag.moved){drag.moved=true;viewport.setPointerCapture?.(event.pointerId);viewport.classList.add("is-dragging")}viewport.scrollLeft=drag.left-dx;viewport.scrollTop=drag.top-dy;event.preventDefault()});const finish=event=>{if(!drag||event.pointerId!==drag.id)return;suppressClick=event.type==="pointerup"&&drag.moved;if(viewport.hasPointerCapture?.(event.pointerId))viewport.releasePointerCapture(event.pointerId);viewport.classList.remove("is-dragging");drag=null};viewport.addEventListener("pointerup",finish);viewport.addEventListener("pointercancel",finish);viewport.addEventListener("click",event=>{if(!suppressClick)return;suppressClick=false;event.preventDefault();event.stopImmediatePropagation()},true);const handle=document.getElementById("timelineResizeHandle");const section=viewport.closest(".timeline-section");const main=viewport.closest(".studio-main");if(!handle||!section||!main)return;let resize=null;const bounds=()=>{const shortDesktop=window.innerWidth>850&&window.innerHeight<=760;return{min:window.innerWidth<=850?200:shortDesktop?160:180,max:window.innerHeight*(window.innerWidth<=600?.75:window.innerWidth<=850?.65:shortDesktop?.6:.7)}};const updateAria=()=>{const{min,max}=bounds();const requested=main.style.getPropertyValue("--motion-timeline-height");const height=requested.endsWith("dvh")?Math.max(min,Math.min(parseFloat(requested)*window.innerHeight/100,max)):section.getBoundingClientRect().height;handle.setAttribute("aria-valuemin",String(min));handle.setAttribute("aria-valuemax",String(Math.max(min,Math.round(max))));handle.setAttribute("aria-valuenow",String(Math.round(height)))};const setHeight=value=>{const{min,max}=bounds();const height=Math.max(min,Math.min(value,max));main.style.setProperty("--motion-timeline-height",`${height/window.innerHeight*100}dvh`);updateAria();window.requestAnimationFrame(updateAria)};handle.addEventListener("pointerdown",event=>{if(event.button!==0)return;event.preventDefault();resize={id:event.pointerId,y:event.clientY,height:section.getBoundingClientRect().height};handle.setPointerCapture(event.pointerId)});handle.addEventListener("pointermove",event=>{if(resize?.id===event.pointerId)setHeight(resize.height+resize.y-event.clientY)});const endResize=event=>{if(resize?.id!==event.pointerId)return;if(handle.hasPointerCapture?.(event.pointerId))handle.releasePointerCapture(event.pointerId);resize=null};handle.addEventListener("pointerup",endResize);handle.addEventListener("pointercancel",endResize);handle.addEventListener("lostpointercapture",()=>{resize=null});handle.addEventListener("keydown",event=>{if(!["ArrowUp","ArrowDown","Home","End"].includes(event.key))return;event.preventDefault();const{min,max}=bounds(),step=event.shiftKey?40:20;setHeight(event.key==="Home"?min:event.key==="End"?max:section.getBoundingClientRect().height+(event.key==="ArrowUp"?step:-step))});handle.addEventListener("dblclick",()=>{main.style.removeProperty("--motion-timeline-height");updateAria()});window.addEventListener("resize",updateAria);if(typeof ResizeObserver==="function")new ResizeObserver(updateAria).observe(section);updateAria()})();
+(() => {
+  const viewport = document.querySelector(".timeline-scroll");
+  if (!viewport) return;
+  let drag = null;
+  let suppressClick = false;
+  viewport.addEventListener(
+    "wheel",
+    (event) => {
+      if (
+        event.ctrlKey ||
+        event.metaKey ||
+        event.altKey ||
+        Math.abs(event.deltaX) > Math.abs(event.deltaY)
+      )
+        return;
+      const max = Math.max(0, viewport.scrollWidth - viewport.clientWidth);
+      if (!max) return;
+      const scale =
+        event.deltaMode === 1
+          ? 16
+          : event.deltaMode === 2
+            ? viewport.clientWidth
+            : 1;
+      const next = Math.max(
+        0,
+        Math.min(max, viewport.scrollLeft + event.deltaY * scale),
+      );
+      if (next !== viewport.scrollLeft) {
+        viewport.scrollLeft = next;
+        event.preventDefault();
+      }
+    },
+    { passive: false },
+  );
+  viewport.addEventListener("pointerdown", (event) => {
+    if (event.button !== 0 || !["mouse", "pen"].includes(event.pointerType))
+      return;
+    if (event.target === viewport) return;
+    drag = {
+      id: event.pointerId,
+      x: event.clientX,
+      y: event.clientY,
+      left: viewport.scrollLeft,
+      top: viewport.scrollTop,
+      moved: false,
+    };
+    suppressClick = false;
+  });
+  viewport.addEventListener("pointermove", (event) => {
+    if (!drag || event.pointerId !== drag.id) return;
+    const dx = event.clientX - drag.x,
+      dy = event.clientY - drag.y;
+    if (!drag.moved && Math.hypot(dx, dy) < 5) return;
+    if (!drag.moved) {
+      drag.moved = true;
+      viewport.setPointerCapture?.(event.pointerId);
+      viewport.classList.add("is-dragging");
+    }
+    viewport.scrollLeft = drag.left - dx;
+    viewport.scrollTop = drag.top - dy;
+    event.preventDefault();
+  });
+  const finish = (event) => {
+    if (!drag || event.pointerId !== drag.id) return;
+    suppressClick = event.type === "pointerup" && drag.moved;
+    if (viewport.hasPointerCapture?.(event.pointerId))
+      viewport.releasePointerCapture(event.pointerId);
+    viewport.classList.remove("is-dragging");
+    drag = null;
+  };
+  viewport.addEventListener("pointerup", finish);
+  viewport.addEventListener("pointercancel", finish);
+  viewport.addEventListener(
+    "click",
+    (event) => {
+      if (!suppressClick) return;
+      suppressClick = false;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+    },
+    true,
+  );
+  const handle = document.getElementById("timelineResizeHandle");
+  const section = viewport.closest(".timeline-section");
+  const main = viewport.closest(".studio-main");
+  if (!handle || !section || !main) return;
+  let resize = null;
+  const bounds = () => {
+    const shortDesktop = window.innerWidth > 850 && window.innerHeight <= 760;
+    return {
+      min: window.innerWidth <= 850 ? 200 : shortDesktop ? 160 : 180,
+      max:
+        window.innerHeight *
+        (window.innerWidth <= 600
+          ? 0.75
+          : window.innerWidth <= 850
+            ? 0.65
+            : shortDesktop
+              ? 0.6
+              : 0.7),
+    };
+  };
+  const updateAria = () => {
+    const { min, max } = bounds();
+    const requested = main.style.getPropertyValue("--motion-timeline-height");
+    const height = requested.endsWith("dvh")
+      ? Math.max(
+          min,
+          Math.min((parseFloat(requested) * window.innerHeight) / 100, max),
+        )
+      : section.getBoundingClientRect().height;
+    handle.setAttribute("aria-valuemin", String(min));
+    handle.setAttribute(
+      "aria-valuemax",
+      String(Math.max(min, Math.round(max))),
+    );
+    handle.setAttribute("aria-valuenow", String(Math.round(height)));
+  };
+  const setHeight = (value) => {
+    const { min, max } = bounds();
+    const height = Math.max(min, Math.min(value, max));
+    main.style.setProperty(
+      "--motion-timeline-height",
+      `${(height / window.innerHeight) * 100}dvh`,
+    );
+    updateAria();
+    window.requestAnimationFrame(updateAria);
+  };
+  handle.addEventListener("pointerdown", (event) => {
+    if (event.button !== 0) return;
+    event.preventDefault();
+    resize = {
+      id: event.pointerId,
+      y: event.clientY,
+      height: section.getBoundingClientRect().height,
+    };
+    handle.setPointerCapture(event.pointerId);
+  });
+  handle.addEventListener("pointermove", (event) => {
+    if (resize?.id === event.pointerId)
+      setHeight(resize.height + resize.y - event.clientY);
+  });
+  const endResize = (event) => {
+    if (resize?.id !== event.pointerId) return;
+    if (handle.hasPointerCapture?.(event.pointerId))
+      handle.releasePointerCapture(event.pointerId);
+    resize = null;
+  };
+  handle.addEventListener("pointerup", endResize);
+  handle.addEventListener("pointercancel", endResize);
+  handle.addEventListener("lostpointercapture", () => {
+    resize = null;
+  });
+  handle.addEventListener("keydown", (event) => {
+    if (!["ArrowUp", "ArrowDown", "Home", "End"].includes(event.key)) return;
+    event.preventDefault();
+    const { min, max } = bounds(),
+      step = event.shiftKey ? 40 : 20;
+    setHeight(
+      event.key === "Home"
+        ? min
+        : event.key === "End"
+          ? max
+          : section.getBoundingClientRect().height +
+            (event.key === "ArrowUp" ? step : -step),
+    );
+  });
+  handle.addEventListener("dblclick", () => {
+    main.style.removeProperty("--motion-timeline-height");
+    updateAria();
+  });
+  window.addEventListener("resize", updateAria);
+  if (typeof ResizeObserver === "function")
+    new ResizeObserver(updateAria).observe(section);
+  updateAria();
+})();

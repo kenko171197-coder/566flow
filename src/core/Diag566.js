@@ -15,16 +15,27 @@
       ? "sw"
       : (location.pathname.split("/").pop() || "page").replace(".html", "");
   const text = (v) => {
-    if (v instanceof Error) return `${v.name}: ${v.message} @ ${(v.stack || "").split("\n").slice(1, 3).join(" ").trim()}`;
+    if (v instanceof Error)
+      return `${v.name}: ${v.message} @ ${(v.stack || "").split("\n").slice(1, 3).join(" ").trim()}`;
     if (typeof v === "string") return v;
-    try { return JSON.stringify(v); } catch (_) { return String(v); }
+    try {
+      return JSON.stringify(v);
+    } catch (_) {
+      return String(v);
+    }
   };
   let queue = Promise.resolve();
-  const NOISE = /\[SSE\]|\[Watermark\]|\[WM\]|Motion Studio|MCP status check|mcp\/tokens|workflow-templates|Model catalog not ready/;
+  const NOISE =
+    /\[SSE\]|\[Watermark\]|\[WM\]|Motion Studio|MCP status check|mcp\/tokens|workflow-templates|Model catalog not ready/;
   function record(kind, args) {
     const joined = args.map(text).join(" ");
     if (NOISE.test(joined)) return;
-    const entry = { t: new Date().toISOString().slice(11, 19), where, kind, msg: joined.slice(0, 600) };
+    const entry = {
+      t: new Date().toISOString().slice(11, 19),
+      where,
+      kind,
+      msg: joined.slice(0, 600),
+    };
     queue = queue.then(async () => {
       try {
         const cur = (await chrome.storage.local.get([KEY]))[KEY] || [];
@@ -34,15 +45,28 @@
     });
   }
   const origError = console.error.bind(console);
-  console.error = (...args) => { record("console.error", args); origError(...args); };
+  console.error = (...args) => {
+    record("console.error", args);
+    origError(...args);
+  };
   const origWarn = console.warn.bind(console);
-  console.warn = (...args) => { record("warn", args); origWarn(...args); };
-  globalThis.addEventListener?.("error", (e) => record("uncaught", [e.error || e.message]));
-  globalThis.addEventListener?.("unhandledrejection", (e) => record("unhandledrejection", [e.reason]));
+  console.warn = (...args) => {
+    record("warn", args);
+    origWarn(...args);
+  };
+  globalThis.addEventListener?.("error", (e) =>
+    record("uncaught", [e.error || e.message]),
+  );
+  globalThis.addEventListener?.("unhandledrejection", (e) =>
+    record("unhandledrejection", [e.reason]),
+  );
   record("start", ["loaded"]);
   if (where === "sw") {
     chrome.runtime.onMessage.addListener((msg, sender) => {
-      if (msg?.action === "566flowDevReload" && sender?.id === chrome.runtime.id) {
+      if (
+        msg?.action === "566flowDevReload" &&
+        sender?.id === chrome.runtime.id
+      ) {
         setTimeout(() => chrome.runtime.reload(), 100);
       }
     });

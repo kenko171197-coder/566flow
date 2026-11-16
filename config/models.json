@@ -7,9 +7,7 @@
     "is_default": true,
     "config": {
       "dom_value": "Nano Banana Pro",
-      "dom_aliases": [
-        "Nano Banana Pro"
-      ]
+      "dom_aliases": ["Nano Banana Pro"]
     }
   },
   {
@@ -20,9 +18,7 @@
     "is_default": false,
     "config": {
       "dom_value": "Nano Banana 2 Lite",
-      "dom_aliases": [
-        "Nano Banana 2 Lite"
-      ]
+      "dom_aliases": ["Nano Banana 2 Lite"]
     }
   },
   {
@@ -33,9 +29,7 @@
     "is_default": false,
     "config": {
       "dom_value": "Nano Banana 2.1",
-      "dom_aliases": [
-        "Nano Banana 2.1"
-      ]
+      "dom_aliases": ["Nano Banana 2.1"]
     }
   },
   {
@@ -46,9 +40,7 @@
     "is_default": true,
     "config": {
       "dom_value": "Veo 3.1 - Lite",
-      "dom_aliases": [
-        "Veo 3.1 - Lite"
-      ]
+      "dom_aliases": ["Veo 3.1 - Lite"]
     }
   },
   {
@@ -59,9 +51,7 @@
     "is_default": false,
     "config": {
       "dom_value": "Veo 3.1 - Fast",
-      "dom_aliases": [
-        "Veo 3.1 - Fast"
-      ]
+      "dom_aliases": ["Veo 3.1 - Fast"]
     }
   },
   {
@@ -72,9 +62,7 @@
     "is_default": false,
     "config": {
       "dom_value": "Veo 3.1 - Quality",
-      "dom_aliases": [
-        "Veo 3.1 - Quality"
-      ]
+      "dom_aliases": ["Veo 3.1 - Quality"]
     }
   }
 ]

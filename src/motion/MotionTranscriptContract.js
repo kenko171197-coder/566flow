@@ -1,7 +1,431 @@
-var __defProp=Object.defineProperty;var __defNormalProp=(obj,key,value)=>key in obj?__defProp(obj,key,{enumerable:true,configurable:true,writable:true,value}):obj[key]=value;var __publicField=(obj,key,value)=>__defNormalProp(obj,typeof key!=="symbol"?key+"":key,value);class MotionTranscriptContract{static timeline(value,{transcript,translatedText="",hasSpeech,duration=Infinity,required=false}={}){const invalid=()=>{throw new Error("MOTION_SPEECH_TIMELINE_INVALID")};if(value==null){if(required)invalid();return null}if(required&&!Number.isFinite(duration))invalid();if(!Array.isArray(value)||value.length>120||value.length===0&&hasSpeech||value.length>0&&!hasSpeech||!(duration>0))invalid();let end=0;const rows=value.map(row=>{if(!row||Object.keys(row).sort().join(",")!=="end_seconds,start_seconds,text,translated_text"||!Number.isFinite(row.start_seconds)||!Number.isFinite(row.end_seconds)||row.start_seconds<end||row.end_seconds<=row.start_seconds||row.end_seconds>duration||typeof row.text!=="string"||!row.text.trim()||row.text.length>12e3||typeof row.translated_text!=="string"||row.translated_text.length>12e3||!!translatedText.trim()!==!!row.translated_text.trim())invalid();end=row.end_seconds;return{start_seconds:row.start_seconds,end_seconds:row.end_seconds,text:row.text,translated_text:row.translated_text}});const normalized=text=>String(text||"").replace(/\s+/gu,"");if(normalized(rows.map(row=>row.text).join(" "))!==normalized(transcript)||normalized(rows.map(row=>row.translated_text).join(" "))!==normalized(translatedText))invalid();return rows}static formatTimeline(transcript,{duration,translate=false,speak="SPEAK",pause="PAUSE"}={}){const rows=this.timeline(transcript?.speech_timeline,{transcript:transcript?.text||"",translatedText:transcript?.translated_text||"",hasSpeech:transcript?.has_speech===true,duration});if(rows===null)return"UNAVAILABLE";const lines=[];let end=0;const range=(start,stop)=>`${start.toFixed(2)}\u2013${stop.toFixed(2)}s`;for(const row of rows){if(row.start_seconds>end)lines.push(`${range(end,row.start_seconds)} | ${pause}`);lines.push(`${range(row.start_seconds,row.end_seconds)} | ${speak}: ${JSON.stringify(translate?row.translated_text:row.text)}`);end=row.end_seconds}if(duration>end)lines.push(`${range(end,duration)} | ${pause}`);return lines.join("\n")}static async prepareAudio(blob,{signal,shouldStop=()=>false}={}){if(!(blob instanceof Blob)||!blob.size||blob.type!=="audio/wav")throw new Error("MOTION_AUDIO_ARTIFACT_INVALID");if(signal?.aborted||shouldStop())throw new Error("MOTION_CANCELLED");const timeout=globalThis.MotionMergeTask?.timeoutMs?.();if(!Number.isSafeInteger(timeout)||timeout<1)throw new Error("MOTION_MEDIA_TIMEOUT_CONFIG_INVALID");return new Promise((resolve,reject)=>{const id=crypto.randomUUID(),worker=new Worker(chrome.runtime.getURL("src/core/video-split-worker.js"));let settled=false;const finish=(error,value)=>{if(settled)return;settled=true;clearTimeout(timer);clearInterval(poll);signal?.removeEventListener("abort",stop);worker.onmessage=worker.onerror=null;worker.terminate();error?reject(error):resolve(value)};const stop=()=>finish(new Error("MOTION_CANCELLED"));const timer=setTimeout(()=>finish(new Error("MOTION_AUDIO_EXTRACT_TIMEOUT")),timeout);const poll=setInterval(()=>{if(shouldStop())stop()},200);signal?.addEventListener("abort",stop,{once:true});if(signal?.aborted||shouldStop()){stop();return}worker.onerror=e=>finish(new Error(e.message||"MOTION_AUDIO_EXTRACT_FAILED"));worker.onmessage=({data})=>{if(data?.id!==id)return;if(data.type==="error"){finish(new Error(data.code));return}if(data.type!=="audio")return;if(!(data.blob instanceof Blob)||!data.blob.size||data.blob.type!=="audio/wav"||data.audioState!=="audio_present"||data.start!==0||!Number.isFinite(data.duration)||data.duration<=0||!Number.isFinite(data.end)||Math.abs(data.end-data.duration)>.1)finish(new Error("MOTION_AUDIO_ARTIFACT_INVALID"));else finish(null,data.blob)};try{worker.postMessage({type:"prepare_transcript_audio",id,blob})}catch(error){finish(error)}})}static composePrompt(templateText,{translate=false}={}){if(typeof templateText!=="string"||!templateText.trim())throw new Error("MOTION_TEMPLATE_INVALID");return`${templateText}
+var __defProp = Object.defineProperty;
+var __defNormalProp = (obj, key, value) =>
+  key in obj
+    ? __defProp(obj, key, {
+        enumerable: true,
+        configurable: true,
+        writable: true,
+        value,
+      })
+    : (obj[key] = value);
+var __publicField = (obj, key, value) =>
+  __defNormalProp(obj, typeof key !== "symbol" ? key + "" : key, value);
+class MotionTranscriptContract {
+  static timeline(
+    value,
+    {
+      transcript,
+      translatedText = "",
+      hasSpeech,
+      duration = Infinity,
+      required = false,
+    } = {},
+  ) {
+    const invalid = () => {
+      throw new Error("MOTION_SPEECH_TIMELINE_INVALID");
+    };
+    if (value == null) {
+      if (required) invalid();
+      return null;
+    }
+    if (required && !Number.isFinite(duration)) invalid();
+    if (
+      !Array.isArray(value) ||
+      value.length > 120 ||
+      (value.length === 0 && hasSpeech) ||
+      (value.length > 0 && !hasSpeech) ||
+      !(duration > 0)
+    )
+      invalid();
+    let end = 0;
+    const rows = value.map((row) => {
+      if (
+        !row ||
+        Object.keys(row).sort().join(",") !==
+          "end_seconds,start_seconds,text,translated_text" ||
+        !Number.isFinite(row.start_seconds) ||
+        !Number.isFinite(row.end_seconds) ||
+        row.start_seconds < end ||
+        row.end_seconds <= row.start_seconds ||
+        row.end_seconds > duration ||
+        typeof row.text !== "string" ||
+        !row.text.trim() ||
+        row.text.length > 12e3 ||
+        typeof row.translated_text !== "string" ||
+        row.translated_text.length > 12e3 ||
+        !!translatedText.trim() !== !!row.translated_text.trim()
+      )
+        invalid();
+      end = row.end_seconds;
+      return {
+        start_seconds: row.start_seconds,
+        end_seconds: row.end_seconds,
+        text: row.text,
+        translated_text: row.translated_text,
+      };
+    });
+    const normalized = (text) => String(text || "").replace(/\s+/gu, "");
+    if (
+      normalized(rows.map((row) => row.text).join(" ")) !==
+        normalized(transcript) ||
+      normalized(rows.map((row) => row.translated_text).join(" ")) !==
+        normalized(translatedText)
+    )
+      invalid();
+    return rows;
+  }
+  static formatTimeline(
+    transcript,
+    { duration, translate = false, speak = "SPEAK", pause = "PAUSE" } = {},
+  ) {
+    const rows = this.timeline(transcript?.speech_timeline, {
+      transcript: transcript?.text || "",
+      translatedText: transcript?.translated_text || "",
+      hasSpeech: transcript?.has_speech === true,
+      duration,
+    });
+    if (rows === null) return "UNAVAILABLE";
+    const lines = [];
+    let end = 0;
+    const range = (start, stop) =>
+      `${start.toFixed(2)}\u2013${stop.toFixed(2)}s`;
+    for (const row of rows) {
+      if (row.start_seconds > end)
+        lines.push(`${range(end, row.start_seconds)} | ${pause}`);
+      lines.push(
+        `${range(row.start_seconds, row.end_seconds)} | ${speak}: ${JSON.stringify(translate ? row.translated_text : row.text)}`,
+      );
+      end = row.end_seconds;
+    }
+    if (duration > end) lines.push(`${range(end, duration)} | ${pause}`);
+    return lines.join("\n");
+  }
+  static async prepareAudio(blob, { signal, shouldStop = () => false } = {}) {
+    if (!(blob instanceof Blob) || !blob.size || blob.type !== "audio/wav")
+      throw new Error("MOTION_AUDIO_ARTIFACT_INVALID");
+    if (signal?.aborted || shouldStop()) throw new Error("MOTION_CANCELLED");
+    const timeout = globalThis.MotionMergeTask?.timeoutMs?.();
+    if (!Number.isSafeInteger(timeout) || timeout < 1)
+      throw new Error("MOTION_MEDIA_TIMEOUT_CONFIG_INVALID");
+    return new Promise((resolve, reject) => {
+      const id = crypto.randomUUID(),
+        worker = new Worker(
+          chrome.runtime.getURL("src/core/video-split-worker.js"),
+        );
+      let settled = false;
+      const finish = (error, value) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        clearInterval(poll);
+        signal?.removeEventListener("abort", stop);
+        worker.onmessage = worker.onerror = null;
+        worker.terminate();
+        error ? reject(error) : resolve(value);
+      };
+      const stop = () => finish(new Error("MOTION_CANCELLED"));
+      const timer = setTimeout(
+        () => finish(new Error("MOTION_AUDIO_EXTRACT_TIMEOUT")),
+        timeout,
+      );
+      const poll = setInterval(() => {
+        if (shouldStop()) stop();
+      }, 200);
+      signal?.addEventListener("abort", stop, { once: true });
+      if (signal?.aborted || shouldStop()) {
+        stop();
+        return;
+      }
+      worker.onerror = (e) =>
+        finish(new Error(e.message || "MOTION_AUDIO_EXTRACT_FAILED"));
+      worker.onmessage = ({ data }) => {
+        if (data?.id !== id) return;
+        if (data.type === "error") {
+          finish(new Error(data.code));
+          return;
+        }
+        if (data.type !== "audio") return;
+        if (
+          !(data.blob instanceof Blob) ||
+          !data.blob.size ||
+          data.blob.type !== "audio/wav" ||
+          data.audioState !== "audio_present" ||
+          data.start !== 0 ||
+          !Number.isFinite(data.duration) ||
+          data.duration <= 0 ||
+          !Number.isFinite(data.end) ||
+          Math.abs(data.end - data.duration) > 0.1
+        )
+          finish(new Error("MOTION_AUDIO_ARTIFACT_INVALID"));
+        else finish(null, data.blob);
+      };
+      try {
+        worker.postMessage({ type: "prepare_transcript_audio", id, blob });
+      } catch (error) {
+        finish(error);
+      }
+    });
+  }
+  static composePrompt(templateText, { translate = false } = {}) {
+    if (typeof templateText !== "string" || !templateText.trim())
+      throw new Error("MOTION_TEMPLATE_INVALID");
+    return (
+      `${templateText}
 
 OUTPUT TRANSPORT CONTRACT \u2014 MANDATORY:
 Return exactly one fenced plain-text code block and no commentary, headings, citations or text outside it.
 The first line in the code block must be exactly ${this.BEGIN}.
 After that line return one valid JSON object with a frames array. Return exactly one item for each attached file in the manifest. Each item must include frame_id, order, file_name, has_speech, transcript, detected_language and translated_text. Copy frame_id, order and file_name exactly from its manifest entry; transcribe each corresponding file independently. Use a short language code such as vi or en for detected_language, or an empty string when unknown. Use a boolean for has_speech and strings for transcript and translated_text. Do not infer, borrow or copy speech from another file.
-`+(translate?"Keep transcript in the original spoken language; put only the requested translation in translated_text.\n":"Translation is disabled. Transcribe only the original spoken language, without translating or paraphrasing. Set translated_text to an empty string for every item.\n")+`The final line in the code block must be exactly ${this.END}.`}static buildBatches(items,{maxFiles,maxBytes}){if(!Number.isSafeInteger(maxFiles)||maxFiles<1||!Number.isSafeInteger(maxBytes)||maxBytes<1){throw new Error("AUDIO_BATCH_LIMIT_INVALID")}const seen=new Set;const batches=[];let batch=[],bytes=0;for(const[index,item]of items.entries()){if(!/^[A-Za-z0-9_-]{1,80}$/.test(item?.frameId||"")||seen.has(item.frameId)||!(item.blob instanceof Blob)||item.blob.size===0||item.blob.size>maxBytes)throw new Error("AUDIO_MANIFEST_INVALID");seen.add(item.frameId);const ext=item.blob.type==="audio/wav"?"wav":null;if(!ext)throw new Error("AUDIO_MIME_UNSUPPORTED");if(batch.length&&(batch.length>=maxFiles||bytes+item.blob.size>maxBytes)){batches.push(batch);batch=[];bytes=0}const order=index+1;batch.push({frameId:item.frameId,order,...Number.isFinite(item.duration)&&{duration:item.duration},name:`frame_${item.frameId}.${ext}`,blob:item.blob,size:item.blob.size,mime:item.blob.type});bytes+=item.blob.size}if(batch.length)batches.push(batch);return batches}static validateSingleResponse(response,manifest,{frameId,translate=false,preserveOriginalSpeech=false,requireTimeline=false}){if(!Array.isArray(manifest)||manifest.length!==1||manifest[0]?.frameId!==frameId){throw new Error("AUDIO_MANIFEST_INVALID")}const entry=manifest[0];const raw=String(response?.text||"").trim().replace(/^```(?:json)?\s*/i,"").replace(/\s*```$/,"");let responseManifest=manifest;if(response?.motionAudioManifest){const actual=response.motionAudioManifest;const pattern=new RegExp(`^${entry.name.slice(0,-4)}(?:\\s*\\(\\d+\\))?\\.wav$`,"i");if(!Array.isArray(actual)||actual.length!==1||actual[0]?.frame_id!==frameId||actual[0]?.order!==entry.order||!pattern.test(String(actual[0]?.file_name||""))){throw new Error("MOTION_AUDIO_IDENTITY_UNVERIFIED")}responseManifest=[{...entry,name:actual[0].file_name}]}const parsed=this.parseResponse(raw,responseManifest,{translate,requireIdentity:true,requireFraming:true,requireTimeline});if(parsed.needsReview[frameId]==="MOTION_SPEECH_TIMELINE_INVALID")throw new Error("MOTION_SPEECH_TIMELINE_INVALID");if(parsed.errors.length||!parsed.accepted[frameId])throw Object.assign(new Error("MOTION_TRANSCRIPT_INVALID"),{validationReason:parsed.errors[0]||parsed.needsReview[frameId]||"MISSING_FRAME_ID"});if(translate&&preserveOriginalSpeech&&(!parsed.accepted[frameId].hasSpeech||!parsed.accepted[frameId].translatedText?.trim())){throw new Error("MOTION_TRANSLATION_INVALID")}return parsed.accepted[frameId]}static parseResponse(raw,manifest,{translate=false,requireIdentity=false,requireFraming=false,requireTimeline=false}={}){const frameIds=manifest.map(item=>item.frameId);if(new Set(frameIds).size!==frameIds.length)throw new Error("AUDIO_MANIFEST_DUPLICATE");let payload;try{if(typeof raw==="string"){let text=raw.trim();const begin=text.indexOf(this.BEGIN),end=text.indexOf(this.END);if(begin>=0||end>=0||requireFraming){if(begin<0||end<=begin||text.indexOf(this.BEGIN,begin+this.BEGIN.length)!==-1||text.indexOf(this.END,end+this.END.length)!==-1)throw new Error("INVALID_TRANSPORT_FRAME");text=text.slice(begin+this.BEGIN.length,end).trim()}text=text.replace(/^JSON\s*\n/i,"").replace(/^```(?:json)?\s*\n/i,"").replace(/\n?```\s*$/,"");payload=JSON.parse(text)}else payload=raw}catch(error){const code=error?.message==="INVALID_TRANSPORT_FRAME"?"INVALID_TRANSPORT_FRAME":"INVALID_JSON";return{accepted:{},needsReview:Object.fromEntries(frameIds.map(id=>[id,code])),errors:[code]}}if(!payload||!Array.isArray(payload.frames)){return{accepted:{},needsReview:Object.fromEntries(frameIds.map(id=>[id,"INVALID_SHAPE"])),errors:["INVALID_SHAPE"]}}const expected=new Set(frameIds);const byId=new Map;const duplicates=new Set;const errors=[];for(const entry of payload.frames){const id=entry?.frame_id;if(typeof id!=="string"||!expected.has(id)){errors.push("UNKNOWN_FRAME_ID");continue}if(byId.has(id))duplicates.add(id);byId.set(id,entry)}const accepted={};const needsReview={};for(const id of frameIds){const item=byId.get(id);const source=manifest.find(entry=>entry.frameId===id);if(duplicates.has(id)){needsReview[id]="DUPLICATE_FRAME_ID";continue}if(!item){needsReview[id]="MISSING_FRAME_ID";continue}if(requireIdentity&&(typeof item.file_name!=="string"||!Number.isInteger(item.order))||item.file_name!==void 0&&item.file_name!==source.name||item.order!==void 0&&item.order!==source.order){needsReview[id]="FILE_IDENTITY_MISMATCH";continue}if(typeof item.has_speech!=="boolean"||typeof item.transcript!=="string"||typeof item.detected_language!=="string"||item.has_speech&&!item.transcript.trim()||!item.has_speech&&item.transcript.trim()||translate&&item.has_speech&&(typeof item.translated_text!=="string"||!item.translated_text.trim())){needsReview[id]="INVALID_TRANSCRIPT";continue}let timeline;try{timeline=this.timeline(item.speech_timeline,{transcript:item.transcript,translatedText:translate?item.translated_text:"",hasSpeech:item.has_speech,duration:source.duration,required:requireTimeline})}catch(_){needsReview[id]="MOTION_SPEECH_TIMELINE_INVALID";continue}accepted[id]={hasSpeech:item.has_speech,transcript:item.transcript,detectedLanguage:item.detected_language,translatedText:translate&&typeof item.translated_text==="string"?item.translated_text:null,...timeline!==null&&{speechTimeline:timeline}}}return{accepted,needsReview,errors:[...new Set(errors)]}}}__publicField(MotionTranscriptContract,"BEGIN","TOBY_MOTION_JSON_BEGIN");__publicField(MotionTranscriptContract,"END","TOBY_MOTION_JSON_END");globalThis.MotionTranscriptContract=MotionTranscriptContract;
+` +
+      (translate
+        ? "Keep transcript in the original spoken language; put only the requested translation in translated_text.\n"
+        : "Translation is disabled. Transcribe only the original spoken language, without translating or paraphrasing. Set translated_text to an empty string for every item.\n") +
+      `The final line in the code block must be exactly ${this.END}.`
+    );
+  }
+  static buildBatches(items, { maxFiles, maxBytes }) {
+    if (
+      !Number.isSafeInteger(maxFiles) ||
+      maxFiles < 1 ||
+      !Number.isSafeInteger(maxBytes) ||
+      maxBytes < 1
+    ) {
+      throw new Error("AUDIO_BATCH_LIMIT_INVALID");
+    }
+    const seen = new Set();
+    const batches = [];
+    let batch = [],
+      bytes = 0;
+    for (const [index, item] of items.entries()) {
+      if (
+        !/^[A-Za-z0-9_-]{1,80}$/.test(item?.frameId || "") ||
+        seen.has(item.frameId) ||
+        !(item.blob instanceof Blob) ||
+        item.blob.size === 0 ||
+        item.blob.size > maxBytes
+      )
+        throw new Error("AUDIO_MANIFEST_INVALID");
+      seen.add(item.frameId);
+      const ext = item.blob.type === "audio/wav" ? "wav" : null;
+      if (!ext) throw new Error("AUDIO_MIME_UNSUPPORTED");
+      if (
+        batch.length &&
+        (batch.length >= maxFiles || bytes + item.blob.size > maxBytes)
+      ) {
+        batches.push(batch);
+        batch = [];
+        bytes = 0;
+      }
+      const order = index + 1;
+      batch.push({
+        frameId: item.frameId,
+        order,
+        ...(Number.isFinite(item.duration) && { duration: item.duration }),
+        name: `frame_${item.frameId}.${ext}`,
+        blob: item.blob,
+        size: item.blob.size,
+        mime: item.blob.type,
+      });
+      bytes += item.blob.size;
+    }
+    if (batch.length) batches.push(batch);
+    return batches;
+  }
+  static validateSingleResponse(
+    response,
+    manifest,
+    {
+      frameId,
+      translate = false,
+      preserveOriginalSpeech = false,
+      requireTimeline = false,
+    },
+  ) {
+    if (
+      !Array.isArray(manifest) ||
+      manifest.length !== 1 ||
+      manifest[0]?.frameId !== frameId
+    ) {
+      throw new Error("AUDIO_MANIFEST_INVALID");
+    }
+    const entry = manifest[0];
+    const raw = String(response?.text || "")
+      .trim()
+      .replace(/^```(?:json)?\s*/i, "")
+      .replace(/\s*```$/, "");
+    let responseManifest = manifest;
+    if (response?.motionAudioManifest) {
+      const actual = response.motionAudioManifest;
+      const pattern = new RegExp(
+        `^${entry.name.slice(0, -4)}(?:\\s*\\(\\d+\\))?\\.wav$`,
+        "i",
+      );
+      if (
+        !Array.isArray(actual) ||
+        actual.length !== 1 ||
+        actual[0]?.frame_id !== frameId ||
+        actual[0]?.order !== entry.order ||
+        !pattern.test(String(actual[0]?.file_name || ""))
+      ) {
+        throw new Error("MOTION_AUDIO_IDENTITY_UNVERIFIED");
+      }
+      responseManifest = [{ ...entry, name: actual[0].file_name }];
+    }
+    const parsed = this.parseResponse(raw, responseManifest, {
+      translate,
+      requireIdentity: true,
+      requireFraming: true,
+      requireTimeline,
+    });
+    if (parsed.needsReview[frameId] === "MOTION_SPEECH_TIMELINE_INVALID")
+      throw new Error("MOTION_SPEECH_TIMELINE_INVALID");
+    if (parsed.errors.length || !parsed.accepted[frameId])
+      throw Object.assign(new Error("MOTION_TRANSCRIPT_INVALID"), {
+        validationReason:
+          parsed.errors[0] || parsed.needsReview[frameId] || "MISSING_FRAME_ID",
+      });
+    if (
+      translate &&
+      preserveOriginalSpeech &&
+      (!parsed.accepted[frameId].hasSpeech ||
+        !parsed.accepted[frameId].translatedText?.trim())
+    ) {
+      throw new Error("MOTION_TRANSLATION_INVALID");
+    }
+    return parsed.accepted[frameId];
+  }
+  static parseResponse(
+    raw,
+    manifest,
+    {
+      translate = false,
+      requireIdentity = false,
+      requireFraming = false,
+      requireTimeline = false,
+    } = {},
+  ) {
+    const frameIds = manifest.map((item) => item.frameId);
+    if (new Set(frameIds).size !== frameIds.length)
+      throw new Error("AUDIO_MANIFEST_DUPLICATE");
+    let payload;
+    try {
+      if (typeof raw === "string") {
+        let text = raw.trim();
+        const begin = text.indexOf(this.BEGIN),
+          end = text.indexOf(this.END);
+        if (begin >= 0 || end >= 0 || requireFraming) {
+          if (
+            begin < 0 ||
+            end <= begin ||
+            text.indexOf(this.BEGIN, begin + this.BEGIN.length) !== -1 ||
+            text.indexOf(this.END, end + this.END.length) !== -1
+          )
+            throw new Error("INVALID_TRANSPORT_FRAME");
+          text = text.slice(begin + this.BEGIN.length, end).trim();
+        }
+        text = text
+          .replace(/^JSON\s*\n/i, "")
+          .replace(/^```(?:json)?\s*\n/i, "")
+          .replace(/\n?```\s*$/, "");
+        payload = JSON.parse(text);
+      } else payload = raw;
+    } catch (error) {
+      const code =
+        error?.message === "INVALID_TRANSPORT_FRAME"
+          ? "INVALID_TRANSPORT_FRAME"
+          : "INVALID_JSON";
+      return {
+        accepted: {},
+        needsReview: Object.fromEntries(frameIds.map((id) => [id, code])),
+        errors: [code],
+      };
+    }
+    if (!payload || !Array.isArray(payload.frames)) {
+      return {
+        accepted: {},
+        needsReview: Object.fromEntries(
+          frameIds.map((id) => [id, "INVALID_SHAPE"]),
+        ),
+        errors: ["INVALID_SHAPE"],
+      };
+    }
+    const expected = new Set(frameIds);
+    const byId = new Map();
+    const duplicates = new Set();
+    const errors = [];
+    for (const entry of payload.frames) {
+      const id = entry?.frame_id;
+      if (typeof id !== "string" || !expected.has(id)) {
+        errors.push("UNKNOWN_FRAME_ID");
+        continue;
+      }
+      if (byId.has(id)) duplicates.add(id);
+      byId.set(id, entry);
+    }
+    const accepted = {};
+    const needsReview = {};
+    for (const id of frameIds) {
+      const item = byId.get(id);
+      const source = manifest.find((entry) => entry.frameId === id);
+      if (duplicates.has(id)) {
+        needsReview[id] = "DUPLICATE_FRAME_ID";
+        continue;
+      }
+      if (!item) {
+        needsReview[id] = "MISSING_FRAME_ID";
+        continue;
+      }
+      if (
+        (requireIdentity &&
+          (typeof item.file_name !== "string" ||
+            !Number.isInteger(item.order))) ||
+        (item.file_name !== void 0 && item.file_name !== source.name) ||
+        (item.order !== void 0 && item.order !== source.order)
+      ) {
+        needsReview[id] = "FILE_IDENTITY_MISMATCH";
+        continue;
+      }
+      if (
+        typeof item.has_speech !== "boolean" ||
+        typeof item.transcript !== "string" ||
+        typeof item.detected_language !== "string" ||
+        (item.has_speech && !item.transcript.trim()) ||
+        (!item.has_speech && item.transcript.trim()) ||
+        (translate &&
+          item.has_speech &&
+          (typeof item.translated_text !== "string" ||
+            !item.translated_text.trim()))
+      ) {
+        needsReview[id] = "INVALID_TRANSCRIPT";
+        continue;
+      }
+      let timeline;
+      try {
+        timeline = this.timeline(item.speech_timeline, {
+          transcript: item.transcript,
+          translatedText: translate ? item.translated_text : "",
+          hasSpeech: item.has_speech,
+          duration: source.duration,
+          required: requireTimeline,
+        });
+      } catch (_) {
+        needsReview[id] = "MOTION_SPEECH_TIMELINE_INVALID";
+        continue;
+      }
+      accepted[id] = {
+        hasSpeech: item.has_speech,
+        transcript: item.transcript,
+        detectedLanguage: item.detected_language,
+        translatedText:
+          translate && typeof item.translated_text === "string"
+            ? item.translated_text
+            : null,
+        ...(timeline !== null && { speechTimeline: timeline }),
+      };
+    }
+    return { accepted, needsReview, errors: [...new Set(errors)] };
+  }
+}
+__publicField(MotionTranscriptContract, "BEGIN", "TOBY_MOTION_JSON_BEGIN");
+__publicField(MotionTranscriptContract, "END", "TOBY_MOTION_JSON_END");
+globalThis.MotionTranscriptContract = MotionTranscriptContract;

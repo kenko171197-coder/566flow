@@ -48,7 +48,8 @@
   }
 
   async function privateApi(providerSlug, options = {}) {
-    if (!["chatgpt", "grok", "gemini", "muse"].includes(providerSlug)) return null;
+    if (!["chatgpt", "grok", "gemini", "muse"].includes(providerSlug))
+      return null;
     try {
       const response = await chrome.runtime.sendMessage({
         action: "getProviderPrivateConfigs",
@@ -81,7 +82,9 @@
   // by listeners that registered through onInvalidated().
   chrome.storage.onChanged.addListener((changes, area) => {
     if (area !== "local") return;
-    if (Object.keys(changes).some((key) => key.startsWith("local566_config_"))) {
+    if (
+      Object.keys(changes).some((key) => key.startsWith("local566_config_"))
+    ) {
       ready = null;
       for (const listener of listeners) {
         try {

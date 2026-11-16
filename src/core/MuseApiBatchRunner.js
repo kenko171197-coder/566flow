@@ -1,1 +1,700 @@
-var __defProp=Object.defineProperty;var __defNormalProp=(obj,key,value)=>key in obj?__defProp(obj,key,{enumerable:true,configurable:true,writable:true,value}):obj[key]=value;var __publicField=(obj,key,value)=>__defNormalProp(obj,typeof key!=="symbol"?key+"":key,value);class MuseApiBatchRunner{static intended(batch){return batch?.provider==="muse"&&(batch.settingsSnapshot?.museGenMode==="api"||batch.settingsSnapshot?.museDirect===true)}static applies(batch){return this.intended(batch)&&(batch.settingsSnapshot?.museGenMode==="web"||window.MuseApiFacade.effectiveMode({museGenMode:"api"})==="api")}static control(runId){const state=this._active.get(runId);return state?{active:true,paused:state.paused}:null}static pause(runId){const state=this._active.get(runId);if(state)state.paused=true}static stop(runId){this._stops.add(runId);const state=this._active.get(runId);if(state)state.stop=true}static forgetStop(runId){this._stops.delete(runId)}static _owner(run){if(String(window.authManager?.getUser?.()?.id||"")!==run.userId||String(window._currentProjectId||"")!==String(run.projectId))throw Error("MUSE_BATCH_SCOPE_CHANGED")}static async readiness(batches){return window.MuseApiFacade.checkReadiness({entries:batches.flatMap(batch=>(batch.prompts?.length?batch.prompts:[{quantity:1}]).map(item=>({museGenMode:batch.settingsSnapshot?.museGenMode||"web",mode:batch.settingsSnapshot?.mediaType,deleteAfterGen:batch.settingsSnapshot?.deleteAfterGen===true,quantity:item.quantity??1,refs:item.refKeys||[]}))),checkWeb:()=>window.MuseSession.probeReady()})}static async direct({prompts,settings,deleteAfterGen,autoDownload,executionToken,shouldStop,onCreated,draft}){const userId=window.authManager?.getUser?.()?.id,projectId=window._currentProjectId;if(!userId||!projectId||!executionToken)throw Error("MUSE_BATCH_SCOPE_CHANGED");const id=crypto.randomUUID();await window.ProviderWebQueueStore.createRun({id,userId,projectId,provider:"muse",source:"gentab_direct",settingsSnapshot:{...draft?.settingsSnapshot,museGenMode:settings.museGenMode||"api",museDirect:settings.museGenMode==="web",chain:settings.chain||null,mediaType:settings.genType==="Video"?"video":"image",model:settings.model,ratio:settings.ratio,deleteAfterGen,autoDownload},prompts:draft?.prompts||prompts.map(text=>({text,quantity:1,refKeys:[]})),refAssets:draft?.refAssets||[]});try{const opening=onCreated?.(id);opening?.catch?.(error=>console.warn("[MuseApiBatch] batch list open failed:",error?.name||"UNKNOWN"))}catch(error){console.warn("[MuseApiBatch] batch list open failed:",error?.name||"UNKNOWN")}return this.run(id,{executionToken,shouldStop})}static async run(runId,{executionToken=null,shouldStop=()=>false}={}){if(!navigator.locks?.request)throw Error("MUSE_BATCH_LOCK_UNAVAILABLE");return navigator.locks.request(`toby-muse-api-batch:${runId}`,{ifAvailable:true},async lock=>{if(!lock)throw Error("MUSE_BATCH_ALREADY_ACTIVE");const store=window.ProviderWebQueueStore,snapshot=await store.getRun(runId),run=snapshot?.run;if(!run||!this.intended(run)||!["batch","gentab_direct"].includes(run.source))throw Error("MUSE_BATCH_SCOPE_CHANGED");this._owner(run);if(window.featureGate?.canUse?.("muse_enabled")!==true)throw Error("MUSE_FEATURE_REQUIRED");let stopped=this._stops.has(runId);const state={get stop(){return stopped||shouldStop()},set stop(value){stopped=value},paused:false};this._active.set(runId,state);const changed=()=>{window.eventBus?.emit?.("provider_web:changed",{runId,projectId:run.projectId});window.eventBus?.emit?.("execution:tracker_update",{owner:"prompts",label:"Muse Gen",provider:"muse",generationProcessId:runId,phase:this._active.has(runId)?state.stop?"stopped":state.paused?"paused":"prompt_submitting":finishPhase,current:completed+failed,total:snapshot.items.length})};const checkpoint=patch=>{this._owner(run);return store.museApiCheckpoint(runId,run.userId,run.projectId,patch)};let token=executionToken||null,completed=0,failed=0,finishPhase="error";const failedPrompts=[],errorDetails=[];try{const unsettled=run.museApiStarted===true&&run.museApiSettled!==true;const pending=snapshot.items.filter(item=>!item.hidden&&(run.selectedPromptIndex==null||item.promptIndex===run.selectedPromptIndex)&&(["QUEUED","MONITORING","NEEDS_REVIEW"].includes(item.state)||item.state==="FAILED"&&item.musePreSubmitFailure));if(!pending.length){finishPhase="completed";return{status:"success",completed:0,failed:0}}const source=run.source==="gentab_direct"?"gen":"batch_list";const settings=run.settingsSnapshot,apiMode=settings.museGenMode==="api",chain=window.MuseVideoContinuity?.enabled(settings)===true;const fresh=pending.filter(item=>(item.state==="QUEUED"||item.state==="FAILED"&&item.musePreSubmitFailure)&&!unsettled),policy=fresh.length&&apiMode?await window.MuseApiFacade.policy():null;if(chain&&fresh.length)window.MuseVideoContinuity.validate(settings,snapshot.items);for(const item of fresh){if(!String(item.prompt||"").trim())throw Error("MUSE_PROMPT_REQUIRED");if(apiMode)window.MuseApiFacade.validateInput({settings:{mode:settings.mediaType,quantity:item.quantity},refs:item.refKeys||[]},policy)}if(fresh.length&&!state.stop){const gate=executionToken?{allowed:true,token:executionToken}:await window.ExecutionGate.request("generate",fresh.length,{provider:"muse",owner:"prompts",label:"Muse batch",source:"batch_list"});if(!gate?.allowed||!gate.token)throw Error(gate?.reason||"MUSE_BATCH_ADMISSION_DENIED");token=gate.token;await checkpoint({started:true})}const previous=apiMode?await window.MuseApiFacade.listRuns():[];let chainBlocked=false;const submit=async index=>{if(chainBlocked)return;let dispatched=false;try{const item=pending[index],itemSettings={...settings,...item.settingsOverride},recovering=!fresh.includes(item),sourceId=`${runId}:${item.promptIndex}`;let result;if(recovering){const handle=previous.find(row=>row.source===source&&row.sourceId===sourceId);if(handle)result=await window.MuseApiFacade.recover(handle,{shouldStop:()=>state.stop});else result={success:false,error:"MUSE_BATCH_INTERRUPTED_REVIEW"}}else{let refs=[];for(const key of item.refKeys||[]){const asset=await store.getAsset(run.userId,run.projectId,key);if(!(asset?.blob instanceof Blob)||!asset.blob.type.startsWith("image/"))throw Error("MUSE_IMAGE_REF_ASSET_MISSING");refs.push(apiMode?{blob:asset.blob,name:asset.name}:await window.MuseVideoContinuity.imageRef(asset.blob,asset.name))}if(chain)refs=await window.MuseVideoContinuity.refs(run,item,refs,()=>state.stop);await checkpoint({promptIndex:item.promptIndex,state:"MONITORING"});changed();dispatched=true;result=await window.ProviderRegistry.get("muse").submit({prompt:item.prompt,refs,shouldStop:()=>state.stop,settings:{mode:settings.mediaType,ratio:itemSettings.ratio,model:itemSettings.model,quantity:item.quantity,museGenMode:settings.museGenMode,museModeResolved:true,source,sourceId,executionToken:token,deleteAfterGen:settings.deleteAfterGen===true}})}try{this._owner(run)}catch(error){result?.mediaUrls?.forEach(url=>URL.revokeObjectURL(url));throw error}if(!result?.success){if(result?.confirmationPending)state.paused=true;const details=(result?.errorDetails||[]).map(detail=>({...detail,promptIndex:item.promptIndex}));errorDetails.push(...details);if(!recovering&&!result?.confirmationPending&&details.length)window.eventBus?.emit?.("prompt:completed",{prompt:item.prompt,provider:"muse",gen_mode:settings.museGenMode,initial_gen_mode:settings.museGenMode,flow_api_version:null,bridge_version:result.apiHandle?.bridgeVersion||null,source,source_id:sourceId,project_id:run.projectId,model:itemSettings.model,ratio:itemSettings.ratio,media_type:settings.mediaType,prompt_count:1,quantity:item.quantity,status:"failed",error_reason:result?.error||"MUSE_BATCH_FAILED",error_details:details,result_thumbnails:[]});chainBlocked=chain;failed++;failedPrompts.push({index:item.promptIndex,prompt:item.prompt,error:result?.error||"MUSE_BATCH_FAILED",...result?.apiHandle||recovering||result?.noRetry||chain?{museApiRunId:runId,noRetry:true}:{}});await checkpoint({promptIndex:item.promptIndex,state:result?.apiHandle||recovering||result?.noRetry?"NEEDS_REVIEW":state.stop?"CANCELLED":"FAILED",error:result?.error||"MUSE_BATCH_FAILED",errorDetails:details,commandId:result?.apiHandle?.commandId});changed();return}if(!apiMode&&result.mediaType==="video")result=await window.MuseVideoContinuity.materialize(result,()=>state.stop);const commandId=result.apiHandle?.commandId||`${runId}:${item.promptIndex}`;const receipts=[];try{for(const media of result.fetchedMedia||[]){const assetKey=`muse-${apiMode?"api":"web"}:${commandId}:${media.resourceIndex}`;await store.putAsset({id:assetKey,userId:run.userId,projectId:run.projectId,runId,blob:media.blob,name:"",type:media.blob.type});let posterAssetKey;if(result.mediaType==="video"&&/^data:image\/[a-z0-9.+-]+;base64,/i.test(media.poster||"")){try{const poster=await(await fetch(media.poster)).blob();posterAssetKey=`${assetKey}:poster`;await store.putAsset({id:posterAssetKey,userId:run.userId,projectId:run.projectId,runId,blob:poster,name:"",type:poster.type})}catch(_){posterAssetKey=null}}receipts.push({identity:assetKey,assetKey,index:media.resourceIndex,mediaType:result.mediaType,...posterAssetKey?{posterAssetKey,posterFrameVersion:2}:{}})}if(!receipts.length)throw Error("MUSE_LOCAL_ASSET_MISSING");await checkpoint({promptIndex:item.promptIndex,state:"COMPLETED",commandId,resultReceipts:receipts});completed++;changed();if(!recovering)window.eventBus?.emit?.("prompt:completed",{prompt:item.prompt,provider:"muse",gen_mode:settings.museGenMode,initial_gen_mode:settings.museGenMode,flow_api_version:null,bridge_version:result.apiHandle?.bridgeVersion||null,source,source_id:sourceId,project_id:run.projectId,model:itemSettings.model,ratio:itemSettings.ratio,media_type:result.mediaType,prompt_count:1,quantity:receipts.length,result_thumbnails:receipts.map(()=>({thumbnail:null,type:result.mediaType,file_name:""})),auto_download:settings.autoDownload===true});let downloadsOk=settings.autoDownload!==true||window.featureGate?.canUse?.("auto_download")===true;if(settings.autoDownload===true&&downloadsOk&&!state.stop){try{await store.setDownloadState(item.id,"downloading");const download=await window.DownloadHelper.getSettings();for(const[index2,url]of result.mediaUrls.entries()){if(state.stop){downloadsOk=false;break}const filename=window.DownloadHelper.buildFilename({...download,prompt:item.prompt,index:item.promptIndex+index2+1,taskName:run.batchName||null,ext:result.mediaType==="video"?"mp4":"jpg"});if(!(await(apiMode?window.MuseApiFacade.download(result,url,filename,settings.deleteAfterGen===true):window.MessageBridge.museDownloadNative(result.tabId,filename,url,settings.deleteAfterGen===true?6e5:12e4)))?.success){downloadsOk=false;break}}await store.setDownloadState(item.id,downloadsOk?"completed":"failed")}catch(_){downloadsOk=false;await store.setDownloadState(item.id,"failed","MUSE_DOWNLOAD_FAILED").catch(()=>{});console.warn("[MuseApiBatch]",{runId,stage:"download",code:"MUSE_DOWNLOAD_FAILED"})}changed()}if(settings.deleteAfterGen===true&&downloadsOk&&!state.stop){try{if(!(await(apiMode?window.MuseApiFacade.cleanup(result):window.MuseSession.deleteCurrentConversation({tabId:result.tabId})))?.success)console.warn("[MuseApiBatch]",{runId,stage:"cleanup",code:"MUSE_CLEANUP_UNCONFIRMED"})}catch(_){console.warn("[MuseApiBatch]",{runId,stage:"cleanup",code:"MUSE_CLEANUP_UNCONFIRMED"})}}}finally{if(apiMode)result.mediaUrls?.forEach(url=>URL.revokeObjectURL(url))}}catch(error){const item=pending[index];chainBlocked=chain;failed++;errorDetails.push(...(error?.errorDetails||[]).map(detail=>({...detail,promptIndex:item.promptIndex})));const code=error?.code||error?.message||"MUSE_BATCH_FAILED";console.warn("[MuseBatchFailure]",{runId,promptIndex:item.promptIndex,stage:dispatched?"result_or_submit":"preparation",code:/^[A-Z][A-Z0-9_:-]{0,99}$/.test(String(code))?code:"MUSE_BATCH_FAILED"});failedPrompts.push({index:item.promptIndex,prompt:item.prompt,error:code,noRetry:dispatched||chain,...chain?{museApiRunId:runId}:{}});await checkpoint({promptIndex:item.promptIndex,state:dispatched?"NEEDS_REVIEW":state.stop?"CANCELLED":"FAILED",preSubmitFailure:!dispatched&&chain&&!state.stop,error:code});changed()}};if(chain||!apiMode){for(let index=0;index<pending.length&&!state.stop&&!state.paused&&!chainBlocked;index++)await submit(index)}else await window.MuseApiFacade.runBatch(pending.length,submit,{mode:settings.mediaType,shouldStop:()=>state.stop||state.paused});if(token){await window.ExecutionGate.complete(token,completed<fresh.length?"partial":"success",{successful_count:completed},{waitForSettlement:true});token=null;await checkpoint({reservationSettled:true})}if(state.stop)for(const item of(await store.getRun(runId)).items.filter(item2=>item2.state==="QUEUED"))await checkpoint({promptIndex:item.promptIndex,state:"CANCELLED",error:"USER_CANCELLED"});const remaining=(await store.getRun(runId)).items.some(item=>(run.selectedPromptIndex==null||item.promptIndex===run.selectedPromptIndex)&&(["QUEUED","MONITORING","NEEDS_REVIEW"].includes(item.state)||item.state==="FAILED"&&item.musePreSubmitFailure));if(!remaining)await checkpoint({settled:true});finishPhase=state.stop?"stopped":state.paused?"paused":remaining?"error":failed?"error":"completed";return{status:state.stop?"stopped":state.paused?"paused":remaining?"needs_review":failed?"failed":"success",completed,failed,stopped:state.stop,failedPrompts,errorDetails,urls:[],executionSettled:!!executionToken}}finally{if(token)await window.ExecutionGate.complete(token,"failed",{successful_count:completed},{waitForSettlement:true}).catch(()=>{});this._active.delete(runId);this._stops.delete(runId);changed()}})}}__publicField(MuseApiBatchRunner,"_active",new Map);__publicField(MuseApiBatchRunner,"_stops",new Set);window.MuseApiBatchRunner=MuseApiBatchRunner;
+var __defProp = Object.defineProperty;
+var __defNormalProp = (obj, key, value) =>
+  key in obj
+    ? __defProp(obj, key, {
+        enumerable: true,
+        configurable: true,
+        writable: true,
+        value,
+      })
+    : (obj[key] = value);
+var __publicField = (obj, key, value) =>
+  __defNormalProp(obj, typeof key !== "symbol" ? key + "" : key, value);
+class MuseApiBatchRunner {
+  static intended(batch) {
+    return (
+      batch?.provider === "muse" &&
+      (batch.settingsSnapshot?.museGenMode === "api" ||
+        batch.settingsSnapshot?.museDirect === true)
+    );
+  }
+  static applies(batch) {
+    return (
+      this.intended(batch) &&
+      (batch.settingsSnapshot?.museGenMode === "web" ||
+        window.MuseApiFacade.effectiveMode({ museGenMode: "api" }) === "api")
+    );
+  }
+  static control(runId) {
+    const state = this._active.get(runId);
+    return state ? { active: true, paused: state.paused } : null;
+  }
+  static pause(runId) {
+    const state = this._active.get(runId);
+    if (state) state.paused = true;
+  }
+  static stop(runId) {
+    this._stops.add(runId);
+    const state = this._active.get(runId);
+    if (state) state.stop = true;
+  }
+  static forgetStop(runId) {
+    this._stops.delete(runId);
+  }
+  static _owner(run) {
+    if (
+      String(window.authManager?.getUser?.()?.id || "") !== run.userId ||
+      String(window._currentProjectId || "") !== String(run.projectId)
+    )
+      throw Error("MUSE_BATCH_SCOPE_CHANGED");
+  }
+  static async readiness(batches) {
+    return window.MuseApiFacade.checkReadiness({
+      entries: batches.flatMap((batch) =>
+        (batch.prompts?.length ? batch.prompts : [{ quantity: 1 }]).map(
+          (item) => ({
+            museGenMode: batch.settingsSnapshot?.museGenMode || "web",
+            mode: batch.settingsSnapshot?.mediaType,
+            deleteAfterGen: batch.settingsSnapshot?.deleteAfterGen === true,
+            quantity: item.quantity ?? 1,
+            refs: item.refKeys || [],
+          }),
+        ),
+      ),
+      checkWeb: () => window.MuseSession.probeReady(),
+    });
+  }
+  static async direct({
+    prompts,
+    settings,
+    deleteAfterGen,
+    autoDownload,
+    executionToken,
+    shouldStop,
+    onCreated,
+    draft,
+  }) {
+    const userId = window.authManager?.getUser?.()?.id,
+      projectId = window._currentProjectId;
+    if (!userId || !projectId || !executionToken)
+      throw Error("MUSE_BATCH_SCOPE_CHANGED");
+    const id = crypto.randomUUID();
+    await window.ProviderWebQueueStore.createRun({
+      id,
+      userId,
+      projectId,
+      provider: "muse",
+      source: "gentab_direct",
+      settingsSnapshot: {
+        ...draft?.settingsSnapshot,
+        museGenMode: settings.museGenMode || "api",
+        museDirect: settings.museGenMode === "web",
+        chain: settings.chain || null,
+        mediaType: settings.genType === "Video" ? "video" : "image",
+        model: settings.model,
+        ratio: settings.ratio,
+        deleteAfterGen,
+        autoDownload,
+      },
+      prompts:
+        draft?.prompts ||
+        prompts.map((text) => ({ text, quantity: 1, refKeys: [] })),
+      refAssets: draft?.refAssets || [],
+    });
+    try {
+      const opening = onCreated?.(id);
+      opening?.catch?.((error) =>
+        console.warn(
+          "[MuseApiBatch] batch list open failed:",
+          error?.name || "UNKNOWN",
+        ),
+      );
+    } catch (error) {
+      console.warn(
+        "[MuseApiBatch] batch list open failed:",
+        error?.name || "UNKNOWN",
+      );
+    }
+    return this.run(id, { executionToken, shouldStop });
+  }
+  static async run(
+    runId,
+    { executionToken = null, shouldStop = () => false } = {},
+  ) {
+    if (!navigator.locks?.request) throw Error("MUSE_BATCH_LOCK_UNAVAILABLE");
+    return navigator.locks.request(
+      `toby-muse-api-batch:${runId}`,
+      { ifAvailable: true },
+      async (lock) => {
+        if (!lock) throw Error("MUSE_BATCH_ALREADY_ACTIVE");
+        const store = window.ProviderWebQueueStore,
+          snapshot = await store.getRun(runId),
+          run = snapshot?.run;
+        if (
+          !run ||
+          !this.intended(run) ||
+          !["batch", "gentab_direct"].includes(run.source)
+        )
+          throw Error("MUSE_BATCH_SCOPE_CHANGED");
+        this._owner(run);
+        if (window.featureGate?.canUse?.("muse_enabled") !== true)
+          throw Error("MUSE_FEATURE_REQUIRED");
+        let stopped = this._stops.has(runId);
+        const state = {
+          get stop() {
+            return stopped || shouldStop();
+          },
+          set stop(value) {
+            stopped = value;
+          },
+          paused: false,
+        };
+        this._active.set(runId, state);
+        const changed = () => {
+          window.eventBus?.emit?.("provider_web:changed", {
+            runId,
+            projectId: run.projectId,
+          });
+          window.eventBus?.emit?.("execution:tracker_update", {
+            owner: "prompts",
+            label: "Muse Gen",
+            provider: "muse",
+            generationProcessId: runId,
+            phase: this._active.has(runId)
+              ? state.stop
+                ? "stopped"
+                : state.paused
+                  ? "paused"
+                  : "prompt_submitting"
+              : finishPhase,
+            current: completed + failed,
+            total: snapshot.items.length,
+          });
+        };
+        const checkpoint = (patch) => {
+          this._owner(run);
+          return store.museApiCheckpoint(
+            runId,
+            run.userId,
+            run.projectId,
+            patch,
+          );
+        };
+        let token = executionToken || null,
+          completed = 0,
+          failed = 0,
+          finishPhase = "error";
+        const failedPrompts = [],
+          errorDetails = [];
+        try {
+          const unsettled =
+            run.museApiStarted === true && run.museApiSettled !== true;
+          const pending = snapshot.items.filter(
+            (item) =>
+              !item.hidden &&
+              (run.selectedPromptIndex == null ||
+                item.promptIndex === run.selectedPromptIndex) &&
+              (["QUEUED", "MONITORING", "NEEDS_REVIEW"].includes(item.state) ||
+                (item.state === "FAILED" && item.musePreSubmitFailure)),
+          );
+          if (!pending.length) {
+            finishPhase = "completed";
+            return { status: "success", completed: 0, failed: 0 };
+          }
+          const source = run.source === "gentab_direct" ? "gen" : "batch_list";
+          const settings = run.settingsSnapshot,
+            apiMode = settings.museGenMode === "api",
+            chain = window.MuseVideoContinuity?.enabled(settings) === true;
+          const fresh = pending.filter(
+              (item) =>
+                (item.state === "QUEUED" ||
+                  (item.state === "FAILED" && item.musePreSubmitFailure)) &&
+                !unsettled,
+            ),
+            policy =
+              fresh.length && apiMode
+                ? await window.MuseApiFacade.policy()
+                : null;
+          if (chain && fresh.length)
+            window.MuseVideoContinuity.validate(settings, snapshot.items);
+          for (const item of fresh) {
+            if (!String(item.prompt || "").trim())
+              throw Error("MUSE_PROMPT_REQUIRED");
+            if (apiMode)
+              window.MuseApiFacade.validateInput(
+                {
+                  settings: {
+                    mode: settings.mediaType,
+                    quantity: item.quantity,
+                  },
+                  refs: item.refKeys || [],
+                },
+                policy,
+              );
+          }
+          if (fresh.length && !state.stop) {
+            const gate = executionToken
+              ? { allowed: true, token: executionToken }
+              : await window.ExecutionGate.request("generate", fresh.length, {
+                  provider: "muse",
+                  owner: "prompts",
+                  label: "Muse batch",
+                  source: "batch_list",
+                });
+            if (!gate?.allowed || !gate.token)
+              throw Error(gate?.reason || "MUSE_BATCH_ADMISSION_DENIED");
+            token = gate.token;
+            await checkpoint({ started: true });
+          }
+          const previous = apiMode ? await window.MuseApiFacade.listRuns() : [];
+          let chainBlocked = false;
+          const submit = async (index) => {
+            if (chainBlocked) return;
+            let dispatched = false;
+            try {
+              const item = pending[index],
+                itemSettings = { ...settings, ...item.settingsOverride },
+                recovering = !fresh.includes(item),
+                sourceId = `${runId}:${item.promptIndex}`;
+              let result;
+              if (recovering) {
+                const handle = previous.find(
+                  (row) => row.source === source && row.sourceId === sourceId,
+                );
+                if (handle)
+                  result = await window.MuseApiFacade.recover(handle, {
+                    shouldStop: () => state.stop,
+                  });
+                else
+                  result = {
+                    success: false,
+                    error: "MUSE_BATCH_INTERRUPTED_REVIEW",
+                  };
+              } else {
+                let refs = [];
+                for (const key of item.refKeys || []) {
+                  const asset = await store.getAsset(
+                    run.userId,
+                    run.projectId,
+                    key,
+                  );
+                  if (
+                    !(asset?.blob instanceof Blob) ||
+                    !asset.blob.type.startsWith("image/")
+                  )
+                    throw Error("MUSE_IMAGE_REF_ASSET_MISSING");
+                  refs.push(
+                    apiMode
+                      ? { blob: asset.blob, name: asset.name }
+                      : await window.MuseVideoContinuity.imageRef(
+                          asset.blob,
+                          asset.name,
+                        ),
+                  );
+                }
+                if (chain)
+                  refs = await window.MuseVideoContinuity.refs(
+                    run,
+                    item,
+                    refs,
+                    () => state.stop,
+                  );
+                await checkpoint({
+                  promptIndex: item.promptIndex,
+                  state: "MONITORING",
+                });
+                changed();
+                dispatched = true;
+                result = await window.ProviderRegistry.get("muse").submit({
+                  prompt: item.prompt,
+                  refs,
+                  shouldStop: () => state.stop,
+                  settings: {
+                    mode: settings.mediaType,
+                    ratio: itemSettings.ratio,
+                    model: itemSettings.model,
+                    quantity: item.quantity,
+                    museGenMode: settings.museGenMode,
+                    museModeResolved: true,
+                    source,
+                    sourceId,
+                    executionToken: token,
+                    deleteAfterGen: settings.deleteAfterGen === true,
+                  },
+                });
+              }
+              try {
+                this._owner(run);
+              } catch (error) {
+                result?.mediaUrls?.forEach((url) => URL.revokeObjectURL(url));
+                throw error;
+              }
+              if (!result?.success) {
+                if (result?.confirmationPending) state.paused = true;
+                const details = (result?.errorDetails || []).map((detail) => ({
+                  ...detail,
+                  promptIndex: item.promptIndex,
+                }));
+                errorDetails.push(...details);
+                if (
+                  !recovering &&
+                  !result?.confirmationPending &&
+                  details.length
+                )
+                  window.eventBus?.emit?.("prompt:completed", {
+                    prompt: item.prompt,
+                    provider: "muse",
+                    gen_mode: settings.museGenMode,
+                    initial_gen_mode: settings.museGenMode,
+                    flow_api_version: null,
+                    bridge_version: result.apiHandle?.bridgeVersion || null,
+                    source,
+                    source_id: sourceId,
+                    project_id: run.projectId,
+                    model: itemSettings.model,
+                    ratio: itemSettings.ratio,
+                    media_type: settings.mediaType,
+                    prompt_count: 1,
+                    quantity: item.quantity,
+                    status: "failed",
+                    error_reason: result?.error || "MUSE_BATCH_FAILED",
+                    error_details: details,
+                    result_thumbnails: [],
+                  });
+                chainBlocked = chain;
+                failed++;
+                failedPrompts.push({
+                  index: item.promptIndex,
+                  prompt: item.prompt,
+                  error: result?.error || "MUSE_BATCH_FAILED",
+                  ...(result?.apiHandle ||
+                  recovering ||
+                  result?.noRetry ||
+                  chain
+                    ? { museApiRunId: runId, noRetry: true }
+                    : {}),
+                });
+                await checkpoint({
+                  promptIndex: item.promptIndex,
+                  state:
+                    result?.apiHandle || recovering || result?.noRetry
+                      ? "NEEDS_REVIEW"
+                      : state.stop
+                        ? "CANCELLED"
+                        : "FAILED",
+                  error: result?.error || "MUSE_BATCH_FAILED",
+                  errorDetails: details,
+                  commandId: result?.apiHandle?.commandId,
+                });
+                changed();
+                return;
+              }
+              if (!apiMode && result.mediaType === "video")
+                result = await window.MuseVideoContinuity.materialize(
+                  result,
+                  () => state.stop,
+                );
+              const commandId =
+                result.apiHandle?.commandId || `${runId}:${item.promptIndex}`;
+              const receipts = [];
+              try {
+                for (const media of result.fetchedMedia || []) {
+                  const assetKey = `muse-${apiMode ? "api" : "web"}:${commandId}:${media.resourceIndex}`;
+                  await store.putAsset({
+                    id: assetKey,
+                    userId: run.userId,
+                    projectId: run.projectId,
+                    runId,
+                    blob: media.blob,
+                    name: "",
+                    type: media.blob.type,
+                  });
+                  let posterAssetKey;
+                  if (
+                    result.mediaType === "video" &&
+                    /^data:image\/[a-z0-9.+-]+;base64,/i.test(
+                      media.poster || "",
+                    )
+                  ) {
+                    try {
+                      const poster = await (await fetch(media.poster)).blob();
+                      posterAssetKey = `${assetKey}:poster`;
+                      await store.putAsset({
+                        id: posterAssetKey,
+                        userId: run.userId,
+                        projectId: run.projectId,
+                        runId,
+                        blob: poster,
+                        name: "",
+                        type: poster.type,
+                      });
+                    } catch (_) {
+                      posterAssetKey = null;
+                    }
+                  }
+                  receipts.push({
+                    identity: assetKey,
+                    assetKey,
+                    index: media.resourceIndex,
+                    mediaType: result.mediaType,
+                    ...(posterAssetKey
+                      ? { posterAssetKey, posterFrameVersion: 2 }
+                      : {}),
+                  });
+                }
+                if (!receipts.length) throw Error("MUSE_LOCAL_ASSET_MISSING");
+                await checkpoint({
+                  promptIndex: item.promptIndex,
+                  state: "COMPLETED",
+                  commandId,
+                  resultReceipts: receipts,
+                });
+                completed++;
+                changed();
+                if (!recovering)
+                  window.eventBus?.emit?.("prompt:completed", {
+                    prompt: item.prompt,
+                    provider: "muse",
+                    gen_mode: settings.museGenMode,
+                    initial_gen_mode: settings.museGenMode,
+                    flow_api_version: null,
+                    bridge_version: result.apiHandle?.bridgeVersion || null,
+                    source,
+                    source_id: sourceId,
+                    project_id: run.projectId,
+                    model: itemSettings.model,
+                    ratio: itemSettings.ratio,
+                    media_type: result.mediaType,
+                    prompt_count: 1,
+                    quantity: receipts.length,
+                    result_thumbnails: receipts.map(() => ({
+                      thumbnail: null,
+                      type: result.mediaType,
+                      file_name: "",
+                    })),
+                    auto_download: settings.autoDownload === true,
+                  });
+                let downloadsOk =
+                  settings.autoDownload !== true ||
+                  window.featureGate?.canUse?.("auto_download") === true;
+                if (
+                  settings.autoDownload === true &&
+                  downloadsOk &&
+                  !state.stop
+                ) {
+                  try {
+                    await store.setDownloadState(item.id, "downloading");
+                    const download = await window.DownloadHelper.getSettings();
+                    for (const [index2, url] of result.mediaUrls.entries()) {
+                      if (state.stop) {
+                        downloadsOk = false;
+                        break;
+                      }
+                      const filename = window.DownloadHelper.buildFilename({
+                        ...download,
+                        prompt: item.prompt,
+                        index: item.promptIndex + index2 + 1,
+                        taskName: run.batchName || null,
+                        ext: result.mediaType === "video" ? "mp4" : "jpg",
+                      });
+                      if (
+                        !(
+                          await (apiMode
+                            ? window.MuseApiFacade.download(
+                                result,
+                                url,
+                                filename,
+                                settings.deleteAfterGen === true,
+                              )
+                            : window.MessageBridge.museDownloadNative(
+                                result.tabId,
+                                filename,
+                                url,
+                                settings.deleteAfterGen === true ? 6e5 : 12e4,
+                              ))
+                        )?.success
+                      ) {
+                        downloadsOk = false;
+                        break;
+                      }
+                    }
+                    await store.setDownloadState(
+                      item.id,
+                      downloadsOk ? "completed" : "failed",
+                    );
+                  } catch (_) {
+                    downloadsOk = false;
+                    await store
+                      .setDownloadState(
+                        item.id,
+                        "failed",
+                        "MUSE_DOWNLOAD_FAILED",
+                      )
+                      .catch(() => {});
+                    console.warn("[MuseApiBatch]", {
+                      runId,
+                      stage: "download",
+                      code: "MUSE_DOWNLOAD_FAILED",
+                    });
+                  }
+                  changed();
+                }
+                if (
+                  settings.deleteAfterGen === true &&
+                  downloadsOk &&
+                  !state.stop
+                ) {
+                  try {
+                    if (
+                      !(
+                        await (apiMode
+                          ? window.MuseApiFacade.cleanup(result)
+                          : window.MuseSession.deleteCurrentConversation({
+                              tabId: result.tabId,
+                            }))
+                      )?.success
+                    )
+                      console.warn("[MuseApiBatch]", {
+                        runId,
+                        stage: "cleanup",
+                        code: "MUSE_CLEANUP_UNCONFIRMED",
+                      });
+                  } catch (_) {
+                    console.warn("[MuseApiBatch]", {
+                      runId,
+                      stage: "cleanup",
+                      code: "MUSE_CLEANUP_UNCONFIRMED",
+                    });
+                  }
+                }
+              } finally {
+                if (apiMode)
+                  result.mediaUrls?.forEach((url) => URL.revokeObjectURL(url));
+              }
+            } catch (error) {
+              const item = pending[index];
+              chainBlocked = chain;
+              failed++;
+              errorDetails.push(
+                ...(error?.errorDetails || []).map((detail) => ({
+                  ...detail,
+                  promptIndex: item.promptIndex,
+                })),
+              );
+              const code = error?.code || error?.message || "MUSE_BATCH_FAILED";
+              console.warn("[MuseBatchFailure]", {
+                runId,
+                promptIndex: item.promptIndex,
+                stage: dispatched ? "result_or_submit" : "preparation",
+                code: /^[A-Z][A-Z0-9_:-]{0,99}$/.test(String(code))
+                  ? code
+                  : "MUSE_BATCH_FAILED",
+              });
+              failedPrompts.push({
+                index: item.promptIndex,
+                prompt: item.prompt,
+                error: code,
+                noRetry: dispatched || chain,
+                ...(chain ? { museApiRunId: runId } : {}),
+              });
+              await checkpoint({
+                promptIndex: item.promptIndex,
+                state: dispatched
+                  ? "NEEDS_REVIEW"
+                  : state.stop
+                    ? "CANCELLED"
+                    : "FAILED",
+                preSubmitFailure: !dispatched && chain && !state.stop,
+                error: code,
+              });
+              changed();
+            }
+          };
+          if (chain || !apiMode) {
+            for (
+              let index = 0;
+              index < pending.length &&
+              !state.stop &&
+              !state.paused &&
+              !chainBlocked;
+              index++
+            )
+              await submit(index);
+          } else
+            await window.MuseApiFacade.runBatch(pending.length, submit, {
+              mode: settings.mediaType,
+              shouldStop: () => state.stop || state.paused,
+            });
+          if (token) {
+            await window.ExecutionGate.complete(
+              token,
+              completed < fresh.length ? "partial" : "success",
+              { successful_count: completed },
+              { waitForSettlement: true },
+            );
+            token = null;
+            await checkpoint({ reservationSettled: true });
+          }
+          if (state.stop)
+            for (const item of (await store.getRun(runId)).items.filter(
+              (item2) => item2.state === "QUEUED",
+            ))
+              await checkpoint({
+                promptIndex: item.promptIndex,
+                state: "CANCELLED",
+                error: "USER_CANCELLED",
+              });
+          const remaining = (await store.getRun(runId)).items.some(
+            (item) =>
+              (run.selectedPromptIndex == null ||
+                item.promptIndex === run.selectedPromptIndex) &&
+              (["QUEUED", "MONITORING", "NEEDS_REVIEW"].includes(item.state) ||
+                (item.state === "FAILED" && item.musePreSubmitFailure)),
+          );
+          if (!remaining) await checkpoint({ settled: true });
+          finishPhase = state.stop
+            ? "stopped"
+            : state.paused
+              ? "paused"
+              : remaining
+                ? "error"
+                : failed
+                  ? "error"
+                  : "completed";
+          return {
+            status: state.stop
+              ? "stopped"
+              : state.paused
+                ? "paused"
+                : remaining
+                  ? "needs_review"
+                  : failed
+                    ? "failed"
+                    : "success",
+            completed,
+            failed,
+            stopped: state.stop,
+            failedPrompts,
+            errorDetails,
+            urls: [],
+            executionSettled: !!executionToken,
+          };
+        } finally {
+          if (token)
+            await window.ExecutionGate.complete(
+              token,
+              "failed",
+              { successful_count: completed },
+              { waitForSettlement: true },
+            ).catch(() => {});
+          this._active.delete(runId);
+          this._stops.delete(runId);
+          changed();
+        }
+      },
+    );
+  }
+}
+__publicField(MuseApiBatchRunner, "_active", new Map());
+__publicField(MuseApiBatchRunner, "_stops", new Set());
+window.MuseApiBatchRunner = MuseApiBatchRunner;

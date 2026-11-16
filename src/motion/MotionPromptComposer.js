@@ -1,1 +1,147 @@
-var __defProp=Object.defineProperty;var __defNormalProp=(obj,key,value)=>key in obj?__defProp(obj,key,{enumerable:true,configurable:true,writable:true,value}):obj[key]=value;var __publicField=(obj,key,value)=>__defNormalProp(obj,typeof key!=="symbol"?key+"":key,value);class MotionPromptComposer{static render(template,values){if(typeof template!=="string"||!template.trim()||!values||typeof values!=="object"){throw new Error("MOTION_TEMPLATE_INVALID")}return template.replace(/\{([A-Za-z_][A-Za-z0-9_]*)\}/g,(_match,key)=>{if(!this.VARIABLES.has(key))throw new Error("MOTION_TEMPLATE_VARIABLE_UNKNOWN");if(!Object.hasOwn(values,key)||values[key]===null||values[key]===void 0){throw new Error("MOTION_TEMPLATE_VARIABLE_MISSING")}if(typeof values[key]!=="string"&&typeof values[key]!=="number"){throw new Error("MOTION_TEMPLATE_VALUE_INVALID")}return String(values[key])})}static delivery(profile,voiceMode="character"){if(!["character","lip_sync","narration"].includes(voiceMode))throw new Error("MOTION_VOICE_MODE_INVALID");if(profile?.delivery_prompts){const selected=profile.delivery_prompts[voiceMode];if(!selected)throw new Error("MOTION_VOICE_STYLE_PROMPT_UNAVAILABLE");return selected}if(profile?.prompt_variant||voiceMode==="lip_sync")throw new Error("MOTION_VOICE_STYLE_PROMPT_UNAVAILABLE");return{voice:profile?.prompts?.[voiceMode==="narration"?"voice_narration_addon":"voice_addon"],subtitle:profile?.prompts?.subtitle_addon}}static hasVoiceStyle(profile,voiceMode){try{const template=this.delivery(profile,voiceMode).voice;return typeof template==="string"&&!!template.trim()}catch(_){return false}}static motion(profile,values,{voice=false,subtitle=false,hasSpeech=false,hasBackgroundRefs=false,characterCount=1,voiceMode="character",continuity=false}={}){const prompts=profile?.prompts;if(!prompts||!Number.isSafeInteger(profile.revision)||profile.revision<1){throw new Error("MOTION_PROFILE_UNPINNED")}if(characterCount!==1&&characterCount!==2)throw new Error("MOTION_CHARACTER_COUNT_INVALID");if(characterCount===2&&profile.settings?.show_two_characters!==true)throw new Error("MOTION_TWO_CHARACTERS_DISABLED");const key=characterCount===2?hasBackgroundRefs?"motion_two_characters_background":"motion_two_characters":hasBackgroundRefs?"motion_character_background":"motion_character";if(characterCount===2&&!prompts[key]?.trim())throw new Error("MOTION_TWO_CHARACTER_PROMPT_REQUIRED");const sections=[this.render(prompts[key],values)];if(continuity)sections.push(this.render(prompts.continuity_addon,values));const delivery=hasSpeech&&(voice||subtitle)?this.delivery(profile,voiceMode):null;if(hasSpeech&&voice){const template=delivery.voice;if(voiceMode==="narration"&&!template?.trim())throw new Error("MOTION_NARRATION_PROMPT_UNAVAILABLE");if(!template?.trim())throw new Error("MOTION_VOICE_STYLE_PROMPT_UNAVAILABLE");sections.push(this.render(template,values))}if(hasSpeech&&subtitle)sections.push(this.render(delivery.subtitle,values));return{profileKey:profile.profile_key,revision:profile.revision,text:sections.join("\n\n")}}}__publicField(MotionPromptComposer,"VARIABLES",new Set(["audio_manifest","source_motion_summary","transcript","translated_text","target_language","character_refs","background_refs","character_1_ref","character_2_ref","voice_slug","voice_description","ratio","clip_duration","frame_index","frame_count","continuity_ref","speech_timeline"]));globalThis.MotionPromptComposer=MotionPromptComposer;
+var __defProp = Object.defineProperty;
+var __defNormalProp = (obj, key, value) =>
+  key in obj
+    ? __defProp(obj, key, {
+        enumerable: true,
+        configurable: true,
+        writable: true,
+        value,
+      })
+    : (obj[key] = value);
+var __publicField = (obj, key, value) =>
+  __defNormalProp(obj, typeof key !== "symbol" ? key + "" : key, value);
+class MotionPromptComposer {
+  static render(template, values) {
+    if (
+      typeof template !== "string" ||
+      !template.trim() ||
+      !values ||
+      typeof values !== "object"
+    ) {
+      throw new Error("MOTION_TEMPLATE_INVALID");
+    }
+    return template.replace(/\{([A-Za-z_][A-Za-z0-9_]*)\}/g, (_match, key) => {
+      if (!this.VARIABLES.has(key))
+        throw new Error("MOTION_TEMPLATE_VARIABLE_UNKNOWN");
+      if (
+        !Object.hasOwn(values, key) ||
+        values[key] === null ||
+        values[key] === void 0
+      ) {
+        throw new Error("MOTION_TEMPLATE_VARIABLE_MISSING");
+      }
+      if (typeof values[key] !== "string" && typeof values[key] !== "number") {
+        throw new Error("MOTION_TEMPLATE_VALUE_INVALID");
+      }
+      return String(values[key]);
+    });
+  }
+  static delivery(profile, voiceMode = "character") {
+    if (!["character", "lip_sync", "narration"].includes(voiceMode))
+      throw new Error("MOTION_VOICE_MODE_INVALID");
+    if (profile?.delivery_prompts) {
+      const selected = profile.delivery_prompts[voiceMode];
+      if (!selected) throw new Error("MOTION_VOICE_STYLE_PROMPT_UNAVAILABLE");
+      return selected;
+    }
+    if (profile?.prompt_variant || voiceMode === "lip_sync")
+      throw new Error("MOTION_VOICE_STYLE_PROMPT_UNAVAILABLE");
+    return {
+      voice:
+        profile?.prompts?.[
+          voiceMode === "narration" ? "voice_narration_addon" : "voice_addon"
+        ],
+      subtitle: profile?.prompts?.subtitle_addon,
+    };
+  }
+  static hasVoiceStyle(profile, voiceMode) {
+    try {
+      const template = this.delivery(profile, voiceMode).voice;
+      return typeof template === "string" && !!template.trim();
+    } catch (_) {
+      return false;
+    }
+  }
+  static motion(
+    profile,
+    values,
+    {
+      voice = false,
+      subtitle = false,
+      hasSpeech = false,
+      hasBackgroundRefs = false,
+      characterCount = 1,
+      voiceMode = "character",
+      continuity = false,
+    } = {},
+  ) {
+    const prompts = profile?.prompts;
+    if (
+      !prompts ||
+      !Number.isSafeInteger(profile.revision) ||
+      profile.revision < 1
+    ) {
+      throw new Error("MOTION_PROFILE_UNPINNED");
+    }
+    if (characterCount !== 1 && characterCount !== 2)
+      throw new Error("MOTION_CHARACTER_COUNT_INVALID");
+    if (characterCount === 2 && profile.settings?.show_two_characters !== true)
+      throw new Error("MOTION_TWO_CHARACTERS_DISABLED");
+    const key =
+      characterCount === 2
+        ? hasBackgroundRefs
+          ? "motion_two_characters_background"
+          : "motion_two_characters"
+        : hasBackgroundRefs
+          ? "motion_character_background"
+          : "motion_character";
+    if (characterCount === 2 && !prompts[key]?.trim())
+      throw new Error("MOTION_TWO_CHARACTER_PROMPT_REQUIRED");
+    const sections = [this.render(prompts[key], values)];
+    if (continuity)
+      sections.push(this.render(prompts.continuity_addon, values));
+    const delivery =
+      hasSpeech && (voice || subtitle)
+        ? this.delivery(profile, voiceMode)
+        : null;
+    if (hasSpeech && voice) {
+      const template = delivery.voice;
+      if (voiceMode === "narration" && !template?.trim())
+        throw new Error("MOTION_NARRATION_PROMPT_UNAVAILABLE");
+      if (!template?.trim())
+        throw new Error("MOTION_VOICE_STYLE_PROMPT_UNAVAILABLE");
+      sections.push(this.render(template, values));
+    }
+    if (hasSpeech && subtitle)
+      sections.push(this.render(delivery.subtitle, values));
+    return {
+      profileKey: profile.profile_key,
+      revision: profile.revision,
+      text: sections.join("\n\n"),
+    };
+  }
+}
+__publicField(
+  MotionPromptComposer,
+  "VARIABLES",
+  new Set([
+    "audio_manifest",
+    "source_motion_summary",
+    "transcript",
+    "translated_text",
+    "target_language",
+    "character_refs",
+    "background_refs",
+    "character_1_ref",
+    "character_2_ref",
+    "voice_slug",
+    "voice_description",
+    "ratio",
+    "clip_duration",
+    "frame_index",
+    "frame_count",
+    "continuity_ref",
+    "speech_timeline",
+  ]),
+);
+globalThis.MotionPromptComposer = MotionPromptComposer;

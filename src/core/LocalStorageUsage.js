@@ -1,1 +1,533 @@
-class LocalStorageUsage{static estimate(value){if(value==null)return 0;let binary=0;const json=JSON.stringify(value,(_key,part)=>{if(part instanceof Blob){binary+=part.size;return null}if(part instanceof ArrayBuffer||ArrayBuffer.isView(part)){binary+=part.byteLength;return null}return part});return binary+new Blob([json||""]).size}static format(bytes){if(bytes<1024)return`${bytes} B`;if(bytes<1048576)return`${(bytes/1024).toFixed(1)} KB`;if(bytes<1073741824)return`${(bytes/1048576).toFixed(2)} MB`;return`${(bytes/1073741824).toFixed(2)} GB`}static async existingDb(name){return new Promise((resolve,reject)=>{const request=indexedDB.open(name);request.onupgradeneeded=()=>request.transaction.abort();request.onsuccess=()=>resolve(request.result);request.onerror=()=>request.error?.name==="AbortError"?resolve(null):reject(request.error||new Error("STORAGE_SCAN_OPEN_FAILED"));request.onblocked=()=>reject(new Error("STORAGE_SCAN_BLOCKED"))})}static async each(db,storeName,visit){if(!db?.objectStoreNames.contains(storeName))return;await new Promise((resolve,reject)=>{const tx=db.transaction(storeName,"readonly");const request=tx.objectStore(storeName).openCursor();request.onsuccess=()=>{const cursor=request.result;if(!cursor)return;try{visit(cursor.value);cursor.continue()}catch(error){tx.abort();reject(error)}};tx.oncomplete=resolve;tx.onerror=tx.onabort=()=>reject(tx.error||new Error("STORAGE_SCAN_FAILED"))})}static async scanProvider(){const result={batch:0,workflow:0,other:0,batchCount:0,workflowCount:0,otherCount:0,byWorkflow:new Map,batchByProvider:new Map,otherDetails:[]};const db=await this.existingDb("tobyflow_provider_web_batches");if(!db)return result;try{const runs=new Map;const batches=new Map;const other=new Map;const activeLeaseUsers=new Set;await this.each(db,"runs",run=>runs.set(run.id,run));await this.each(db,"batches",batch=>batches.set(batch.id,batch));for(const storeName of Array.from(db.objectStoreNames)){await this.each(db,storeName,value=>{const size=this.estimate(value);const{zone,workflowId,provider}=this.classifyProvider(storeName,value,runs,batches);result[zone]+=size;result[`${zone}Count`]++;if(zone==="batch"){const key=provider||"unknown";const bucket=result.batchByProvider.get(key)||{bytes:0,count:0};bucket.bytes+=size;bucket.count++;result.batchByProvider.set(key,bucket)}if(zone==="workflow"&&workflowId)result.byWorkflow.set(String(workflowId),(result.byWorkflow.get(String(workflowId))||0)+size);if(zone==="other"){if(storeName==="leases"&&value.expiresAt>Date.now())activeLeaseUsers.add(String(value.userId));const runId=this.providerRecordRunId(storeName,value);const run=runs.get(runId);const kind=run?.source==="mcp_direct"?"mcp":storeName==="leases"?"coordination":"unlinked";const key=run&&kind==="mcp"?`run:${run.id}`:`${kind}:${storeName}`;let detail=other.get(key);if(!detail){detail={key,kind,runId:run?.id||null,userId:run?.userId||null,provider:run?.provider||null,status:run?.status||null,createdAt:run?.createdAt||null,canDelete:!!run&&run.status==="SETTLED"&&!run.parentRunId&&!(run.manualRuns||[]).length&&![...runs.values()].some(candidate=>candidate.parentRunId===run.id),bytes:0,count:0,stores:{}};other.set(key,detail)}if(storeName==="outbox"&&value.version>0&&(value.publishedVersion<value.version||!Number.isInteger(value.historyId)))detail.canDelete=false;detail.bytes+=size;detail.count++;const storeTotals=detail.stores[storeName]||{count:0,bytes:0};storeTotals.count++;storeTotals.bytes+=size;detail.stores[storeName]=storeTotals}})}result.otherDetails=[...other.values()].map(detail=>({...detail,canDelete:detail.canDelete&&!activeLeaseUsers.has(String(detail.userId))})).sort((a,b)=>b.bytes-a.bytes);return result}finally{db.close()}}static classifyProvider(store,value,runs,batches=new Map){if(store==="batches")return{zone:"batch",provider:value.provider||null};const runId=this.providerRecordRunId(store,value);const run=runs.get(runId);const scope=value.scope||run?.scope||"";const workflowId=run?.workflowId||(typeof scope==="string"&&scope.includes("workflow:")?scope.split("workflow:")[1]:null);if(run?.source==="workflow"||workflowId)return{zone:"workflow",workflowId};if(run?.source==="batch"||run?.source==="gentab_direct"||value.batchId)return{zone:"batch",provider:run?.provider||batches.get(value.batchId)?.provider||null};return{zone:"other"}}static providerRecordRunId(store,value){if(store==="leases"||store==="batches")return null;return store==="runs"?value.id:value.runId||(store==="attempts"?String(value.itemId||"").split(":")[0]:null)||(store==="reservations"||store==="outbox"?value.id:null)}static async clearOtherProviderRun(runId){if(!runId)throw new Error("STORAGE_PROVIDER_RUN_INVALID");const db=await this.existingDb("tobyflow_provider_web_batches");if(!db)throw new Error("STORAGE_PROVIDER_RUN_MISSING");try{const names=Array.from(db.objectStoreNames);return await new Promise((resolve,reject)=>{const tx=db.transaction(names,"readwrite");const records=new Map;let remaining=names.length;let failure=null;let deleted=0;tx.oncomplete=()=>resolve(deleted);tx.onabort=()=>reject(failure||tx.error||new Error("STORAGE_PROVIDER_RUN_DELETE_FAILED"));tx.onerror=()=>{failure||(failure=tx.error)};const apply=()=>{const runs=(records.get("runs")||[]).map(entry=>entry.value);const run=runs.find(entry=>entry.id===runId);if(!run||run.source!=="mcp_direct"||run.status!=="SETTLED"||run.parentRunId||runs.some(entry=>entry.parentRunId===runId)||(run.manualRuns||[]).length){failure=new Error("STORAGE_PROVIDER_RUN_ACTIVE");tx.abort();return}const lease=(records.get("leases")||[]).find(entry=>String(entry.value.userId)===String(run.userId)&&entry.value.expiresAt>Date.now());if(lease){failure=new Error("STORAGE_PROVIDER_RUN_ACTIVE");tx.abort();return}const outbox=(records.get("outbox")||[]).filter(entry=>this.providerRecordRunId("outbox",entry.value)===runId);if(outbox.some(entry=>entry.value.version>0&&(entry.value.publishedVersion<entry.value.version||!Number.isInteger(entry.value.historyId)))){failure=new Error("STORAGE_PROVIDER_HISTORY_PENDING");tx.abort();return}for(const[store,entries]of records){if(store==="leases"||store==="batches")continue;for(const entry of entries){if(this.providerRecordRunId(store,entry.value)!==runId)continue;tx.objectStore(store).delete(entry.key);deleted++}}};if(!remaining)return apply();for(const name of names){const entries=[];records.set(name,entries);const request=tx.objectStore(name).openCursor();request.onsuccess=()=>{const cursor=request.result;if(cursor){entries.push({key:cursor.primaryKey,value:cursor.value});cursor.continue()}else if(--remaining===0)apply()}}})}finally{db.close()}}static async clearProviderZone(zone,{dryRun=false,provider=null}={}){if(!["batch","workflow"].includes(zone))throw new Error("STORAGE_ZONE_INVALID");if(provider!==null&&(zone!=="batch"||typeof provider!=="string"||!provider))throw new Error("STORAGE_ZONE_PROVIDER_INVALID");const db=await this.existingDb("tobyflow_provider_web_batches");if(!db)return 0;try{const names=Array.from(db.objectStoreNames);return await new Promise((resolve,reject)=>{const tx=db.transaction(names,"readwrite");const records=new Map;let pending=names.length;let failure=null;tx.oncomplete=()=>resolve(deleted);tx.onabort=()=>reject(failure||tx.error||new Error("PROVIDER_ZONE_CLEAR_FAILED"));tx.onerror=()=>{failure||(failure=tx.error)};let deleted=0;const apply=()=>{const runs=new Map((records.get("runs")||[]).map(entry=>[entry.value.id,entry.value]));const batches=new Map((records.get("batches")||[]).map(entry=>[entry.value.id,entry.value]));const selected=[];for(const[store,entries]of records){for(const entry of entries){const classification=this.classifyProvider(store,entry.value,runs,batches);if(classification.zone===zone&&(provider===null||zone==="batch"&&(classification.provider||"unknown")===provider))selected.push({store,...entry})}}const idleReview=run=>{if(!run||run.status!=="RUNNING"||!["batch","gentab_direct"].includes(run.source))return false;const history=(records.get("outbox")||[]).find(entry=>this.providerRecordRunId("outbox",entry.value)===run.id)?.value;const items=(records.get("items")||[]).map(entry=>entry.value).filter(item=>item.runId===run.id&&!item.hidden);const leaseActive=(records.get("leases")||[]).some(entry=>String(entry.value.userId)===String(run.userId)&&entry.value.expiresAt>Date.now());return!leaseActive&&history?.version>0&&history.publishedVersion>=history.version&&Number.isInteger(history.historyId)&&history.payload?.status==="needs_review"&&items.length>0&&!items.some(item=>["PREPARING","SUBMITTING","MONITORING"].includes(item.state))};if(selected.some(({store,value})=>store==="runs"&&value.status!=="SETTLED"&&!idleReview(value))||selected.some(({store,value})=>store==="batches"&&!["SETTLED","QUEUED"].includes(value.status)&&(value.status!=="RUNNING"||!idleReview(runs.get(value.runId))))){failure=new Error("STORAGE_ZONE_RUN_ACTIVE");tx.abort();return}if(selected.some(({store,value})=>store==="outbox"&&value.version>0&&(value.publishedVersion<value.version||!Number.isInteger(value.historyId)))){failure=new Error("STORAGE_ZONE_HISTORY_PENDING");tx.abort();return}if(!dryRun)for(const{store,key}of selected)tx.objectStore(store).delete(key);deleted=selected.length};if(!pending)return apply();for(const name of names){const entries=[];records.set(name,entries);const request=tx.objectStore(name).openCursor();request.onsuccess=()=>{const cursor=request.result;if(cursor){entries.push({key:cursor.primaryKey,value:cursor.value});cursor.continue()}else if(--pending===0)apply()}}})}finally{db.close()}}static async scanDatabase(name,storeFilter=null,recordFilter=null){const db=await this.existingDb(name);if(!db)return 0;let bytes=0;try{for(const store of Array.from(db.objectStoreNames)){if(storeFilter&&!storeFilter(store))continue;await this.each(db,store,value=>{if(!recordFilter||recordFilter(value,store))bytes+=this.estimate(value)})}return bytes}finally{db.close()}}static async scanBatch(){const[flow,provider]=await Promise.all([this.scanDatabase("tobyflow_gen_batches"),this.scanProvider()]);return{bytes:flow+provider.batch,flow,provider:provider.batch}}static async scanWorkflow(workflowId){if(!workflowId)return{bytes:0,provider:0,muse:0,paste:0};const[provider,muse,paste]=await Promise.all([this.scanProvider(),this.scanDatabase("tobyflow_workflow_muse_videos",null,value=>typeof value.scope==="string"&&value.scope.endsWith(`\0${workflowId}`)),this.scanDatabase("autoflow_pro",store=>store==="workflow_paste_blobs",value=>String(value.workflow_id||"")===String(workflowId))]);const providerBytes=provider.byWorkflow.get(String(workflowId))||0;return{bytes:providerBytes+muse+paste,provider:providerBytes,muse,paste}}static async scanWorkflows(workflowIds){const totals=new Map(workflowIds.filter(Boolean).map(id=>[String(id),0]));if(!totals.size)return totals;const add=(id,bytes)=>{if(totals.has(id))totals.set(id,totals.get(id)+bytes)};const collect=async(name,storeFilter,owner)=>{const db=await this.existingDb(name);if(!db)return;try{for(const store of Array.from(db.objectStoreNames)){if(storeFilter&&!storeFilter(store))continue;await this.each(db,store,value=>{const id=owner(value);if(totals.has(id))add(id,this.estimate(value))})}}finally{db.close()}};await Promise.all([this.scanProvider().then(provider=>{for(const[id,bytes]of provider.byWorkflow)add(id,bytes)}),collect("tobyflow_workflow_muse_videos",null,value=>typeof value.scope==="string"&&value.scope.includes("\0")?value.scope.slice(value.scope.lastIndexOf("\0")+1):null),collect("autoflow_pro",store=>store==="workflow_paste_blobs",value=>String(value.workflow_id||""))]);return totals}}window.LocalStorageUsage=LocalStorageUsage;
+class LocalStorageUsage {
+  static estimate(value) {
+    if (value == null) return 0;
+    let binary = 0;
+    const json = JSON.stringify(value, (_key, part) => {
+      if (part instanceof Blob) {
+        binary += part.size;
+        return null;
+      }
+      if (part instanceof ArrayBuffer || ArrayBuffer.isView(part)) {
+        binary += part.byteLength;
+        return null;
+      }
+      return part;
+    });
+    return binary + new Blob([json || ""]).size;
+  }
+  static format(bytes) {
+    if (bytes < 1024) return `${bytes} B`;
+    if (bytes < 1048576) return `${(bytes / 1024).toFixed(1)} KB`;
+    if (bytes < 1073741824) return `${(bytes / 1048576).toFixed(2)} MB`;
+    return `${(bytes / 1073741824).toFixed(2)} GB`;
+  }
+  static async existingDb(name) {
+    return new Promise((resolve, reject) => {
+      const request = indexedDB.open(name);
+      request.onupgradeneeded = () => request.transaction.abort();
+      request.onsuccess = () => resolve(request.result);
+      request.onerror = () =>
+        request.error?.name === "AbortError"
+          ? resolve(null)
+          : reject(request.error || new Error("STORAGE_SCAN_OPEN_FAILED"));
+      request.onblocked = () => reject(new Error("STORAGE_SCAN_BLOCKED"));
+    });
+  }
+  static async each(db, storeName, visit) {
+    if (!db?.objectStoreNames.contains(storeName)) return;
+    await new Promise((resolve, reject) => {
+      const tx = db.transaction(storeName, "readonly");
+      const request = tx.objectStore(storeName).openCursor();
+      request.onsuccess = () => {
+        const cursor = request.result;
+        if (!cursor) return;
+        try {
+          visit(cursor.value);
+          cursor.continue();
+        } catch (error) {
+          tx.abort();
+          reject(error);
+        }
+      };
+      tx.oncomplete = resolve;
+      tx.onerror = tx.onabort = () =>
+        reject(tx.error || new Error("STORAGE_SCAN_FAILED"));
+    });
+  }
+  static async scanProvider() {
+    const result = {
+      batch: 0,
+      workflow: 0,
+      other: 0,
+      batchCount: 0,
+      workflowCount: 0,
+      otherCount: 0,
+      byWorkflow: new Map(),
+      batchByProvider: new Map(),
+      otherDetails: [],
+    };
+    const db = await this.existingDb("tobyflow_provider_web_batches");
+    if (!db) return result;
+    try {
+      const runs = new Map();
+      const batches = new Map();
+      const other = new Map();
+      const activeLeaseUsers = new Set();
+      await this.each(db, "runs", (run) => runs.set(run.id, run));
+      await this.each(db, "batches", (batch) => batches.set(batch.id, batch));
+      for (const storeName of Array.from(db.objectStoreNames)) {
+        await this.each(db, storeName, (value) => {
+          const size = this.estimate(value);
+          const { zone, workflowId, provider } = this.classifyProvider(
+            storeName,
+            value,
+            runs,
+            batches,
+          );
+          result[zone] += size;
+          result[`${zone}Count`]++;
+          if (zone === "batch") {
+            const key = provider || "unknown";
+            const bucket = result.batchByProvider.get(key) || {
+              bytes: 0,
+              count: 0,
+            };
+            bucket.bytes += size;
+            bucket.count++;
+            result.batchByProvider.set(key, bucket);
+          }
+          if (zone === "workflow" && workflowId)
+            result.byWorkflow.set(
+              String(workflowId),
+              (result.byWorkflow.get(String(workflowId)) || 0) + size,
+            );
+          if (zone === "other") {
+            if (storeName === "leases" && value.expiresAt > Date.now())
+              activeLeaseUsers.add(String(value.userId));
+            const runId = this.providerRecordRunId(storeName, value);
+            const run = runs.get(runId);
+            const kind =
+              run?.source === "mcp_direct"
+                ? "mcp"
+                : storeName === "leases"
+                  ? "coordination"
+                  : "unlinked";
+            const key =
+              run && kind === "mcp" ? `run:${run.id}` : `${kind}:${storeName}`;
+            let detail = other.get(key);
+            if (!detail) {
+              detail = {
+                key,
+                kind,
+                runId: run?.id || null,
+                userId: run?.userId || null,
+                provider: run?.provider || null,
+                status: run?.status || null,
+                createdAt: run?.createdAt || null,
+                canDelete:
+                  !!run &&
+                  run.status === "SETTLED" &&
+                  !run.parentRunId &&
+                  !(run.manualRuns || []).length &&
+                  ![...runs.values()].some(
+                    (candidate) => candidate.parentRunId === run.id,
+                  ),
+                bytes: 0,
+                count: 0,
+                stores: {},
+              };
+              other.set(key, detail);
+            }
+            if (
+              storeName === "outbox" &&
+              value.version > 0 &&
+              (value.publishedVersion < value.version ||
+                !Number.isInteger(value.historyId))
+            )
+              detail.canDelete = false;
+            detail.bytes += size;
+            detail.count++;
+            const storeTotals = detail.stores[storeName] || {
+              count: 0,
+              bytes: 0,
+            };
+            storeTotals.count++;
+            storeTotals.bytes += size;
+            detail.stores[storeName] = storeTotals;
+          }
+        });
+      }
+      result.otherDetails = [...other.values()]
+        .map((detail) => ({
+          ...detail,
+          canDelete:
+            detail.canDelete && !activeLeaseUsers.has(String(detail.userId)),
+        }))
+        .sort((a, b) => b.bytes - a.bytes);
+      return result;
+    } finally {
+      db.close();
+    }
+  }
+  static classifyProvider(store, value, runs, batches = new Map()) {
+    if (store === "batches")
+      return { zone: "batch", provider: value.provider || null };
+    const runId = this.providerRecordRunId(store, value);
+    const run = runs.get(runId);
+    const scope = value.scope || run?.scope || "";
+    const workflowId =
+      run?.workflowId ||
+      (typeof scope === "string" && scope.includes("workflow:")
+        ? scope.split("workflow:")[1]
+        : null);
+    if (run?.source === "workflow" || workflowId)
+      return { zone: "workflow", workflowId };
+    if (
+      run?.source === "batch" ||
+      run?.source === "gentab_direct" ||
+      value.batchId
+    )
+      return {
+        zone: "batch",
+        provider: run?.provider || batches.get(value.batchId)?.provider || null,
+      };
+    return { zone: "other" };
+  }
+  static providerRecordRunId(store, value) {
+    if (store === "leases" || store === "batches") return null;
+    return store === "runs"
+      ? value.id
+      : value.runId ||
+          (store === "attempts"
+            ? String(value.itemId || "").split(":")[0]
+            : null) ||
+          (store === "reservations" || store === "outbox" ? value.id : null);
+  }
+  static async clearOtherProviderRun(runId) {
+    if (!runId) throw new Error("STORAGE_PROVIDER_RUN_INVALID");
+    const db = await this.existingDb("tobyflow_provider_web_batches");
+    if (!db) throw new Error("STORAGE_PROVIDER_RUN_MISSING");
+    try {
+      const names = Array.from(db.objectStoreNames);
+      return await new Promise((resolve, reject) => {
+        const tx = db.transaction(names, "readwrite");
+        const records = new Map();
+        let remaining = names.length;
+        let failure = null;
+        let deleted = 0;
+        tx.oncomplete = () => resolve(deleted);
+        tx.onabort = () =>
+          reject(
+            failure ||
+              tx.error ||
+              new Error("STORAGE_PROVIDER_RUN_DELETE_FAILED"),
+          );
+        tx.onerror = () => {
+          failure || (failure = tx.error);
+        };
+        const apply = () => {
+          const runs = (records.get("runs") || []).map((entry) => entry.value);
+          const run = runs.find((entry) => entry.id === runId);
+          if (
+            !run ||
+            run.source !== "mcp_direct" ||
+            run.status !== "SETTLED" ||
+            run.parentRunId ||
+            runs.some((entry) => entry.parentRunId === runId) ||
+            (run.manualRuns || []).length
+          ) {
+            failure = new Error("STORAGE_PROVIDER_RUN_ACTIVE");
+            tx.abort();
+            return;
+          }
+          const lease = (records.get("leases") || []).find(
+            (entry) =>
+              String(entry.value.userId) === String(run.userId) &&
+              entry.value.expiresAt > Date.now(),
+          );
+          if (lease) {
+            failure = new Error("STORAGE_PROVIDER_RUN_ACTIVE");
+            tx.abort();
+            return;
+          }
+          const outbox = (records.get("outbox") || []).filter(
+            (entry) =>
+              this.providerRecordRunId("outbox", entry.value) === runId,
+          );
+          if (
+            outbox.some(
+              (entry) =>
+                entry.value.version > 0 &&
+                (entry.value.publishedVersion < entry.value.version ||
+                  !Number.isInteger(entry.value.historyId)),
+            )
+          ) {
+            failure = new Error("STORAGE_PROVIDER_HISTORY_PENDING");
+            tx.abort();
+            return;
+          }
+          for (const [store, entries] of records) {
+            if (store === "leases" || store === "batches") continue;
+            for (const entry of entries) {
+              if (this.providerRecordRunId(store, entry.value) !== runId)
+                continue;
+              tx.objectStore(store).delete(entry.key);
+              deleted++;
+            }
+          }
+        };
+        if (!remaining) return apply();
+        for (const name of names) {
+          const entries = [];
+          records.set(name, entries);
+          const request = tx.objectStore(name).openCursor();
+          request.onsuccess = () => {
+            const cursor = request.result;
+            if (cursor) {
+              entries.push({ key: cursor.primaryKey, value: cursor.value });
+              cursor.continue();
+            } else if (--remaining === 0) apply();
+          };
+        }
+      });
+    } finally {
+      db.close();
+    }
+  }
+  static async clearProviderZone(
+    zone,
+    { dryRun = false, provider = null } = {},
+  ) {
+    if (!["batch", "workflow"].includes(zone))
+      throw new Error("STORAGE_ZONE_INVALID");
+    if (
+      provider !== null &&
+      (zone !== "batch" || typeof provider !== "string" || !provider)
+    )
+      throw new Error("STORAGE_ZONE_PROVIDER_INVALID");
+    const db = await this.existingDb("tobyflow_provider_web_batches");
+    if (!db) return 0;
+    try {
+      const names = Array.from(db.objectStoreNames);
+      return await new Promise((resolve, reject) => {
+        const tx = db.transaction(names, "readwrite");
+        const records = new Map();
+        let pending = names.length;
+        let failure = null;
+        tx.oncomplete = () => resolve(deleted);
+        tx.onabort = () =>
+          reject(
+            failure || tx.error || new Error("PROVIDER_ZONE_CLEAR_FAILED"),
+          );
+        tx.onerror = () => {
+          failure || (failure = tx.error);
+        };
+        let deleted = 0;
+        const apply = () => {
+          const runs = new Map(
+            (records.get("runs") || []).map((entry) => [
+              entry.value.id,
+              entry.value,
+            ]),
+          );
+          const batches = new Map(
+            (records.get("batches") || []).map((entry) => [
+              entry.value.id,
+              entry.value,
+            ]),
+          );
+          const selected = [];
+          for (const [store, entries] of records) {
+            for (const entry of entries) {
+              const classification = this.classifyProvider(
+                store,
+                entry.value,
+                runs,
+                batches,
+              );
+              if (
+                classification.zone === zone &&
+                (provider === null ||
+                  (zone === "batch" &&
+                    (classification.provider || "unknown") === provider))
+              )
+                selected.push({ store, ...entry });
+            }
+          }
+          const idleReview = (run) => {
+            if (
+              !run ||
+              run.status !== "RUNNING" ||
+              !["batch", "gentab_direct"].includes(run.source)
+            )
+              return false;
+            const history = (records.get("outbox") || []).find(
+              (entry) =>
+                this.providerRecordRunId("outbox", entry.value) === run.id,
+            )?.value;
+            const items = (records.get("items") || [])
+              .map((entry) => entry.value)
+              .filter((item) => item.runId === run.id && !item.hidden);
+            const leaseActive = (records.get("leases") || []).some(
+              (entry) =>
+                String(entry.value.userId) === String(run.userId) &&
+                entry.value.expiresAt > Date.now(),
+            );
+            return (
+              !leaseActive &&
+              history?.version > 0 &&
+              history.publishedVersion >= history.version &&
+              Number.isInteger(history.historyId) &&
+              history.payload?.status === "needs_review" &&
+              items.length > 0 &&
+              !items.some((item) =>
+                ["PREPARING", "SUBMITTING", "MONITORING"].includes(item.state),
+              )
+            );
+          };
+          if (
+            selected.some(
+              ({ store, value }) =>
+                store === "runs" &&
+                value.status !== "SETTLED" &&
+                !idleReview(value),
+            ) ||
+            selected.some(
+              ({ store, value }) =>
+                store === "batches" &&
+                !["SETTLED", "QUEUED"].includes(value.status) &&
+                (value.status !== "RUNNING" ||
+                  !idleReview(runs.get(value.runId))),
+            )
+          ) {
+            failure = new Error("STORAGE_ZONE_RUN_ACTIVE");
+            tx.abort();
+            return;
+          }
+          if (
+            selected.some(
+              ({ store, value }) =>
+                store === "outbox" &&
+                value.version > 0 &&
+                (value.publishedVersion < value.version ||
+                  !Number.isInteger(value.historyId)),
+            )
+          ) {
+            failure = new Error("STORAGE_ZONE_HISTORY_PENDING");
+            tx.abort();
+            return;
+          }
+          if (!dryRun)
+            for (const { store, key } of selected)
+              tx.objectStore(store).delete(key);
+          deleted = selected.length;
+        };
+        if (!pending) return apply();
+        for (const name of names) {
+          const entries = [];
+          records.set(name, entries);
+          const request = tx.objectStore(name).openCursor();
+          request.onsuccess = () => {
+            const cursor = request.result;
+            if (cursor) {
+              entries.push({ key: cursor.primaryKey, value: cursor.value });
+              cursor.continue();
+            } else if (--pending === 0) apply();
+          };
+        }
+      });
+    } finally {
+      db.close();
+    }
+  }
+  static async scanDatabase(name, storeFilter = null, recordFilter = null) {
+    const db = await this.existingDb(name);
+    if (!db) return 0;
+    let bytes = 0;
+    try {
+      for (const store of Array.from(db.objectStoreNames)) {
+        if (storeFilter && !storeFilter(store)) continue;
+        await this.each(db, store, (value) => {
+          if (!recordFilter || recordFilter(value, store))
+            bytes += this.estimate(value);
+        });
+      }
+      return bytes;
+    } finally {
+      db.close();
+    }
+  }
+  static async scanBatch() {
+    const [flow, provider] = await Promise.all([
+      this.scanDatabase("tobyflow_gen_batches"),
+      this.scanProvider(),
+    ]);
+    return { bytes: flow + provider.batch, flow, provider: provider.batch };
+  }
+  static async scanWorkflow(workflowId) {
+    if (!workflowId) return { bytes: 0, provider: 0, muse: 0, paste: 0 };
+    const [provider, muse, paste] = await Promise.all([
+      this.scanProvider(),
+      this.scanDatabase(
+        "tobyflow_workflow_muse_videos",
+        null,
+        (value) =>
+          typeof value.scope === "string" &&
+          value.scope.endsWith(`\0${workflowId}`),
+      ),
+      this.scanDatabase(
+        "autoflow_pro",
+        (store) => store === "workflow_paste_blobs",
+        (value) => String(value.workflow_id || "") === String(workflowId),
+      ),
+    ]);
+    const providerBytes = provider.byWorkflow.get(String(workflowId)) || 0;
+    return {
+      bytes: providerBytes + muse + paste,
+      provider: providerBytes,
+      muse,
+      paste,
+    };
+  }
+  static async scanWorkflows(workflowIds) {
+    const totals = new Map(
+      workflowIds.filter(Boolean).map((id) => [String(id), 0]),
+    );
+    if (!totals.size) return totals;
+    const add = (id, bytes) => {
+      if (totals.has(id)) totals.set(id, totals.get(id) + bytes);
+    };
+    const collect = async (name, storeFilter, owner) => {
+      const db = await this.existingDb(name);
+      if (!db) return;
+      try {
+        for (const store of Array.from(db.objectStoreNames)) {
+          if (storeFilter && !storeFilter(store)) continue;
+          await this.each(db, store, (value) => {
+            const id = owner(value);
+            if (totals.has(id)) add(id, this.estimate(value));
+          });
+        }
+      } finally {
+        db.close();
+      }
+    };
+    await Promise.all([
+      this.scanProvider().then((provider) => {
+        for (const [id, bytes] of provider.byWorkflow) add(id, bytes);
+      }),
+      collect("tobyflow_workflow_muse_videos", null, (value) =>
+        typeof value.scope === "string" && value.scope.includes("\0")
+          ? value.scope.slice(value.scope.lastIndexOf("\0") + 1)
+          : null,
+      ),
+      collect(
+        "autoflow_pro",
+        (store) => store === "workflow_paste_blobs",
+        (value) => String(value.workflow_id || ""),
+      ),
+    ]);
+    return totals;
+  }
+}
+window.LocalStorageUsage = LocalStorageUsage;

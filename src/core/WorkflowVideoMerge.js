@@ -1,1 +1,1376 @@
-var __defProp=Object.defineProperty;var __defNormalProp=(obj,key,value)=>key in obj?__defProp(obj,key,{enumerable:true,configurable:true,writable:true,value}):obj[key]=value;var __publicField=(obj,key,value)=>__defNormalProp(obj,typeof key!=="symbol"?key+"":key,value);class WorkflowVideoMerge{static formatError(error){const raw=String(typeof error==="string"?error:error?.message||error?.code||"");const code=typeof error==="object"?String(error?.code||raw):raw;const detail=typeof error==="object"?error?.diagnostic?.lineageCheck||"":"";let key;if(code==="FLOW_MEDIA_UUID_NOT_FOUND")return window.flow_uuid_gateway?.formatErrorSync?.(error)||raw;if(code==="MOTION_MERGE_TIMEOUT")key="workflowVideoMerge.mergeTimeout";else if(/(?:PROJECT.*MISMATCH|WRONG_PROJECT)/.test(code)||code==="LINEAGE_MISMATCH"&&/projectId/.test(detail))key="workflowVideoMerge.sourceProjectMismatch";else if(code==="LINEAGE_MISMATCH"&&/poster URL format$/.test(detail))key="workflowVideoMerge.sourceMetadataUnavailable";else if(/(?:IDENTITY.*MISMATCH|MISMATCH.*IDENTITY)/.test(code)||code==="LINEAGE_MISMATCH"&&detail)key="workflowVideoMerge.sourceIdentityMismatch";else if(code==="LINEAGE_MISMATCH")key="flowErrors.codes.LINEAGE_MISMATCH";else if(/^FLOW_WEB_RESULT_NOT_SYNCED/.test(code))key="workflowVideoMerge.sourceMetadataUnavailable";if(!key)return raw;const translated=window.I18n?.t?.(key);return translated&&translated!==key?translated:raw}static cancelScope(workflowId,nodeId,userId){for(const operation of this._activeOperations){if(operation.workflowId===workflowId&&String(operation.userId)===String(userId)&&(!nodeId||operation.nodeId===nodeId))operation.cancelled=true}}static preserve(executor,node){let results=this._previousResults.get(executor);if(!results)this._previousResults.set(executor,results=new Map);results.set(node.node_id,String(node.result_file_ids||"").split(",").map(id=>id.trim()).filter(Boolean))}static async retry(executor,node,stage,action){const maxRetries=executor.settings.retryOnFail===true?executor.settings.maxRetries:0;if(!Number.isSafeInteger(maxRetries)||maxRetries<0)throw new Error("CONFIG_REQUIRED:exec_max_retries");return window.RetryHelper.execute(async({attempt,totalAttempts})=>{this.assertOwner(executor);this.phase(node,stage,{attempt,totalAttempts});try{return await action()}catch(error){if(error?.message==="WORKFLOW_VIDEO_OWNER_CHANGED")throw Object.assign(error,{noRetry:true});const code=String(error?.code||error?.message||"WORKFLOW_VIDEO_FAILED");if(stage==="merging"&&code==="MOTION_MERGE_TIMEOUT")error.noRetry=true;const detail=[code,error?.message,...Array.isArray(error?.providerErrorCodes)?error.providerErrorCodes:[]].join(" ");const type=window.FlowApiAdapter?.classifyError?.(detail,error?.errorType);const manual=type&&type!=="unknown"&&window.FlowApiAdapter?.getErrorPolicy?.(type)?.manualOnly===true;if(stage==="downloading"&&(/(?:LINEAGE|IDENTITY|PROVENANCE|PROJECT).*MISMATCH/.test(detail)||manual))error.noRetry=true;if(error?.noReplay||error?.ambiguous||error?.dispatchStarted)error.noRetry=true;const lineage=error?.diagnostic?.lineageCheck;this.phase(node,stage,{outcome:"failed",attempt,totalAttempts,code:/^[A-Z0-9_:-]{1,120}$/.test(code)?code:"WORKFLOW_VIDEO_FAILED",noRetry:error?.noRetry===true,...error?.captureDiagnostic&&{captureDiagnostic:error.captureDiagnostic},...Number.isSafeInteger(error?.diagnostic?.decoderRevision)?{decoderRevision:error.diagnostic.decoderRevision}:{},...typeof lineage==="string"&&/^[A-Za-z0-9 _-]{1,96}$/.test(lineage)?{lineageCheck:lineage}:{}});throw error}},{maxRetries,retryDelay:executor.settings.retryDelay,shouldStop:()=>executor.shouldStop,onRetry:(attempt,totalAttempts,error)=>window.eventBus?.emit("node:retry",{node,workflowId:executor.currentWorkflow?.wf_id,attempt,maxRetries:totalAttempts-1,delayMs:executor.settings.retryDelay,error})})}static assertOwner(executor,userId){if(executor.shouldStop)throw new Error("DOWNLOAD_STOPPED");if(userId&&String(window.authManager?.getUser?.()?.id)!==String(userId))throw new Error("WORKFLOW_VIDEO_OWNER_CHANGED")}static phase(node,phase,details={}){const operation=this._operations.get(node);const fields={...operation?.inputProgress,...details};const progress=Object.fromEntries(["sourceIndex","sourceTotal","sourceName","completed","total","index","count","percent","step","workerStage"].filter(key=>fields[key]!=null).map(key=>[key,fields[key]]));const data={nodeId:node.node_id,phase,workflowId:operation?.workflowId,operationId:operation?.id,...Object.keys(progress).length&&{progress}};window.eventBus?.emit("node:phase",data);if(operation){try{chrome.runtime.sendMessage({action:"workflowExecutionEvent",event:"node:phase",data}).catch(()=>{})}catch(_){}}console.info("[WorkflowVideoMerge]",JSON.stringify({nodeId:node.node_id,operationId:operation?.id,elapsedMs:operation?Date.now()-operation.started:null,stage:phase,...details}))}static inputs(executor,node,workflow){const edges=(workflow.edges||[]).filter(edge=>edge.target_node_id===node.node_id&&(!edge.target_port||["default","video_in"].includes(edge.target_port)));const inputs=[];for(const edge of edges){const source=workflow.nodes.find(item=>item.node_id===edge.source_node_id);if(!source)throw new Error("WORKFLOW_VIDEO_INPUT_MISSING");const ids=executor._collectPortInputs(node,"video_in",workflow.nodes,[edge]);const countIds=value=>String(value||"").split(",").filter(id=>id.trim()).length;console.info("[WorkflowVideoMerge]",JSON.stringify({stage:"input_lookup",workflowId:workflow.wf_id,nodeId:node.node_id,operationId:this._operations.get(node)?.id||null,sourceNodeId:source.node_id,sourceType:source.node_type,sourceStatus:source.status||null,sourcePort:edge.source_port||"default",targetPort:edge.target_port||"default",resultIdCount:countIds(source.result_file_ids),refIdCount:countIds(source.ref_file_ids),frameIdCount:countIds(source.result_frame_file_ids),previewCount:Object.keys(source.result_thumbnails||{}).length,collectedCount:ids.length}));if(!ids.length)throw new Error(`WORKFLOW_VIDEO_INPUT_EMPTY:${source.node_name||source.node_id}`);for(const fileId of ids){const media=source.result_thumbnails?.[fileId]||source.ref_thumbnails?.[fileId]||{};const persisted=source.result_provider_urls?.[fileId];const runtime=executor._museRuntimeResults?.get(fileId);const provider=persisted||runtime?{...runtime,...persisted,url:persisted?.url||runtime?.url,base64:runtime?.base64}:null;const port=window.NodeTemplates.getNodePorts(source.node_type,source)?.out?.find(item=>item.name===edge.source_port);const kind=media.type||provider?.media_type||port?.type||source.grok_mode||source.muse_mode||source.gen_type||source.media_type;const isVideo=String(kind).toLowerCase()==="video"||source.node_type==="video_merge";if(!isVideo)throw new Error("WORKFLOW_VIDEO_INPUT_NOT_VIDEO");inputs.push({source,fileId,media,provider})}}if(!inputs.length||inputs.length>500)throw new Error("MERGE_INPUT_INVALID");return inputs}static decode(response){if(!response?.success)throw new Error(response?.error||"WORKFLOW_VIDEO_DOWNLOAD_FAILED");const raw=response.base64||response.dataUrl||"";const match=/^data:(video\/[^;,]+);base64,([\s\S]+)$/i.exec(raw);const mime=match?.[1]||response.contentType||response.mime||"";if(!/^video\//i.test(mime))throw new Error("WORKFLOW_VIDEO_DOWNLOAD_BAD_MIME");const bytes=Uint8Array.from(atob(match?.[2]||raw),value=>value.charCodeAt(0));if(!bytes.length)throw new Error("WORKFLOW_VIDEO_DOWNLOAD_EMPTY");return new Blob([bytes],{type:mime})}static async fetchVideo(url){if(!/^https:\/\//i.test(String(url)))throw new Error("WORKFLOW_VIDEO_URL_INVALID");return this.decode(await chrome.runtime.sendMessage({action:"fetchBlob",url,expectImage:false}))}static async download(executor,node,workflow,input,operationId,userId,temporaries){const{fileId,source}=input;let media=input.media;const store=window.WorkflowResultMediaStore;const provider=input.provider;const flowCopy=provider?.provider==="flow"||media.provider==="flow";const saved=await store?.get?.(workflow.wf_id,source.node_id,fileId,userId);this.assertOwner(executor,userId);if(saved?.blob?.size){if(!/^video\//i.test(saved.blob.type||""))throw new Error("WORKFLOW_VIDEO_DOWNLOAD_BAD_MIME");return saved.blob}if(provider?.local_result||["muse","video_merge"].includes(source.node_type)){const sourceUrl=provider?.url||provider?.durable_url||media.video_url;const canRefetch=["grok","gemini","muse","chatgpt"].includes(provider?.provider)&&/^https:\/\//i.test(String(sourceUrl));if(provider?.local_result&&!canRefetch&&!flowCopy)throw new Error("LOCAL_RESULT_MISSING")}if(source.node_type==="muse"&&!flowCopy&&!provider?.base64&&!provider?.url&&!provider?.durable_url)throw new Error("LOCAL_RESULT_MISSING");if(provider&&provider.provider!=="flow"){const url=provider.url||provider.durable_url||media.video_url;if(provider.base64)return this.decode({success:true,base64:provider.base64});let response;if(provider.provider==="gemini"){const monitor=window.ProviderConfigManager.getApiConfigValueSync("gemini","generation_monitor")?.video;const maxBytes=Number(monitor?.max_materialized_bytes);if(!(maxBytes>0))throw new Error("CONFIG_REQUIRED:gemini_generation_monitor");const queried=await chrome.runtime.sendMessage({action:"queryProviderTabs",provider:"gemini"});response=await window.MessageBridge.geminiFetchMedia(url,queried?.tabs?.[0]?.id??provider.tab_id,maxBytes)}else if(provider.provider==="muse"&&/^blob:/i.test(url)){await window.ProviderConfigManager.fetchPrivateConfigs?.();const maxBytes=Number(window.ProviderConfigManager.getApiConfigValueSync("muse","video_flow_bridge")?.max_bytes);if(!(maxBytes>0))throw new Error("CONFIG_REQUIRED:muse_video_flow_bridge");response=await chrome.runtime.sendMessage({action:"muse:fetchVideoForFlow",tabId:provider.tab_id,url,maxBytes})}else if(provider.provider==="grok")response=await window.MessageBridge.grokMaterializeMedia(url,provider.tab_id);else if(provider.provider==="chatgpt")response=await window.MessageBridge.chatGPTFetchImage(url,provider.tab_id);if(response?.success)return this.decode(response);return this.fetchVideo(url)}const api=window.FlowApiAdapter?.isApiModeIntended?.({forWorkflow:true,forDownload:true})===true;if(window.flow_uuid_gateway){const gateway=window.flow_uuid_gateway;const identity=gateway.identity(media,provider?.media_uuid||fileId);const lookup=await gateway.requireDownload([identity],{projectId:workflow.project_id,mediaType:"video",surface:"workflow",mode:api?"api":"web",operationId,generationProcessId:executor._flowRunId,abortFn:()=>executor.shouldStop});const info=lookup?.results?.[identity]?.metadata||lookup?.results?.[String(identity).toLowerCase()]?.metadata;if(info){media=gateway.mergeMetadata(media,info);input={...input,media}}}const config=window.ProviderConfigManager.getDownloadResolutionsSync("flow");const options=window.MotionResolutionPolicy.candidates(config,node.video_download_resolution);const fallback720=config.video?.find(option=>option.value==="720p");const attempted=new Set;let fallbackAfterMutation=false;let route=provider;const webReceipt=source.result_gen_mode==="web"||source.result_gen_mode!=="api"&&media.identity_kind==="flow-v2-asb"&&!provider?.api_driver&&!media.api_driver;if(api&&(webReceipt||!route?.api_driver)){const routes=await executor._nodeUuidDownloadRoutes({...source,result_thumbnails:{...source.result_thumbnails,[fileId]:media}},[fileId],source.result_file_names||{},executor._buildProviderUrlLookup(workflow.nodes),workflow,{nativeLookup:webReceipt});route=routes.get(fileId)||(webReceipt?null:route)}for(const option of options){if(attempted.has(option.value))continue;attempted.add(option.value);this.assertOwner(executor,userId);this.phase(node,"downloading",{sourceNodeId:source.node_id,resolution:option.value,route:api&&route?.api_driver?"api":"web",webReceipt,apiSelected:api,routeReason:!api?"api_disabled":route?.api_driver?webReceipt?"standalone_uuid_lookup":"persisted_api_receipt":"api_route_not_ready"});try{return await this._downloadFlowOption(executor,node,workflow,input,operationId,userId,temporaries,option,api?route:null)}catch(error){const posterFormat=["video poster URL format","resolved video poster URL format"].includes(error?.diagnostic?.lineageCheck);const verifiedApiSource=route?.provider==="flow"&&route?.api_driver&&/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(String(route.media_uuid||""))&&route.project_id===workflow.project_id;if(api&&option.route==="native"&&error?.code==="LINEAGE_MISMATCH"&&posterFormat)this.phase(node,"downloading",{sourceNodeId:source.node_id,outcome:"native_fallback_check",resolution:option.value,verifiedApiSource:!!verifiedApiSource,native720Configured:fallback720?.route==="native",ambiguous:error.ambiguous===true,noReplay:error.noReplay===true,dispatchStarted:error.dispatchStarted===true});if(api&&option.route==="native"&&verifiedApiSource&&error?.code==="LINEAGE_MISMATCH"&&posterFormat&&!error.ambiguous&&!error.noReplay&&error.dispatchStarted!==true&&fallback720?.route==="native"){return await this._downloadNativeAfterApiPosterFailure(executor,node,workflow,input,operationId,userId,temporaries,config,option.value,fallback720.value)}if(option.route==="upscale"&&(error?.noReplay||error?.dispatchStarted===true||error?.ambiguous))fallbackAfterMutation=true;const code=error?.code||error?.message;const unsupported=["FLOW_DOWNLOAD_FILE_RESOLUTION_UNSUPPORTED","FLOW_DOWNLOAD_RESOLUTION_UNAVAILABLE"].includes(code);const apiUpscaleFailed=option.route==="upscale"&&(["FLOW_API_UPSCALE_FAILED","V2_UPSCALE_FAILED"].includes(code)||/^This file does not support downloading at (?:360p|720p|1080p|4k)\.?$/i.test(error?.message||""));const detail=[code,error?.message,...Array.isArray(error?.providerErrorCodes)?error.providerErrorCodes:[]].join(" ");const type=window.FlowApiAdapter?.classifyError?.(detail,error?.errorType);const manual=type&&type!=="unknown"&&window.FlowApiAdapter?.getErrorPolicy?.(type)?.manualOnly===true;const safe=!manual&&!/(?:LINEAGE|IDENTITY|PROVENANCE|PROJECT).*MISMATCH/.test(detail)&&!error?.ambiguous&&(error?.resolutionFallbackAllowed===true||!error?.noReplay&&error?.dispatchStarted!==true);const remaining=options.slice(options.indexOf(option)+1).some(candidate=>!attempted.has(candidate.value));if((code==="FLOW_DOWNLOAD_TARGET_NOT_FOUND"||unsupported&&!remaining)&&safe&&fallback720&&!attempted.has(fallback720.value)){options.splice(options.indexOf(option)+1,0,fallback720);this.phase(node,"downloading",{sourceNodeId:source.node_id,outcome:"resolution_fallback",fromResolution:option.value,toResolution:fallback720.value,reason:code});continue}if((unsupported||apiUpscaleFailed||code==="FLOW_DOWNLOAD_TARGET_NOT_FOUND"&&remaining)&&safe){this.phase(node,"downloading",{sourceNodeId:source.node_id,outcome:"resolution_fallback",fromResolution:option.value,toResolution:options.slice(options.indexOf(option)+1).find(candidate=>!attempted.has(candidate.value))?.value||null,reason:apiUpscaleFailed?"FLOW_API_UPSCALE_FAILED":code});continue}if(code==="FLOW_DOWNLOAD_TARGET_NOT_FOUND"&&safe)error.noRetry=true;if(fallbackAfterMutation)error.noReplay=true;throw error}}throw Object.assign(new Error("FLOW_DOWNLOAD_RESOLUTION_UNAVAILABLE"),{noRetry:true})}static async _downloadNativeAfterApiPosterFailure(executor,node,workflow,input,operationId,userId,temporaries,config,fromResolution,start){const candidates=window.MotionResolutionPolicy.candidates(config,start).filter(option=>option.route==="native");let lastError;for(const option of candidates){this.assertOwner(executor,userId);this.phase(node,"downloading",{sourceNodeId:input.source.node_id,outcome:"resolution_fallback",route:"web",fromResolution,toResolution:option.value,reason:"API_OPTIONAL_POSTER_UNSUPPORTED"});try{return await this._downloadFlowOption(executor,node,workflow,input,operationId,userId,temporaries,option,null)}catch(error){lastError=error;const code=error?.code||error?.message;const unavailable=["FLOW_DOWNLOAD_TARGET_NOT_FOUND","FLOW_DOWNLOAD_FILE_RESOLUTION_UNSUPPORTED","FLOW_DOWNLOAD_RESOLUTION_UNAVAILABLE"].includes(code);if(!unavailable||error?.ambiguous||error?.noReplay||error?.dispatchStarted===true)throw Object.assign(error,{noRetry:true});fromResolution=option.value}}throw Object.assign(lastError||new Error("FLOW_DOWNLOAD_RESOLUTION_UNAVAILABLE"),{noRetry:true})}static async _downloadFlowOption(executor,node,workflow,input,operationId,userId,temporaries,option,route){const{fileId,source,media,provider}=input;const store=window.WorkflowResultMediaStore;if(route?.provider==="flow"&&route.api_driver){const blob=await executor._downloadProviderTileDirect(fileId,{...route,media_type:"video"},"",1,null,source.result_file_names?.[fileId],"original",option.value,source.ratio,null,value=>value);if(blob instanceof Blob&&blob.size)return blob}const target=await window.MessageBridge.getTargetContext();this.phase(node,"downloading",{sourceNodeId:source.node_id,resolution:option.value,step:"resolving_identity"});const identity=await executor._resolveDownloadWebIdentity(fileId,source.result_file_names?.[fileId],media,provider,workflow,true,{operationId,nodeId:node.node_id,sourceNodeId:source.node_id});this.assertOwner(executor,userId);if(!Number.isInteger(target?.tabId))throw new Error("FLOW_TARGET_MISSING");await chrome.tabs.update(target.tabId,{active:true});const request={action:"workflow:videoCapture",userId:Number(userId),workflowId:workflow.wf_id,nodeId:node.node_id,operationId,resolution:option.value,flowProjectId:target.projectId};const capture=await chrome.runtime.sendMessage({...request,prepare:true,target});if(!capture?.success)throw new Error(capture?.error||"WORKFLOW_VIDEO_CAPTURE_FAILED");try{if(capture.captureOnly!==true)throw Object.assign(new Error("WORKFLOW_VIDEO_CAPTURE_PROTOCOL_MISMATCH"),{noRetry:true});this.phase(node,"downloading",{sourceNodeId:source.node_id,resolution:option.value,step:"capture_prepared",captureId:capture.id});const downloaded=await window.MessageBridge.sendToContentScript("downloadTileMedia",{tileId:identity.tileId,fileName:identity.fileName,flowFileId:fileId,resolution:option.value,videoResolution:option.value,watermarkMode:"original",plannedFilename:capture.filename,requestId:capture.id,motionCapture:capture},{timeoutMs:window.MotionMergeTask.timeoutMs()});if(!downloaded?.success){throw Object.assign(new Error(downloaded?.error||"WORKFLOW_VIDEO_DOWNLOAD_FAILED"),{code:downloaded?.error||"WORKFLOW_VIDEO_DOWNLOAD_FAILED",stage:downloaded?.stage,dispatchStarted:downloaded?.dispatchStarted,captureDiagnostic:downloaded?.captureDiagnostic,ambiguous:downloaded?.ambiguous,noReplay:downloaded?.noReplay,noRetry:downloaded?.noRetry})}this.phase(node,"downloading",{sourceNodeId:source.node_id,resolution:option.value,step:"reading_bytes"});const saved=await chrome.runtime.sendMessage({...request,captureId:capture.id});if(!saved?.success)throw new Error(saved?.error||"WORKFLOW_VIDEO_CAPTURE_FAILED");temporaries.add(saved.fileId);const record=await store.get(workflow.wf_id,node.node_id,saved.fileId,userId);if(!record?.blob?.size||record.blob.size!==saved.size)throw new Error("WORKFLOW_VIDEO_DOWNLOAD_EMPTY");this.phase(node,"downloading",{sourceNodeId:source.node_id,resolution:option.value,step:"bytes_ready",bytes:record.blob.size});return saved.fileId}finally{await chrome.runtime.sendMessage({...request,captureId:capture.id,release:true}).catch(()=>{})}}static async metadata(blob,checkOwner=null){const timeoutMs=window.MotionMergeTask.timeoutMs();return new Promise((resolve,reject)=>{const video=document.createElement("video"),url=URL.createObjectURL(blob);let settled=false,ownerWatch;const finish=(error,value)=>{if(settled)return;settled=true;clearTimeout(timer);clearInterval(ownerWatch);video.onloadeddata=video.onerror=null;video.removeAttribute("src");video.load();URL.revokeObjectURL(url);error?reject(error):resolve(value)};const timer=setTimeout(()=>finish(new Error("WORKFLOW_VIDEO_METADATA_TIMEOUT")),timeoutMs);if(checkOwner)ownerWatch=setInterval(()=>{try{checkOwner()}catch(error){finish(error)}},100);video.onloadeddata=()=>{try{if(!(video.videoWidth>0&&video.videoHeight>0&&Number.isFinite(video.duration)&&video.duration>0))throw new Error("MERGE_DURATION_INVALID");const canvas=document.createElement("canvas");canvas.width=Math.max(1,Math.round(240*video.videoWidth/video.videoHeight));canvas.height=240;canvas.getContext("2d").drawImage(video,0,0,canvas.width,canvas.height);finish(null,{width:video.videoWidth,height:video.videoHeight,duration:video.duration,poster:canvas.toDataURL("image/jpeg",.8)})}catch(error){finish(error)}};video.onerror=()=>finish(new Error("WORKFLOW_VIDEO_METADATA_FAILED"));try{video.muted=true;video.preload="auto";video.src=url}catch(error){finish(error)}})}static async isMp4(blob){if(!/^video\/mp4(?:;|$)/i.test(blob?.type||"")||blob.size<12)return false;const header=new Uint8Array(await blob.slice(0,12).arrayBuffer());return header[4]===102&&header[5]===116&&header[6]===121&&header[7]===112}static async run(executor,node,workflow){const started=Date.now(),operationId=crypto.randomUUID();const userId=window.authManager?.getUser?.()?.id;const operation={id:operationId,started,workflowId:workflow.wf_id,nodeId:node.node_id,userId};const checkOwner=()=>{this.assertOwner(executor,userId);if(operation.cancelled)throw Object.assign(new Error("WORKFLOW_VIDEO_DELETED"),{noRetry:true});if(executor.currentWorkflow?.wf_id!==workflow.wf_id)throw Object.assign(new Error("WORKFLOW_VIDEO_SCOPE_CHANGED"),{noRetry:true})};this._operations.set(node,operation);const canonical=executor.currentWorkflow?.nodes?.find(item=>item.node_id===node.node_id);if(canonical)this._operations.set(canonical,operation);if(!userId||!workflow.wf_id)throw new Error("WORKFLOW_VIDEO_SCOPE_MISSING");const temporaryIds=new Set,storedIds=[];const store=window.WorkflowResultMediaStore;const resultId=`workflow_merge_${operationId}`;let completed=false;this._activeOperations.add(operation);try{node.media_type="Video";if(!node.video_download_resolution)node.video_download_resolution=(await window.DownloadHelper.getSettings()).videoResolution;checkOwner();const inputs=this.inputs(executor,node,workflow);for(let index=0;index<inputs.length;index++){operation.inputProgress={sourceIndex:index+1,sourceTotal:inputs.length,sourceName:inputs[index].source.node_name||"",completed:index};let storedId=`merge_temp_${operationId}_${index}`;await this.retry(executor,node,"downloading",async()=>{checkOwner();const blob=await this.download(executor,node,workflow,inputs[index],operationId,userId,temporaryIds);checkOwner();if(typeof blob==="string")storedId=blob;else{temporaryIds.add(storedId);await store.put(workflow.wf_id,node.node_id,storedId,blob,"",userId)}checkOwner()});storedIds.push(storedId);this.phase(node,"downloading",{completed:index+1,total:inputs.length,step:"file_ready"})}operation.inputProgress=null;const result=await this.retry(executor,node,"merging",async()=>{checkOwner();const clips=[];for(const id of storedIds){const saved2=await store.get(workflow.wf_id,node.node_id,id,userId);if(!saved2?.blob?.size)throw new Error("WORKFLOW_VIDEO_INPUT_MISSING");clips.push(saved2.blob)}let task,watch,output;try{if(clips.length===1&&await this.isMp4(clips[0])){checkOwner();this.phase(node,"merging",{step:"passthrough",sourceCount:1,bytes:clips[0].size});output={blob:clips[0]}}else{this.phase(node,"merging",{step:"encode",sourceCount:clips.length});task=window.MotionMergeTask.start(clips,value=>this.phase(node,"merging",{percent:value.percent,index:value.index,count:value.count,workerStage:value.stage,...Number.isSafeInteger(value.normalizedFrames)?{normalizedFrames:value.normalizedFrames}:{},...Number.isSafeInteger(value.directFrames)?{directFrames:value.directFrames}:{}}),{workflow:true});watch=setInterval(()=>{try{checkOwner()}catch(_){task.cancel()}},100);clips.length=0;output=await task.promise}clips.length=0;checkOwner();const info=await this.metadata(output.blob,checkOwner);checkOwner();await store.put(workflow.wf_id,node.node_id,resultId,output.blob,info.poster,userId);checkOwner();return{fileIds:[resultId],thumbnails:{[resultId]:{type:"video",width:info.width,height:info.height,duration:info.duration,local_result:true}},providerUrls:{[resultId]:{provider:"workflow",media_type:"video",local_result:true}},duration:Date.now()-started}}finally{clearInterval(watch);clips.length=0;output=null;task?.cancel()}});const saved=await store.get(workflow.wf_id,node.node_id,resultId,userId);checkOwner();this.phase(node,"merged",{bytes:saved.blob.size});completed=true;return result}finally{this._activeOperations.delete(operation);if(!completed)temporaryIds.add(resultId);for(const id of temporaryIds)await store.deleteFile(workflow.wf_id,node.node_id,id,userId).catch(error=>console.warn("[WorkflowVideoMerge] temporary cleanup failed",{code:error?.name}))}}static async commit(executor,node,data){const operation=this._operations.get(node),userId=operation?.userId||window.authManager?.getUser?.()?.id;const workflowId=executor.currentWorkflow?.wf_id;this.assertOwner(executor,userId);if(operation?.workflowId&&operation.workflowId!==workflowId)throw new Error("WORKFLOW_VIDEO_SCOPE_CHANGED");const previous=this._previousResults.get(executor)?.get(node.node_id)||String(node.result_file_ids||"").split(",").map(id=>id.trim()).filter(Boolean);const next=new Set(data.result_file_ids.split(",").map(id=>id.trim()).filter(Boolean));const saved=await window.storageManager.updateNodeStatus(workflowId,node.node_id,data);if(!saved)throw new Error("WORKFLOW_VIDEO_RESULT_CHECKPOINT_FAILED");this.assertOwner(executor,userId);if(executor.currentWorkflow?.wf_id!==workflowId)throw new Error("WORKFLOW_VIDEO_SCOPE_CHANGED");for(const id of previous){if(next.has(id))continue;await window.WorkflowResultMediaStore.deleteFile(workflowId,node.node_id,id,userId).catch(error=>console.warn("[WorkflowVideoMerge] previous result cleanup failed",{code:error?.name}))}await window.WorkflowResultMediaStore.retireNodeResults?.(workflowId,node.node_id,[...next],operation?.started||0,userId).catch(error=>console.warn("[WorkflowVideoMerge] scoped cleanup failed",{code:error?.name}));this._previousResults.get(executor)?.delete(node.node_id)}static async autoDownload(executor,node,result,taskName){if(window.featureGate?.canUse("auto_download")!==true)return;const settings=await window.DownloadHelper.getSettings();const userId=window.authManager?.getUser?.()?.id;const timestamp=Date.now();for(let index=0;index<result.fileIds.length;index++){const id=result.fileIds[index];const filename=window.DownloadHelper.buildFilename({template:settings.template,project:settings.project,folder:settings.folder,prompt:node.prompt||node.node_name,taskName,index:index+1,ext:"mp4",timestamp});await this.retry(executor,node,"downloading",async()=>{this.assertOwner(executor,userId);const saved=await window.WorkflowResultMediaStore.get(executor.currentWorkflow.wf_id,node.node_id,id);if(!saved?.blob?.size)throw new Error("LOCAL_RESULT_MISSING");this.assertOwner(executor,userId);const response=await window.DownloadHelper.downloadStoredProviderVideo({blob:saved.blob,filename,waitForComplete:true});if(!response?.success){const accepted=response?.state==="timeout"&&Number.isInteger(response.downloadId);throw Object.assign(new Error(response?.error||"DOWNLOAD_FAILED"),response,accepted?{noReplay:true,dispatchStarted:true,downloadBlockedIds:[id]}:{})}})}}static async showResult(editor,container,nodeId,fileId){const workflowId=editor.workflow?.wf_id,owner=Symbol();const userId=window.authManager?.getUser?.()?.id;container._mergeResultOwner=owner;const owned=()=>container.isConnected&&container._mergeResultOwner===owner&&editor.workflow?.wf_id===workflowId&&window.authManager?.getUser?.()?.id===userId;try{const record=await window.WorkflowResultMediaStore.get(workflowId,nodeId,fileId);if(!owned())return;if(!record?.blob?.size)throw new Error("LOCAL_RESULT_MISSING");const src=await editor._getMuseRuntimeVideoUrl(fileId,null,"",nodeId);if(!owned())return;if(!src)throw new Error("LOCAL_RESULT_MISSING");const video=document.createElement("video");video.controls=true;video.playsInline=true;video.preload="metadata";if(record.poster)video.poster=record.poster;video.src=src;container.replaceChildren(video)}catch(error){if(owned())container.textContent=window.I18n?.t("workflow.previewUnavailable")||"";console.warn("[WorkflowVideoMerge] result unavailable",{nodeId,code:error?.message})}}static releasePreview(editor,container){if(!container)return;container._mergePreviewOwner=Symbol();for(const video of container.querySelectorAll("video")){try{video.pause();video.removeAttribute("src");video.load()}catch(_){}}if(container._mergeFileId)editor._clearMuseVideoRuntimeCache?.([container._mergeFileId]);delete container._mergeFileId;container.classList.remove("workflow-merge-preview")}static async showPreview(editor,container,nodeId,fileId){const workflowId=editor.workflow?.wf_id;const userId=window.authManager?.getUser?.()?.id;if(container._mergeFileId===fileId&&container.querySelector("video"))return;if(container._mergeFileId&&container._mergeFileId!==fileId)this.releasePreview(editor,container);const owner=Symbol();container._mergePreviewOwner=owner;const owned=()=>container.isConnected&&container._mergePreviewOwner===owner&&!container.closest(".drawflow-node.node-running")&&editor.workflow?.wf_id===workflowId&&window.authManager?.getUser?.()?.id===userId;try{let record=await window.WorkflowResultMediaStore.get(workflowId,nodeId,fileId);if(!owned()||!record?.blob?.size)return;const poster=record.poster||"";const src=await editor._getMuseRuntimeVideoUrl(fileId,null,"",nodeId);record=null;if(!owned())return;if(!src)throw new Error("LOCAL_RESULT_MISSING");const video=document.createElement("video");video.muted=true;video.loop=true;video.playsInline=true;video.preload="metadata";if(poster)video.poster=poster;video.src=src;const thumb=document.createElement("div");thumb.className="df-preview-thumb";thumb.dataset.fileId=fileId;thumb.dataset.mediaSrc=src;thumb.dataset.mediaType="video";thumb.dataset.mediaProvider="local";thumb.dataset.museNodeId=nodeId;thumb.dataset.mediaPoster=poster;thumb.append(video);editor._attachThumbZoom(thumb);editor._bindNodeVideoPlaybackState(video,thumb);thumb.addEventListener("mouseenter",()=>editor._playNodePreviewVideo(video,thumb));thumb.addEventListener("mouseleave",()=>editor._stopNodePreviewVideo(video,thumb));thumb.querySelector(".df-preview-zoom").addEventListener("click",event=>{event.stopPropagation();editor._stopNodePreviewVideo(video,thumb);editor._showMediaViewer({src,type:"video",poster,onDownload:()=>editor._downloadNodeFiles({source:"original",nodeId})})});video.onloadedmetadata=()=>{if(!owned()||!video.videoWidth||!video.videoHeight)return;container.style.aspectRatio=`${video.videoWidth} / ${video.videoHeight}`;editor._scheduleConnectionRefresh()};container.classList.add("workflow-merge-preview");container._mergeFileId=fileId;container._nodeId=nodeId;container.replaceChildren(thumb);editor._unlockPreviewHeight?.(container);editor._scheduleConnectionRefresh()}catch(error){console.warn("[WorkflowVideoMerge] preview unavailable",{nodeId,code:error?.name})}}}__publicField(WorkflowVideoMerge,"_previousResults",new WeakMap);__publicField(WorkflowVideoMerge,"_operations",new WeakMap);__publicField(WorkflowVideoMerge,"_activeOperations",new Set);window.WorkflowVideoMerge=WorkflowVideoMerge;
+var __defProp = Object.defineProperty;
+var __defNormalProp = (obj, key, value) =>
+  key in obj
+    ? __defProp(obj, key, {
+        enumerable: true,
+        configurable: true,
+        writable: true,
+        value,
+      })
+    : (obj[key] = value);
+var __publicField = (obj, key, value) =>
+  __defNormalProp(obj, typeof key !== "symbol" ? key + "" : key, value);
+class WorkflowVideoMerge {
+  static formatError(error) {
+    const raw = String(
+      typeof error === "string" ? error : error?.message || error?.code || "",
+    );
+    const code = typeof error === "object" ? String(error?.code || raw) : raw;
+    const detail =
+      typeof error === "object" ? error?.diagnostic?.lineageCheck || "" : "";
+    let key;
+    if (code === "FLOW_MEDIA_UUID_NOT_FOUND")
+      return window.flow_uuid_gateway?.formatErrorSync?.(error) || raw;
+    if (code === "MOTION_MERGE_TIMEOUT")
+      key = "workflowVideoMerge.mergeTimeout";
+    else if (
+      /(?:PROJECT.*MISMATCH|WRONG_PROJECT)/.test(code) ||
+      (code === "LINEAGE_MISMATCH" && /projectId/.test(detail))
+    )
+      key = "workflowVideoMerge.sourceProjectMismatch";
+    else if (code === "LINEAGE_MISMATCH" && /poster URL format$/.test(detail))
+      key = "workflowVideoMerge.sourceMetadataUnavailable";
+    else if (
+      /(?:IDENTITY.*MISMATCH|MISMATCH.*IDENTITY)/.test(code) ||
+      (code === "LINEAGE_MISMATCH" && detail)
+    )
+      key = "workflowVideoMerge.sourceIdentityMismatch";
+    else if (code === "LINEAGE_MISMATCH")
+      key = "flowErrors.codes.LINEAGE_MISMATCH";
+    else if (/^FLOW_WEB_RESULT_NOT_SYNCED/.test(code))
+      key = "workflowVideoMerge.sourceMetadataUnavailable";
+    if (!key) return raw;
+    const translated = window.I18n?.t?.(key);
+    return translated && translated !== key ? translated : raw;
+  }
+  static cancelScope(workflowId, nodeId, userId) {
+    for (const operation of this._activeOperations) {
+      if (
+        operation.workflowId === workflowId &&
+        String(operation.userId) === String(userId) &&
+        (!nodeId || operation.nodeId === nodeId)
+      )
+        operation.cancelled = true;
+    }
+  }
+  static preserve(executor, node) {
+    let results = this._previousResults.get(executor);
+    if (!results) this._previousResults.set(executor, (results = new Map()));
+    results.set(
+      node.node_id,
+      String(node.result_file_ids || "")
+        .split(",")
+        .map((id) => id.trim())
+        .filter(Boolean),
+    );
+  }
+  static async retry(executor, node, stage, action) {
+    const maxRetries =
+      executor.settings.retryOnFail === true ? executor.settings.maxRetries : 0;
+    if (!Number.isSafeInteger(maxRetries) || maxRetries < 0)
+      throw new Error("CONFIG_REQUIRED:exec_max_retries");
+    return window.RetryHelper.execute(
+      async ({ attempt, totalAttempts }) => {
+        this.assertOwner(executor);
+        this.phase(node, stage, { attempt, totalAttempts });
+        try {
+          return await action();
+        } catch (error) {
+          if (error?.message === "WORKFLOW_VIDEO_OWNER_CHANGED")
+            throw Object.assign(error, { noRetry: true });
+          const code = String(
+            error?.code || error?.message || "WORKFLOW_VIDEO_FAILED",
+          );
+          if (stage === "merging" && code === "MOTION_MERGE_TIMEOUT")
+            error.noRetry = true;
+          const detail = [
+            code,
+            error?.message,
+            ...(Array.isArray(error?.providerErrorCodes)
+              ? error.providerErrorCodes
+              : []),
+          ].join(" ");
+          const type = window.FlowApiAdapter?.classifyError?.(
+            detail,
+            error?.errorType,
+          );
+          const manual =
+            type &&
+            type !== "unknown" &&
+            window.FlowApiAdapter?.getErrorPolicy?.(type)?.manualOnly === true;
+          if (
+            stage === "downloading" &&
+            (/(?:LINEAGE|IDENTITY|PROVENANCE|PROJECT).*MISMATCH/.test(detail) ||
+              manual)
+          )
+            error.noRetry = true;
+          if (error?.noReplay || error?.ambiguous || error?.dispatchStarted)
+            error.noRetry = true;
+          const lineage = error?.diagnostic?.lineageCheck;
+          this.phase(node, stage, {
+            outcome: "failed",
+            attempt,
+            totalAttempts,
+            code: /^[A-Z0-9_:-]{1,120}$/.test(code)
+              ? code
+              : "WORKFLOW_VIDEO_FAILED",
+            noRetry: error?.noRetry === true,
+            ...(error?.captureDiagnostic && {
+              captureDiagnostic: error.captureDiagnostic,
+            }),
+            ...(Number.isSafeInteger(error?.diagnostic?.decoderRevision)
+              ? { decoderRevision: error.diagnostic.decoderRevision }
+              : {}),
+            ...(typeof lineage === "string" &&
+            /^[A-Za-z0-9 _-]{1,96}$/.test(lineage)
+              ? { lineageCheck: lineage }
+              : {}),
+          });
+          throw error;
+        }
+      },
+      {
+        maxRetries,
+        retryDelay: executor.settings.retryDelay,
+        shouldStop: () => executor.shouldStop,
+        onRetry: (attempt, totalAttempts, error) =>
+          window.eventBus?.emit("node:retry", {
+            node,
+            workflowId: executor.currentWorkflow?.wf_id,
+            attempt,
+            maxRetries: totalAttempts - 1,
+            delayMs: executor.settings.retryDelay,
+            error,
+          }),
+      },
+    );
+  }
+  static assertOwner(executor, userId) {
+    if (executor.shouldStop) throw new Error("DOWNLOAD_STOPPED");
+    if (
+      userId &&
+      String(window.authManager?.getUser?.()?.id) !== String(userId)
+    )
+      throw new Error("WORKFLOW_VIDEO_OWNER_CHANGED");
+  }
+  static phase(node, phase, details = {}) {
+    const operation = this._operations.get(node);
+    const fields = { ...operation?.inputProgress, ...details };
+    const progress = Object.fromEntries(
+      [
+        "sourceIndex",
+        "sourceTotal",
+        "sourceName",
+        "completed",
+        "total",
+        "index",
+        "count",
+        "percent",
+        "step",
+        "workerStage",
+      ]
+        .filter((key) => fields[key] != null)
+        .map((key) => [key, fields[key]]),
+    );
+    const data = {
+      nodeId: node.node_id,
+      phase,
+      workflowId: operation?.workflowId,
+      operationId: operation?.id,
+      ...(Object.keys(progress).length && { progress }),
+    };
+    window.eventBus?.emit("node:phase", data);
+    if (operation) {
+      try {
+        chrome.runtime
+          .sendMessage({
+            action: "workflowExecutionEvent",
+            event: "node:phase",
+            data,
+          })
+          .catch(() => {});
+      } catch (_) {}
+    }
+    console.info(
+      "[WorkflowVideoMerge]",
+      JSON.stringify({
+        nodeId: node.node_id,
+        operationId: operation?.id,
+        elapsedMs: operation ? Date.now() - operation.started : null,
+        stage: phase,
+        ...details,
+      }),
+    );
+  }
+  static inputs(executor, node, workflow) {
+    const edges = (workflow.edges || []).filter(
+      (edge) =>
+        edge.target_node_id === node.node_id &&
+        (!edge.target_port ||
+          ["default", "video_in"].includes(edge.target_port)),
+    );
+    const inputs = [];
+    for (const edge of edges) {
+      const source = workflow.nodes.find(
+        (item) => item.node_id === edge.source_node_id,
+      );
+      if (!source) throw new Error("WORKFLOW_VIDEO_INPUT_MISSING");
+      const ids = executor._collectPortInputs(
+        node,
+        "video_in",
+        workflow.nodes,
+        [edge],
+      );
+      const countIds = (value) =>
+        String(value || "")
+          .split(",")
+          .filter((id) => id.trim()).length;
+      console.info(
+        "[WorkflowVideoMerge]",
+        JSON.stringify({
+          stage: "input_lookup",
+          workflowId: workflow.wf_id,
+          nodeId: node.node_id,
+          operationId: this._operations.get(node)?.id || null,
+          sourceNodeId: source.node_id,
+          sourceType: source.node_type,
+          sourceStatus: source.status || null,
+          sourcePort: edge.source_port || "default",
+          targetPort: edge.target_port || "default",
+          resultIdCount: countIds(source.result_file_ids),
+          refIdCount: countIds(source.ref_file_ids),
+          frameIdCount: countIds(source.result_frame_file_ids),
+          previewCount: Object.keys(source.result_thumbnails || {}).length,
+          collectedCount: ids.length,
+        }),
+      );
+      if (!ids.length)
+        throw new Error(
+          `WORKFLOW_VIDEO_INPUT_EMPTY:${source.node_name || source.node_id}`,
+        );
+      for (const fileId of ids) {
+        const media =
+          source.result_thumbnails?.[fileId] ||
+          source.ref_thumbnails?.[fileId] ||
+          {};
+        const persisted = source.result_provider_urls?.[fileId];
+        const runtime = executor._museRuntimeResults?.get(fileId);
+        const provider =
+          persisted || runtime
+            ? {
+                ...runtime,
+                ...persisted,
+                url: persisted?.url || runtime?.url,
+                base64: runtime?.base64,
+              }
+            : null;
+        const port = window.NodeTemplates.getNodePorts(
+          source.node_type,
+          source,
+        )?.out?.find((item) => item.name === edge.source_port);
+        const kind =
+          media.type ||
+          provider?.media_type ||
+          port?.type ||
+          source.grok_mode ||
+          source.muse_mode ||
+          source.gen_type ||
+          source.media_type;
+        const isVideo =
+          String(kind).toLowerCase() === "video" ||
+          source.node_type === "video_merge";
+        if (!isVideo) throw new Error("WORKFLOW_VIDEO_INPUT_NOT_VIDEO");
+        inputs.push({ source, fileId, media, provider });
+      }
+    }
+    if (!inputs.length || inputs.length > 500)
+      throw new Error("MERGE_INPUT_INVALID");
+    return inputs;
+  }
+  static decode(response) {
+    if (!response?.success)
+      throw new Error(response?.error || "WORKFLOW_VIDEO_DOWNLOAD_FAILED");
+    const raw = response.base64 || response.dataUrl || "";
+    const match = /^data:(video\/[^;,]+);base64,([\s\S]+)$/i.exec(raw);
+    const mime = match?.[1] || response.contentType || response.mime || "";
+    if (!/^video\//i.test(mime))
+      throw new Error("WORKFLOW_VIDEO_DOWNLOAD_BAD_MIME");
+    const bytes = Uint8Array.from(atob(match?.[2] || raw), (value) =>
+      value.charCodeAt(0),
+    );
+    if (!bytes.length) throw new Error("WORKFLOW_VIDEO_DOWNLOAD_EMPTY");
+    return new Blob([bytes], { type: mime });
+  }
+  static async fetchVideo(url) {
+    if (!/^https:\/\//i.test(String(url)))
+      throw new Error("WORKFLOW_VIDEO_URL_INVALID");
+    return this.decode(
+      await chrome.runtime.sendMessage({
+        action: "fetchBlob",
+        url,
+        expectImage: false,
+      }),
+    );
+  }
+  static async download(
+    executor,
+    node,
+    workflow,
+    input,
+    operationId,
+    userId,
+    temporaries,
+  ) {
+    const { fileId, source } = input;
+    let media = input.media;
+    const store = window.WorkflowResultMediaStore;
+    const provider = input.provider;
+    const flowCopy = provider?.provider === "flow" || media.provider === "flow";
+    const saved = await store?.get?.(
+      workflow.wf_id,
+      source.node_id,
+      fileId,
+      userId,
+    );
+    this.assertOwner(executor, userId);
+    if (saved?.blob?.size) {
+      if (!/^video\//i.test(saved.blob.type || ""))
+        throw new Error("WORKFLOW_VIDEO_DOWNLOAD_BAD_MIME");
+      return saved.blob;
+    }
+    if (
+      provider?.local_result ||
+      ["muse", "video_merge"].includes(source.node_type)
+    ) {
+      const sourceUrl =
+        provider?.url || provider?.durable_url || media.video_url;
+      const canRefetch =
+        ["grok", "gemini", "muse", "chatgpt"].includes(provider?.provider) &&
+        /^https:\/\//i.test(String(sourceUrl));
+      if (provider?.local_result && !canRefetch && !flowCopy)
+        throw new Error("LOCAL_RESULT_MISSING");
+    }
+    if (
+      source.node_type === "muse" &&
+      !flowCopy &&
+      !provider?.base64 &&
+      !provider?.url &&
+      !provider?.durable_url
+    )
+      throw new Error("LOCAL_RESULT_MISSING");
+    if (provider && provider.provider !== "flow") {
+      const url = provider.url || provider.durable_url || media.video_url;
+      if (provider.base64)
+        return this.decode({ success: true, base64: provider.base64 });
+      let response;
+      if (provider.provider === "gemini") {
+        const monitor = window.ProviderConfigManager.getApiConfigValueSync(
+          "gemini",
+          "generation_monitor",
+        )?.video;
+        const maxBytes = Number(monitor?.max_materialized_bytes);
+        if (!(maxBytes > 0))
+          throw new Error("CONFIG_REQUIRED:gemini_generation_monitor");
+        const queried = await chrome.runtime.sendMessage({
+          action: "queryProviderTabs",
+          provider: "gemini",
+        });
+        response = await window.MessageBridge.geminiFetchMedia(
+          url,
+          queried?.tabs?.[0]?.id ?? provider.tab_id,
+          maxBytes,
+        );
+      } else if (provider.provider === "muse" && /^blob:/i.test(url)) {
+        await window.ProviderConfigManager.fetchPrivateConfigs?.();
+        const maxBytes = Number(
+          window.ProviderConfigManager.getApiConfigValueSync(
+            "muse",
+            "video_flow_bridge",
+          )?.max_bytes,
+        );
+        if (!(maxBytes > 0))
+          throw new Error("CONFIG_REQUIRED:muse_video_flow_bridge");
+        response = await chrome.runtime.sendMessage({
+          action: "muse:fetchVideoForFlow",
+          tabId: provider.tab_id,
+          url,
+          maxBytes,
+        });
+      } else if (provider.provider === "grok")
+        response = await window.MessageBridge.grokMaterializeMedia(
+          url,
+          provider.tab_id,
+        );
+      else if (provider.provider === "chatgpt")
+        response = await window.MessageBridge.chatGPTFetchImage(
+          url,
+          provider.tab_id,
+        );
+      if (response?.success) return this.decode(response);
+      return this.fetchVideo(url);
+    }
+    const api =
+      window.FlowApiAdapter?.isApiModeIntended?.({
+        forWorkflow: true,
+        forDownload: true,
+      }) === true;
+    if (window.flow_uuid_gateway) {
+      const gateway = window.flow_uuid_gateway;
+      const identity = gateway.identity(media, provider?.media_uuid || fileId);
+      const lookup = await gateway.requireDownload([identity], {
+        projectId: workflow.project_id,
+        mediaType: "video",
+        surface: "workflow",
+        mode: api ? "api" : "web",
+        operationId,
+        generationProcessId: executor._flowRunId,
+        abortFn: () => executor.shouldStop,
+      });
+      const info =
+        lookup?.results?.[identity]?.metadata ||
+        lookup?.results?.[String(identity).toLowerCase()]?.metadata;
+      if (info) {
+        media = gateway.mergeMetadata(media, info);
+        input = { ...input, media };
+      }
+    }
+    const config =
+      window.ProviderConfigManager.getDownloadResolutionsSync("flow");
+    const options = window.MotionResolutionPolicy.candidates(
+      config,
+      node.video_download_resolution,
+    );
+    const fallback720 = config.video?.find((option) => option.value === "720p");
+    const attempted = new Set();
+    let fallbackAfterMutation = false;
+    let route = provider;
+    const webReceipt =
+      source.result_gen_mode === "web" ||
+      (source.result_gen_mode !== "api" &&
+        media.identity_kind === "flow-v2-asb" &&
+        !provider?.api_driver &&
+        !media.api_driver);
+    if (api && (webReceipt || !route?.api_driver)) {
+      const routes = await executor._nodeUuidDownloadRoutes(
+        {
+          ...source,
+          result_thumbnails: { ...source.result_thumbnails, [fileId]: media },
+        },
+        [fileId],
+        source.result_file_names || {},
+        executor._buildProviderUrlLookup(workflow.nodes),
+        workflow,
+        { nativeLookup: webReceipt },
+      );
+      route = routes.get(fileId) || (webReceipt ? null : route);
+    }
+    for (const option of options) {
+      if (attempted.has(option.value)) continue;
+      attempted.add(option.value);
+      this.assertOwner(executor, userId);
+      this.phase(node, "downloading", {
+        sourceNodeId: source.node_id,
+        resolution: option.value,
+        route: api && route?.api_driver ? "api" : "web",
+        webReceipt,
+        apiSelected: api,
+        routeReason: !api
+          ? "api_disabled"
+          : route?.api_driver
+            ? webReceipt
+              ? "standalone_uuid_lookup"
+              : "persisted_api_receipt"
+            : "api_route_not_ready",
+      });
+      try {
+        return await this._downloadFlowOption(
+          executor,
+          node,
+          workflow,
+          input,
+          operationId,
+          userId,
+          temporaries,
+          option,
+          api ? route : null,
+        );
+      } catch (error) {
+        const posterFormat = [
+          "video poster URL format",
+          "resolved video poster URL format",
+        ].includes(error?.diagnostic?.lineageCheck);
+        const verifiedApiSource =
+          route?.provider === "flow" &&
+          route?.api_driver &&
+          /^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(
+            String(route.media_uuid || ""),
+          ) &&
+          route.project_id === workflow.project_id;
+        if (
+          api &&
+          option.route === "native" &&
+          error?.code === "LINEAGE_MISMATCH" &&
+          posterFormat
+        )
+          this.phase(node, "downloading", {
+            sourceNodeId: source.node_id,
+            outcome: "native_fallback_check",
+            resolution: option.value,
+            verifiedApiSource: !!verifiedApiSource,
+            native720Configured: fallback720?.route === "native",
+            ambiguous: error.ambiguous === true,
+            noReplay: error.noReplay === true,
+            dispatchStarted: error.dispatchStarted === true,
+          });
+        if (
+          api &&
+          option.route === "native" &&
+          verifiedApiSource &&
+          error?.code === "LINEAGE_MISMATCH" &&
+          posterFormat &&
+          !error.ambiguous &&
+          !error.noReplay &&
+          error.dispatchStarted !== true &&
+          fallback720?.route === "native"
+        ) {
+          return await this._downloadNativeAfterApiPosterFailure(
+            executor,
+            node,
+            workflow,
+            input,
+            operationId,
+            userId,
+            temporaries,
+            config,
+            option.value,
+            fallback720.value,
+          );
+        }
+        if (
+          option.route === "upscale" &&
+          (error?.noReplay ||
+            error?.dispatchStarted === true ||
+            error?.ambiguous)
+        )
+          fallbackAfterMutation = true;
+        const code = error?.code || error?.message;
+        const unsupported = [
+          "FLOW_DOWNLOAD_FILE_RESOLUTION_UNSUPPORTED",
+          "FLOW_DOWNLOAD_RESOLUTION_UNAVAILABLE",
+        ].includes(code);
+        const apiUpscaleFailed =
+          option.route === "upscale" &&
+          (["FLOW_API_UPSCALE_FAILED", "V2_UPSCALE_FAILED"].includes(code) ||
+            /^This file does not support downloading at (?:360p|720p|1080p|4k)\.?$/i.test(
+              error?.message || "",
+            ));
+        const detail = [
+          code,
+          error?.message,
+          ...(Array.isArray(error?.providerErrorCodes)
+            ? error.providerErrorCodes
+            : []),
+        ].join(" ");
+        const type = window.FlowApiAdapter?.classifyError?.(
+          detail,
+          error?.errorType,
+        );
+        const manual =
+          type &&
+          type !== "unknown" &&
+          window.FlowApiAdapter?.getErrorPolicy?.(type)?.manualOnly === true;
+        const safe =
+          !manual &&
+          !/(?:LINEAGE|IDENTITY|PROVENANCE|PROJECT).*MISMATCH/.test(detail) &&
+          !error?.ambiguous &&
+          (error?.resolutionFallbackAllowed === true ||
+            (!error?.noReplay && error?.dispatchStarted !== true));
+        const remaining = options
+          .slice(options.indexOf(option) + 1)
+          .some((candidate) => !attempted.has(candidate.value));
+        if (
+          (code === "FLOW_DOWNLOAD_TARGET_NOT_FOUND" ||
+            (unsupported && !remaining)) &&
+          safe &&
+          fallback720 &&
+          !attempted.has(fallback720.value)
+        ) {
+          options.splice(options.indexOf(option) + 1, 0, fallback720);
+          this.phase(node, "downloading", {
+            sourceNodeId: source.node_id,
+            outcome: "resolution_fallback",
+            fromResolution: option.value,
+            toResolution: fallback720.value,
+            reason: code,
+          });
+          continue;
+        }
+        if (
+          (unsupported ||
+            apiUpscaleFailed ||
+            (code === "FLOW_DOWNLOAD_TARGET_NOT_FOUND" && remaining)) &&
+          safe
+        ) {
+          this.phase(node, "downloading", {
+            sourceNodeId: source.node_id,
+            outcome: "resolution_fallback",
+            fromResolution: option.value,
+            toResolution:
+              options
+                .slice(options.indexOf(option) + 1)
+                .find((candidate) => !attempted.has(candidate.value))?.value ||
+              null,
+            reason: apiUpscaleFailed ? "FLOW_API_UPSCALE_FAILED" : code,
+          });
+          continue;
+        }
+        if (code === "FLOW_DOWNLOAD_TARGET_NOT_FOUND" && safe)
+          error.noRetry = true;
+        if (fallbackAfterMutation) error.noReplay = true;
+        throw error;
+      }
+    }
+    throw Object.assign(new Error("FLOW_DOWNLOAD_RESOLUTION_UNAVAILABLE"), {
+      noRetry: true,
+    });
+  }
+  static async _downloadNativeAfterApiPosterFailure(
+    executor,
+    node,
+    workflow,
+    input,
+    operationId,
+    userId,
+    temporaries,
+    config,
+    fromResolution,
+    start,
+  ) {
+    const candidates = window.MotionResolutionPolicy.candidates(
+      config,
+      start,
+    ).filter((option) => option.route === "native");
+    let lastError;
+    for (const option of candidates) {
+      this.assertOwner(executor, userId);
+      this.phase(node, "downloading", {
+        sourceNodeId: input.source.node_id,
+        outcome: "resolution_fallback",
+        route: "web",
+        fromResolution,
+        toResolution: option.value,
+        reason: "API_OPTIONAL_POSTER_UNSUPPORTED",
+      });
+      try {
+        return await this._downloadFlowOption(
+          executor,
+          node,
+          workflow,
+          input,
+          operationId,
+          userId,
+          temporaries,
+          option,
+          null,
+        );
+      } catch (error) {
+        lastError = error;
+        const code = error?.code || error?.message;
+        const unavailable = [
+          "FLOW_DOWNLOAD_TARGET_NOT_FOUND",
+          "FLOW_DOWNLOAD_FILE_RESOLUTION_UNSUPPORTED",
+          "FLOW_DOWNLOAD_RESOLUTION_UNAVAILABLE",
+        ].includes(code);
+        if (
+          !unavailable ||
+          error?.ambiguous ||
+          error?.noReplay ||
+          error?.dispatchStarted === true
+        )
+          throw Object.assign(error, { noRetry: true });
+        fromResolution = option.value;
+      }
+    }
+    throw Object.assign(
+      lastError || new Error("FLOW_DOWNLOAD_RESOLUTION_UNAVAILABLE"),
+      { noRetry: true },
+    );
+  }
+  static async _downloadFlowOption(
+    executor,
+    node,
+    workflow,
+    input,
+    operationId,
+    userId,
+    temporaries,
+    option,
+    route,
+  ) {
+    const { fileId, source, media, provider } = input;
+    const store = window.WorkflowResultMediaStore;
+    if (route?.provider === "flow" && route.api_driver) {
+      const blob = await executor._downloadProviderTileDirect(
+        fileId,
+        { ...route, media_type: "video" },
+        "",
+        1,
+        null,
+        source.result_file_names?.[fileId],
+        "original",
+        option.value,
+        source.ratio,
+        null,
+        (value) => value,
+      );
+      if (blob instanceof Blob && blob.size) return blob;
+    }
+    const target = await window.MessageBridge.getTargetContext();
+    this.phase(node, "downloading", {
+      sourceNodeId: source.node_id,
+      resolution: option.value,
+      step: "resolving_identity",
+    });
+    const identity = await executor._resolveDownloadWebIdentity(
+      fileId,
+      source.result_file_names?.[fileId],
+      media,
+      provider,
+      workflow,
+      true,
+      { operationId, nodeId: node.node_id, sourceNodeId: source.node_id },
+    );
+    this.assertOwner(executor, userId);
+    if (!Number.isInteger(target?.tabId))
+      throw new Error("FLOW_TARGET_MISSING");
+    await chrome.tabs.update(target.tabId, { active: true });
+    const request = {
+      action: "workflow:videoCapture",
+      userId: Number(userId),
+      workflowId: workflow.wf_id,
+      nodeId: node.node_id,
+      operationId,
+      resolution: option.value,
+      flowProjectId: target.projectId,
+    };
+    const capture = await chrome.runtime.sendMessage({
+      ...request,
+      prepare: true,
+      target,
+    });
+    if (!capture?.success)
+      throw new Error(capture?.error || "WORKFLOW_VIDEO_CAPTURE_FAILED");
+    try {
+      if (capture.captureOnly !== true)
+        throw Object.assign(
+          new Error("WORKFLOW_VIDEO_CAPTURE_PROTOCOL_MISMATCH"),
+          { noRetry: true },
+        );
+      this.phase(node, "downloading", {
+        sourceNodeId: source.node_id,
+        resolution: option.value,
+        step: "capture_prepared",
+        captureId: capture.id,
+      });
+      const downloaded = await window.MessageBridge.sendToContentScript(
+        "downloadTileMedia",
+        {
+          tileId: identity.tileId,
+          fileName: identity.fileName,
+          flowFileId: fileId,
+          resolution: option.value,
+          videoResolution: option.value,
+          watermarkMode: "original",
+          plannedFilename: capture.filename,
+          requestId: capture.id,
+          motionCapture: capture,
+        },
+        { timeoutMs: window.MotionMergeTask.timeoutMs() },
+      );
+      if (!downloaded?.success) {
+        throw Object.assign(
+          new Error(downloaded?.error || "WORKFLOW_VIDEO_DOWNLOAD_FAILED"),
+          {
+            code: downloaded?.error || "WORKFLOW_VIDEO_DOWNLOAD_FAILED",
+            stage: downloaded?.stage,
+            dispatchStarted: downloaded?.dispatchStarted,
+            captureDiagnostic: downloaded?.captureDiagnostic,
+            ambiguous: downloaded?.ambiguous,
+            noReplay: downloaded?.noReplay,
+            noRetry: downloaded?.noRetry,
+          },
+        );
+      }
+      this.phase(node, "downloading", {
+        sourceNodeId: source.node_id,
+        resolution: option.value,
+        step: "reading_bytes",
+      });
+      const saved = await chrome.runtime.sendMessage({
+        ...request,
+        captureId: capture.id,
+      });
+      if (!saved?.success)
+        throw new Error(saved?.error || "WORKFLOW_VIDEO_CAPTURE_FAILED");
+      temporaries.add(saved.fileId);
+      const record = await store.get(
+        workflow.wf_id,
+        node.node_id,
+        saved.fileId,
+        userId,
+      );
+      if (!record?.blob?.size || record.blob.size !== saved.size)
+        throw new Error("WORKFLOW_VIDEO_DOWNLOAD_EMPTY");
+      this.phase(node, "downloading", {
+        sourceNodeId: source.node_id,
+        resolution: option.value,
+        step: "bytes_ready",
+        bytes: record.blob.size,
+      });
+      return saved.fileId;
+    } finally {
+      await chrome.runtime
+        .sendMessage({ ...request, captureId: capture.id, release: true })
+        .catch(() => {});
+    }
+  }
+  static async metadata(blob, checkOwner = null) {
+    const timeoutMs = window.MotionMergeTask.timeoutMs();
+    return new Promise((resolve, reject) => {
+      const video = document.createElement("video"),
+        url = URL.createObjectURL(blob);
+      let settled = false,
+        ownerWatch;
+      const finish = (error, value) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        clearInterval(ownerWatch);
+        video.onloadeddata = video.onerror = null;
+        video.removeAttribute("src");
+        video.load();
+        URL.revokeObjectURL(url);
+        error ? reject(error) : resolve(value);
+      };
+      const timer = setTimeout(
+        () => finish(new Error("WORKFLOW_VIDEO_METADATA_TIMEOUT")),
+        timeoutMs,
+      );
+      if (checkOwner)
+        ownerWatch = setInterval(() => {
+          try {
+            checkOwner();
+          } catch (error) {
+            finish(error);
+          }
+        }, 100);
+      video.onloadeddata = () => {
+        try {
+          if (
+            !(
+              video.videoWidth > 0 &&
+              video.videoHeight > 0 &&
+              Number.isFinite(video.duration) &&
+              video.duration > 0
+            )
+          )
+            throw new Error("MERGE_DURATION_INVALID");
+          const canvas = document.createElement("canvas");
+          canvas.width = Math.max(
+            1,
+            Math.round((240 * video.videoWidth) / video.videoHeight),
+          );
+          canvas.height = 240;
+          canvas
+            .getContext("2d")
+            .drawImage(video, 0, 0, canvas.width, canvas.height);
+          finish(null, {
+            width: video.videoWidth,
+            height: video.videoHeight,
+            duration: video.duration,
+            poster: canvas.toDataURL("image/jpeg", 0.8),
+          });
+        } catch (error) {
+          finish(error);
+        }
+      };
+      video.onerror = () => finish(new Error("WORKFLOW_VIDEO_METADATA_FAILED"));
+      try {
+        video.muted = true;
+        video.preload = "auto";
+        video.src = url;
+      } catch (error) {
+        finish(error);
+      }
+    });
+  }
+  static async isMp4(blob) {
+    if (!/^video\/mp4(?:;|$)/i.test(blob?.type || "") || blob.size < 12)
+      return false;
+    const header = new Uint8Array(await blob.slice(0, 12).arrayBuffer());
+    return (
+      header[4] === 102 &&
+      header[5] === 116 &&
+      header[6] === 121 &&
+      header[7] === 112
+    );
+  }
+  static async run(executor, node, workflow) {
+    const started = Date.now(),
+      operationId = crypto.randomUUID();
+    const userId = window.authManager?.getUser?.()?.id;
+    const operation = {
+      id: operationId,
+      started,
+      workflowId: workflow.wf_id,
+      nodeId: node.node_id,
+      userId,
+    };
+    const checkOwner = () => {
+      this.assertOwner(executor, userId);
+      if (operation.cancelled)
+        throw Object.assign(new Error("WORKFLOW_VIDEO_DELETED"), {
+          noRetry: true,
+        });
+      if (executor.currentWorkflow?.wf_id !== workflow.wf_id)
+        throw Object.assign(new Error("WORKFLOW_VIDEO_SCOPE_CHANGED"), {
+          noRetry: true,
+        });
+    };
+    this._operations.set(node, operation);
+    const canonical = executor.currentWorkflow?.nodes?.find(
+      (item) => item.node_id === node.node_id,
+    );
+    if (canonical) this._operations.set(canonical, operation);
+    if (!userId || !workflow.wf_id)
+      throw new Error("WORKFLOW_VIDEO_SCOPE_MISSING");
+    const temporaryIds = new Set(),
+      storedIds = [];
+    const store = window.WorkflowResultMediaStore;
+    const resultId = `workflow_merge_${operationId}`;
+    let completed = false;
+    this._activeOperations.add(operation);
+    try {
+      node.media_type = "Video";
+      if (!node.video_download_resolution)
+        node.video_download_resolution = (
+          await window.DownloadHelper.getSettings()
+        ).videoResolution;
+      checkOwner();
+      const inputs = this.inputs(executor, node, workflow);
+      for (let index = 0; index < inputs.length; index++) {
+        operation.inputProgress = {
+          sourceIndex: index + 1,
+          sourceTotal: inputs.length,
+          sourceName: inputs[index].source.node_name || "",
+          completed: index,
+        };
+        let storedId = `merge_temp_${operationId}_${index}`;
+        await this.retry(executor, node, "downloading", async () => {
+          checkOwner();
+          const blob = await this.download(
+            executor,
+            node,
+            workflow,
+            inputs[index],
+            operationId,
+            userId,
+            temporaryIds,
+          );
+          checkOwner();
+          if (typeof blob === "string") storedId = blob;
+          else {
+            temporaryIds.add(storedId);
+            await store.put(
+              workflow.wf_id,
+              node.node_id,
+              storedId,
+              blob,
+              "",
+              userId,
+            );
+          }
+          checkOwner();
+        });
+        storedIds.push(storedId);
+        this.phase(node, "downloading", {
+          completed: index + 1,
+          total: inputs.length,
+          step: "file_ready",
+        });
+      }
+      operation.inputProgress = null;
+      const result = await this.retry(executor, node, "merging", async () => {
+        checkOwner();
+        const clips = [];
+        for (const id of storedIds) {
+          const saved2 = await store.get(
+            workflow.wf_id,
+            node.node_id,
+            id,
+            userId,
+          );
+          if (!saved2?.blob?.size)
+            throw new Error("WORKFLOW_VIDEO_INPUT_MISSING");
+          clips.push(saved2.blob);
+        }
+        let task, watch, output;
+        try {
+          if (clips.length === 1 && (await this.isMp4(clips[0]))) {
+            checkOwner();
+            this.phase(node, "merging", {
+              step: "passthrough",
+              sourceCount: 1,
+              bytes: clips[0].size,
+            });
+            output = { blob: clips[0] };
+          } else {
+            this.phase(node, "merging", {
+              step: "encode",
+              sourceCount: clips.length,
+            });
+            task = window.MotionMergeTask.start(
+              clips,
+              (value) =>
+                this.phase(node, "merging", {
+                  percent: value.percent,
+                  index: value.index,
+                  count: value.count,
+                  workerStage: value.stage,
+                  ...(Number.isSafeInteger(value.normalizedFrames)
+                    ? { normalizedFrames: value.normalizedFrames }
+                    : {}),
+                  ...(Number.isSafeInteger(value.directFrames)
+                    ? { directFrames: value.directFrames }
+                    : {}),
+                }),
+              { workflow: true },
+            );
+            watch = setInterval(() => {
+              try {
+                checkOwner();
+              } catch (_) {
+                task.cancel();
+              }
+            }, 100);
+            clips.length = 0;
+            output = await task.promise;
+          }
+          clips.length = 0;
+          checkOwner();
+          const info = await this.metadata(output.blob, checkOwner);
+          checkOwner();
+          await store.put(
+            workflow.wf_id,
+            node.node_id,
+            resultId,
+            output.blob,
+            info.poster,
+            userId,
+          );
+          checkOwner();
+          return {
+            fileIds: [resultId],
+            thumbnails: {
+              [resultId]: {
+                type: "video",
+                width: info.width,
+                height: info.height,
+                duration: info.duration,
+                local_result: true,
+              },
+            },
+            providerUrls: {
+              [resultId]: {
+                provider: "workflow",
+                media_type: "video",
+                local_result: true,
+              },
+            },
+            duration: Date.now() - started,
+          };
+        } finally {
+          clearInterval(watch);
+          clips.length = 0;
+          output = null;
+          task?.cancel();
+        }
+      });
+      const saved = await store.get(
+        workflow.wf_id,
+        node.node_id,
+        resultId,
+        userId,
+      );
+      checkOwner();
+      this.phase(node, "merged", { bytes: saved.blob.size });
+      completed = true;
+      return result;
+    } finally {
+      this._activeOperations.delete(operation);
+      if (!completed) temporaryIds.add(resultId);
+      for (const id of temporaryIds)
+        await store
+          .deleteFile(workflow.wf_id, node.node_id, id, userId)
+          .catch((error) =>
+            console.warn("[WorkflowVideoMerge] temporary cleanup failed", {
+              code: error?.name,
+            }),
+          );
+    }
+  }
+  static async commit(executor, node, data) {
+    const operation = this._operations.get(node),
+      userId = operation?.userId || window.authManager?.getUser?.()?.id;
+    const workflowId = executor.currentWorkflow?.wf_id;
+    this.assertOwner(executor, userId);
+    if (operation?.workflowId && operation.workflowId !== workflowId)
+      throw new Error("WORKFLOW_VIDEO_SCOPE_CHANGED");
+    const previous =
+      this._previousResults.get(executor)?.get(node.node_id) ||
+      String(node.result_file_ids || "")
+        .split(",")
+        .map((id) => id.trim())
+        .filter(Boolean);
+    const next = new Set(
+      data.result_file_ids
+        .split(",")
+        .map((id) => id.trim())
+        .filter(Boolean),
+    );
+    const saved = await window.storageManager.updateNodeStatus(
+      workflowId,
+      node.node_id,
+      data,
+    );
+    if (!saved) throw new Error("WORKFLOW_VIDEO_RESULT_CHECKPOINT_FAILED");
+    this.assertOwner(executor, userId);
+    if (executor.currentWorkflow?.wf_id !== workflowId)
+      throw new Error("WORKFLOW_VIDEO_SCOPE_CHANGED");
+    for (const id of previous) {
+      if (next.has(id)) continue;
+      await window.WorkflowResultMediaStore.deleteFile(
+        workflowId,
+        node.node_id,
+        id,
+        userId,
+      ).catch((error) =>
+        console.warn("[WorkflowVideoMerge] previous result cleanup failed", {
+          code: error?.name,
+        }),
+      );
+    }
+    await window.WorkflowResultMediaStore.retireNodeResults?.(
+      workflowId,
+      node.node_id,
+      [...next],
+      operation?.started || 0,
+      userId,
+    ).catch((error) =>
+      console.warn("[WorkflowVideoMerge] scoped cleanup failed", {
+        code: error?.name,
+      }),
+    );
+    this._previousResults.get(executor)?.delete(node.node_id);
+  }
+  static async autoDownload(executor, node, result, taskName) {
+    if (window.featureGate?.canUse("auto_download") !== true) return;
+    const settings = await window.DownloadHelper.getSettings();
+    const userId = window.authManager?.getUser?.()?.id;
+    const timestamp = Date.now();
+    for (let index = 0; index < result.fileIds.length; index++) {
+      const id = result.fileIds[index];
+      const filename = window.DownloadHelper.buildFilename({
+        template: settings.template,
+        project: settings.project,
+        folder: settings.folder,
+        prompt: node.prompt || node.node_name,
+        taskName,
+        index: index + 1,
+        ext: "mp4",
+        timestamp,
+      });
+      await this.retry(executor, node, "downloading", async () => {
+        this.assertOwner(executor, userId);
+        const saved = await window.WorkflowResultMediaStore.get(
+          executor.currentWorkflow.wf_id,
+          node.node_id,
+          id,
+        );
+        if (!saved?.blob?.size) throw new Error("LOCAL_RESULT_MISSING");
+        this.assertOwner(executor, userId);
+        const response =
+          await window.DownloadHelper.downloadStoredProviderVideo({
+            blob: saved.blob,
+            filename,
+            waitForComplete: true,
+          });
+        if (!response?.success) {
+          const accepted =
+            response?.state === "timeout" &&
+            Number.isInteger(response.downloadId);
+          throw Object.assign(
+            new Error(response?.error || "DOWNLOAD_FAILED"),
+            response,
+            accepted
+              ? {
+                  noReplay: true,
+                  dispatchStarted: true,
+                  downloadBlockedIds: [id],
+                }
+              : {},
+          );
+        }
+      });
+    }
+  }
+  static async showResult(editor, container, nodeId, fileId) {
+    const workflowId = editor.workflow?.wf_id,
+      owner = Symbol();
+    const userId = window.authManager?.getUser?.()?.id;
+    container._mergeResultOwner = owner;
+    const owned = () =>
+      container.isConnected &&
+      container._mergeResultOwner === owner &&
+      editor.workflow?.wf_id === workflowId &&
+      window.authManager?.getUser?.()?.id === userId;
+    try {
+      const record = await window.WorkflowResultMediaStore.get(
+        workflowId,
+        nodeId,
+        fileId,
+      );
+      if (!owned()) return;
+      if (!record?.blob?.size) throw new Error("LOCAL_RESULT_MISSING");
+      const src = await editor._getMuseRuntimeVideoUrl(
+        fileId,
+        null,
+        "",
+        nodeId,
+      );
+      if (!owned()) return;
+      if (!src) throw new Error("LOCAL_RESULT_MISSING");
+      const video = document.createElement("video");
+      video.controls = true;
+      video.playsInline = true;
+      video.preload = "metadata";
+      if (record.poster) video.poster = record.poster;
+      video.src = src;
+      container.replaceChildren(video);
+    } catch (error) {
+      if (owned())
+        container.textContent =
+          window.I18n?.t("workflow.previewUnavailable") || "";
+      console.warn("[WorkflowVideoMerge] result unavailable", {
+        nodeId,
+        code: error?.message,
+      });
+    }
+  }
+  static releasePreview(editor, container) {
+    if (!container) return;
+    container._mergePreviewOwner = Symbol();
+    for (const video of container.querySelectorAll("video")) {
+      try {
+        video.pause();
+        video.removeAttribute("src");
+        video.load();
+      } catch (_) {}
+    }
+    if (container._mergeFileId)
+      editor._clearMuseVideoRuntimeCache?.([container._mergeFileId]);
+    delete container._mergeFileId;
+    container.classList.remove("workflow-merge-preview");
+  }
+  static async showPreview(editor, container, nodeId, fileId) {
+    const workflowId = editor.workflow?.wf_id;
+    const userId = window.authManager?.getUser?.()?.id;
+    if (container._mergeFileId === fileId && container.querySelector("video"))
+      return;
+    if (container._mergeFileId && container._mergeFileId !== fileId)
+      this.releasePreview(editor, container);
+    const owner = Symbol();
+    container._mergePreviewOwner = owner;
+    const owned = () =>
+      container.isConnected &&
+      container._mergePreviewOwner === owner &&
+      !container.closest(".drawflow-node.node-running") &&
+      editor.workflow?.wf_id === workflowId &&
+      window.authManager?.getUser?.()?.id === userId;
+    try {
+      let record = await window.WorkflowResultMediaStore.get(
+        workflowId,
+        nodeId,
+        fileId,
+      );
+      if (!owned() || !record?.blob?.size) return;
+      const poster = record.poster || "";
+      const src = await editor._getMuseRuntimeVideoUrl(
+        fileId,
+        null,
+        "",
+        nodeId,
+      );
+      record = null;
+      if (!owned()) return;
+      if (!src) throw new Error("LOCAL_RESULT_MISSING");
+      const video = document.createElement("video");
+      video.muted = true;
+      video.loop = true;
+      video.playsInline = true;
+      video.preload = "metadata";
+      if (poster) video.poster = poster;
+      video.src = src;
+      const thumb = document.createElement("div");
+      thumb.className = "df-preview-thumb";
+      thumb.dataset.fileId = fileId;
+      thumb.dataset.mediaSrc = src;
+      thumb.dataset.mediaType = "video";
+      thumb.dataset.mediaProvider = "local";
+      thumb.dataset.museNodeId = nodeId;
+      thumb.dataset.mediaPoster = poster;
+      thumb.append(video);
+      editor._attachThumbZoom(thumb);
+      editor._bindNodeVideoPlaybackState(video, thumb);
+      thumb.addEventListener("mouseenter", () =>
+        editor._playNodePreviewVideo(video, thumb),
+      );
+      thumb.addEventListener("mouseleave", () =>
+        editor._stopNodePreviewVideo(video, thumb),
+      );
+      thumb
+        .querySelector(".df-preview-zoom")
+        .addEventListener("click", (event) => {
+          event.stopPropagation();
+          editor._stopNodePreviewVideo(video, thumb);
+          editor._showMediaViewer({
+            src,
+            type: "video",
+            poster,
+            onDownload: () =>
+              editor._downloadNodeFiles({ source: "original", nodeId }),
+          });
+        });
+      video.onloadedmetadata = () => {
+        if (!owned() || !video.videoWidth || !video.videoHeight) return;
+        container.style.aspectRatio = `${video.videoWidth} / ${video.videoHeight}`;
+        editor._scheduleConnectionRefresh();
+      };
+      container.classList.add("workflow-merge-preview");
+      container._mergeFileId = fileId;
+      container._nodeId = nodeId;
+      container.replaceChildren(thumb);
+      editor._unlockPreviewHeight?.(container);
+      editor._scheduleConnectionRefresh();
+    } catch (error) {
+      console.warn("[WorkflowVideoMerge] preview unavailable", {
+        nodeId,
+        code: error?.name,
+      });
+    }
+  }
+}
+__publicField(WorkflowVideoMerge, "_previousResults", new WeakMap());
+__publicField(WorkflowVideoMerge, "_operations", new WeakMap());
+__publicField(WorkflowVideoMerge, "_activeOperations", new Set());
+window.WorkflowVideoMerge = WorkflowVideoMerge;

@@ -1,1 +1,263 @@
-class MuseVideoContinuity{static enabled(settings){return settings?.chain?.enabled===true&&settings.chain.kind==="video_last_frame"}static config(){return window.ProviderConfigManager?.getApiConfigValueSync?.("muse","chain_config")||null}static available(mode,model){const config=this.config();return config?.enabled===true&&(mode==="api"?config.video_enabled:config?.video_web_chain_enabled)===true&&window.featureGate?.canUseProviderRefImages?.("muse")===true&&window.ProviderRegistry?.get?.("muse")?.capabilities?.supportsRefImage===true&&window.ProviderRegistry?.get?.("muse")?.getMaxRefImages?.({mode:"video",modelValue:model})>0}static validate(settings,items){if(!this.enabled(settings))return;const max=Number(this.config()?.max_video_segments);if(settings.mediaType!=="video"||!this.available(settings.museGenMode||"web",settings.model)||!Number.isSafeInteger(max)||max<2||items.length<2&&!Array.isArray(settings.chainParents)||items.length>max||items.some(item=>Number(item.quantity??1)!==1))throw Error("MUSE_CHAIN_CONFIG_OR_INPUT_INVALID");for(const[index,item]of items.entries()){const model=item.settingsOverride?.model||settings.model;if(!this.available(settings.museGenMode||"web",model))throw Error("MUSE_CHAIN_CONFIG_OR_INPUT_INVALID");const cap=window.ProviderRegistry.get("muse").getMaxRefImages({mode:"video",modelValue:model});const hasParent=index>0||!!settings.chainParents?.[index];const mapped=hasParent&&settings.chain.refPolicy==="generated_only"?0:(item.refKeys||item.refs||[]).length;if(mapped+(hasParent?1:0)>cap)throw Error("MUSE_REF_LIMIT_EXCEEDED")}}static async imageRef(blob,name="previous-last-frame.jpg"){if(!(blob instanceof Blob)||!blob.size||!blob.type.startsWith("image/"))throw Error("MUSE_CHAIN_FRAME_INVALID");return new Promise((resolve,reject)=>{const reader=new FileReader;reader.onerror=()=>reject(reader.error||Error("MUSE_CHAIN_FRAME_INVALID"));reader.onload=()=>resolve({base64:String(reader.result).replace(/^data:[^,]+,/,""),type:blob.type,name});reader.readAsDataURL(blob)})}static async refs(run,item,mapped,shouldStop=()=>false){if(!this.enabled(run.settingsSnapshot))return mapped;const model=item.settingsOverride?.model||run.settingsSnapshot.model;if(!this.available(run.settingsSnapshot.museGenMode||"web",model))throw Error("MUSE_CHAIN_CONFIG_OR_INPUT_INVALID");const lineage=run.settingsSnapshot.chainParents?.[item.promptIndex];if(item.promptIndex===0&&!lineage)return mapped;const current=()=>{if(shouldStop())throw Error("CANCELLED");if(String(window.authManager?.getUser?.()?.id||"")!==String(run.userId))throw Error("MUSE_BATCH_SCOPE_CHANGED")};current();const snapshot=await window.ProviderWebQueueStore.getRun(lineage?.runId||run.id);if(lineage?snapshot?.run?.userId!==run.userId||snapshot?.run?.provider!=="muse":snapshot?.run?.scope!==run.scope)throw Error("MUSE_BATCH_SCOPE_CHANGED");const parent=snapshot.items.find(row=>row.promptIndex===(lineage?.promptIndex??item.promptIndex-1));const receipts=parent?.resultReceipts||[];if(parent?.state!=="COMPLETED"||receipts.length!==1||receipts[0].mediaType!=="video")throw Error("MUSE_CHAIN_PREVIOUS_NOT_READY");const asset=await window.ProviderWebQueueStore.getAsset(run.userId,snapshot.run.projectId,receipts[0].assetKey,snapshot.run.ownerScope);if(asset?.runId!==snapshot.run.id||!(asset.blob instanceof Blob)||!asset.blob.size||!asset.blob.type.startsWith("video/"))throw Error("MUSE_LOCAL_ASSET_MISSING");current();const url=URL.createObjectURL(asset.blob);let frame;try{frame=await this.extract(url,{shouldStop,current,runId:run.id,promptIndex:item.promptIndex})}finally{URL.revokeObjectURL(url)}current();if(!frame?.base64)throw Error("MUSE_CHAIN_FRAME_INVALID");const image=/^data:image\//.test(frame.base64)?frame.base64:`data:image/jpeg;base64,${frame.base64}`;const generated=await this.imageRef(await(await fetch(image)).blob());current();const refs=[generated,...run.settingsSnapshot.chain.refPolicy==="generated_only"?[]:mapped];const cap=window.ProviderRegistry.get("muse").getMaxRefImages({mode:"video",modelValue:model});if(refs.length>cap)throw Error("MUSE_REF_LIMIT_EXCEEDED");console.info("[MuseVideoChain]",{runId:run.id,promptIndex:item.promptIndex,parentIndex:parent.promptIndex,stage:"frame_ready"});return refs}static async extract(url,{shouldStop=()=>false,current=()=>{},runId=null,promptIndex=null,onRetry=()=>{}}={}){let frame;await window.ExecutionConfig.getConfig();const maxRetries=window.ExecutionConfig.getMaxRetries();if(!Number.isSafeInteger(maxRetries)||maxRetries<0)throw Error("MUSE_EXECUTION_CONFIG_REQUIRED");const decodeRetryBudget={remaining:maxRetries};const reportRetry=()=>{onRetry();console.info("[MuseVideoChain]",{runId,promptIndex,stage:"extract_retry",retry:maxRetries-decodeRetryBudget.remaining,maxRetries})};for(;;){if(shouldStop())throw Error("CANCELLED");current();try{frame=await window.VideoFrameExtractor.extractLastFrame(url,{provider:"muse",shouldStop,decodeRetryBudget,onRetry:reportRetry});if(shouldStop())throw Error("CANCELLED");current();if(!frame?.base64)throw Error("MUSE_CHAIN_FRAME_INVALID");break}catch(error){current();if(shouldStop()||error?.message==="CANCELLED"||error?.name==="AbortError"||decodeRetryBudget.remaining<=0)throw error;decodeRetryBudget.remaining--;reportRetry()}}return frame}static async materialize(result,shouldStop=()=>false){if(result?.mediaType!=="video")return result;const userId=String(window.authManager?.getUser?.()?.id||"");const fetchedMedia=[];for(const[index,url]of(result.mediaUrls||[]).entries()){let media=result.fetchedMedia?.find(row=>row.url===url)||{url};let blob=media.blob;if(!(blob instanceof Blob)){const runtime=await window.MessageBridge.museCreateRuntimeVideoUrl(result.tabId,url);if(!runtime?.success||!runtime.videoUrl)throw Error("MUSE_LOCAL_ASSET_MISSING");try{const response=await fetch(runtime.videoUrl);if(!response.ok)throw Error("MUSE_LOCAL_ASSET_MISSING");blob=await response.blob()}finally{URL.revokeObjectURL(runtime.videoUrl)}}if(!blob.size||!blob.type.startsWith("video/"))throw Error("MUSE_LOCAL_ASSET_MISSING");if(String(window.authManager?.getUser?.()?.id||"")!==userId)throw Error("MUSE_BATCH_SCOPE_CHANGED");fetchedMedia.push({...media,blob,resourceIndex:media.resourceIndex??index})}if(!fetchedMedia.length)throw Error("MUSE_LOCAL_ASSET_MISSING");return{...result,fetchedMedia}}}window.MuseVideoContinuity=MuseVideoContinuity;
+class MuseVideoContinuity {
+  static enabled(settings) {
+    return (
+      settings?.chain?.enabled === true &&
+      settings.chain.kind === "video_last_frame"
+    );
+  }
+  static config() {
+    return (
+      window.ProviderConfigManager?.getApiConfigValueSync?.(
+        "muse",
+        "chain_config",
+      ) || null
+    );
+  }
+  static available(mode, model) {
+    const config = this.config();
+    return (
+      config?.enabled === true &&
+      (mode === "api"
+        ? config.video_enabled
+        : config?.video_web_chain_enabled) === true &&
+      window.featureGate?.canUseProviderRefImages?.("muse") === true &&
+      window.ProviderRegistry?.get?.("muse")?.capabilities?.supportsRefImage ===
+        true &&
+      window.ProviderRegistry?.get?.("muse")?.getMaxRefImages?.({
+        mode: "video",
+        modelValue: model,
+      }) > 0
+    );
+  }
+  static validate(settings, items) {
+    if (!this.enabled(settings)) return;
+    const max = Number(this.config()?.max_video_segments);
+    if (
+      settings.mediaType !== "video" ||
+      !this.available(settings.museGenMode || "web", settings.model) ||
+      !Number.isSafeInteger(max) ||
+      max < 2 ||
+      (items.length < 2 && !Array.isArray(settings.chainParents)) ||
+      items.length > max ||
+      items.some((item) => Number(item.quantity ?? 1) !== 1)
+    )
+      throw Error("MUSE_CHAIN_CONFIG_OR_INPUT_INVALID");
+    for (const [index, item] of items.entries()) {
+      const model = item.settingsOverride?.model || settings.model;
+      if (!this.available(settings.museGenMode || "web", model))
+        throw Error("MUSE_CHAIN_CONFIG_OR_INPUT_INVALID");
+      const cap = window.ProviderRegistry.get("muse").getMaxRefImages({
+        mode: "video",
+        modelValue: model,
+      });
+      const hasParent = index > 0 || !!settings.chainParents?.[index];
+      const mapped =
+        hasParent && settings.chain.refPolicy === "generated_only"
+          ? 0
+          : (item.refKeys || item.refs || []).length;
+      if (mapped + (hasParent ? 1 : 0) > cap)
+        throw Error("MUSE_REF_LIMIT_EXCEEDED");
+    }
+  }
+  static async imageRef(blob, name = "previous-last-frame.jpg") {
+    if (
+      !(blob instanceof Blob) ||
+      !blob.size ||
+      !blob.type.startsWith("image/")
+    )
+      throw Error("MUSE_CHAIN_FRAME_INVALID");
+    return new Promise((resolve, reject) => {
+      const reader = new FileReader();
+      reader.onerror = () =>
+        reject(reader.error || Error("MUSE_CHAIN_FRAME_INVALID"));
+      reader.onload = () =>
+        resolve({
+          base64: String(reader.result).replace(/^data:[^,]+,/, ""),
+          type: blob.type,
+          name,
+        });
+      reader.readAsDataURL(blob);
+    });
+  }
+  static async refs(run, item, mapped, shouldStop = () => false) {
+    if (!this.enabled(run.settingsSnapshot)) return mapped;
+    const model = item.settingsOverride?.model || run.settingsSnapshot.model;
+    if (!this.available(run.settingsSnapshot.museGenMode || "web", model))
+      throw Error("MUSE_CHAIN_CONFIG_OR_INPUT_INVALID");
+    const lineage = run.settingsSnapshot.chainParents?.[item.promptIndex];
+    if (item.promptIndex === 0 && !lineage) return mapped;
+    const current = () => {
+      if (shouldStop()) throw Error("CANCELLED");
+      if (
+        String(window.authManager?.getUser?.()?.id || "") !== String(run.userId)
+      )
+        throw Error("MUSE_BATCH_SCOPE_CHANGED");
+    };
+    current();
+    const snapshot = await window.ProviderWebQueueStore.getRun(
+      lineage?.runId || run.id,
+    );
+    if (
+      lineage
+        ? snapshot?.run?.userId !== run.userId ||
+          snapshot?.run?.provider !== "muse"
+        : snapshot?.run?.scope !== run.scope
+    )
+      throw Error("MUSE_BATCH_SCOPE_CHANGED");
+    const parent = snapshot.items.find(
+      (row) =>
+        row.promptIndex === (lineage?.promptIndex ?? item.promptIndex - 1),
+    );
+    const receipts = parent?.resultReceipts || [];
+    if (
+      parent?.state !== "COMPLETED" ||
+      receipts.length !== 1 ||
+      receipts[0].mediaType !== "video"
+    )
+      throw Error("MUSE_CHAIN_PREVIOUS_NOT_READY");
+    const asset = await window.ProviderWebQueueStore.getAsset(
+      run.userId,
+      snapshot.run.projectId,
+      receipts[0].assetKey,
+      snapshot.run.ownerScope,
+    );
+    if (
+      asset?.runId !== snapshot.run.id ||
+      !(asset.blob instanceof Blob) ||
+      !asset.blob.size ||
+      !asset.blob.type.startsWith("video/")
+    )
+      throw Error("MUSE_LOCAL_ASSET_MISSING");
+    current();
+    const url = URL.createObjectURL(asset.blob);
+    let frame;
+    try {
+      frame = await this.extract(url, {
+        shouldStop,
+        current,
+        runId: run.id,
+        promptIndex: item.promptIndex,
+      });
+    } finally {
+      URL.revokeObjectURL(url);
+    }
+    current();
+    if (!frame?.base64) throw Error("MUSE_CHAIN_FRAME_INVALID");
+    const image = /^data:image\//.test(frame.base64)
+      ? frame.base64
+      : `data:image/jpeg;base64,${frame.base64}`;
+    const generated = await this.imageRef(await (await fetch(image)).blob());
+    current();
+    const refs = [
+      generated,
+      ...(run.settingsSnapshot.chain.refPolicy === "generated_only"
+        ? []
+        : mapped),
+    ];
+    const cap = window.ProviderRegistry.get("muse").getMaxRefImages({
+      mode: "video",
+      modelValue: model,
+    });
+    if (refs.length > cap) throw Error("MUSE_REF_LIMIT_EXCEEDED");
+    console.info("[MuseVideoChain]", {
+      runId: run.id,
+      promptIndex: item.promptIndex,
+      parentIndex: parent.promptIndex,
+      stage: "frame_ready",
+    });
+    return refs;
+  }
+  static async extract(
+    url,
+    {
+      shouldStop = () => false,
+      current = () => {},
+      runId = null,
+      promptIndex = null,
+      onRetry = () => {},
+    } = {},
+  ) {
+    let frame;
+    await window.ExecutionConfig.getConfig();
+    const maxRetries = window.ExecutionConfig.getMaxRetries();
+    if (!Number.isSafeInteger(maxRetries) || maxRetries < 0)
+      throw Error("MUSE_EXECUTION_CONFIG_REQUIRED");
+    const decodeRetryBudget = { remaining: maxRetries };
+    const reportRetry = () => {
+      onRetry();
+      console.info("[MuseVideoChain]", {
+        runId,
+        promptIndex,
+        stage: "extract_retry",
+        retry: maxRetries - decodeRetryBudget.remaining,
+        maxRetries,
+      });
+    };
+    for (;;) {
+      if (shouldStop()) throw Error("CANCELLED");
+      current();
+      try {
+        frame = await window.VideoFrameExtractor.extractLastFrame(url, {
+          provider: "muse",
+          shouldStop,
+          decodeRetryBudget,
+          onRetry: reportRetry,
+        });
+        if (shouldStop()) throw Error("CANCELLED");
+        current();
+        if (!frame?.base64) throw Error("MUSE_CHAIN_FRAME_INVALID");
+        break;
+      } catch (error) {
+        current();
+        if (
+          shouldStop() ||
+          error?.message === "CANCELLED" ||
+          error?.name === "AbortError" ||
+          decodeRetryBudget.remaining <= 0
+        )
+          throw error;
+        decodeRetryBudget.remaining--;
+        reportRetry();
+      }
+    }
+    return frame;
+  }
+  static async materialize(result, shouldStop = () => false) {
+    if (result?.mediaType !== "video") return result;
+    const userId = String(window.authManager?.getUser?.()?.id || "");
+    const fetchedMedia = [];
+    for (const [index, url] of (result.mediaUrls || []).entries()) {
+      let media = result.fetchedMedia?.find((row) => row.url === url) || {
+        url,
+      };
+      let blob = media.blob;
+      if (!(blob instanceof Blob)) {
+        const runtime = await window.MessageBridge.museCreateRuntimeVideoUrl(
+          result.tabId,
+          url,
+        );
+        if (!runtime?.success || !runtime.videoUrl)
+          throw Error("MUSE_LOCAL_ASSET_MISSING");
+        try {
+          const response = await fetch(runtime.videoUrl);
+          if (!response.ok) throw Error("MUSE_LOCAL_ASSET_MISSING");
+          blob = await response.blob();
+        } finally {
+          URL.revokeObjectURL(runtime.videoUrl);
+        }
+      }
+      if (!blob.size || !blob.type.startsWith("video/"))
+        throw Error("MUSE_LOCAL_ASSET_MISSING");
+      if (String(window.authManager?.getUser?.()?.id || "") !== userId)
+        throw Error("MUSE_BATCH_SCOPE_CHANGED");
+      fetchedMedia.push({
+        ...media,
+        blob,
+        resourceIndex: media.resourceIndex ?? index,
+      });
+    }
+    if (!fetchedMedia.length) throw Error("MUSE_LOCAL_ASSET_MISSING");
+    return { ...result, fetchedMedia };
+  }
+}
+window.MuseVideoContinuity = MuseVideoContinuity;

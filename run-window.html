@@ -1,143 +1,166 @@
-<!DOCTYPE html>
+<!doctype html>
 <html lang="vi">
-<head>
-<meta charset="UTF-8">
-<meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>566Flow — Run Workflow</title>
-<link rel="stylesheet" href="src/shared/custom-dialog.css">
-<link rel="stylesheet" href="run-window.css">
-</head>
-<body>
-  <div class="rw-header">
-    <div class="rw-title" id="rwTitle">Loading workflow...</div>
-    <span class="rw-status" id="rwStatus" role="status" aria-live="polite">Starting</span>
-    <button type="button" class="rw-stop" id="rwStop" disabled>Stop</button>
-  </div>
-  <div class="rw-bar"><div class="rw-bar-fill" id="rwBarFill"></div></div>
-  <div class="rw-progress" id="rwProgress">Preparing execution environment...</div>
-  <div class="rw-providers" id="rwProviders" hidden></div>
-  <div class="rw-nodes" id="rwNodes"></div>
-  <div class="rw-log-wrap" id="rwLogWrap">
-    <div class="rw-log-toolbar"><button type="button" class="rw-log-toggle" id="rwLogToggle"><span class="chev">▸</span> Detailed log</button><button type="button" class="rw-copy-log" id="rwCopyLog" disabled><svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="9" y="9" width="13" height="13" rx="2"/><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"/></svg><span>Copy log</span></button></div>
-    <div class="rw-log" id="rwLog"></div>
-  </div>
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>566Flow — Run Workflow</title>
+    <link rel="stylesheet" href="src/shared/custom-dialog.css" />
+    <link rel="stylesheet" href="run-window.css" />
+  </head>
+  <body>
+    <div class="rw-header">
+      <div class="rw-title" id="rwTitle">Loading workflow...</div>
+      <span class="rw-status" id="rwStatus" role="status" aria-live="polite"
+        >Starting</span
+      >
+      <button type="button" class="rw-stop" id="rwStop" disabled>Stop</button>
+    </div>
+    <div class="rw-bar"><div class="rw-bar-fill" id="rwBarFill"></div></div>
+    <div class="rw-progress" id="rwProgress">
+      Preparing execution environment...
+    </div>
+    <div class="rw-providers" id="rwProviders" hidden></div>
+    <div class="rw-nodes" id="rwNodes"></div>
+    <div class="rw-log-wrap" id="rwLogWrap">
+      <div class="rw-log-toolbar">
+        <button type="button" class="rw-log-toggle" id="rwLogToggle">
+          <span class="chev">▸</span> Detailed log</button
+        ><button type="button" class="rw-copy-log" id="rwCopyLog" disabled>
+          <svg
+            width="14"
+            height="14"
+            viewBox="0 0 24 24"
+            fill="none"
+            stroke="currentColor"
+            stroke-width="2"
+          >
+            <rect x="9" y="9" width="13" height="13" rx="2" />
+            <path
+              d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"
+            /></svg
+          ><span>Copy log</span>
+        </button>
+      </div>
+      <div class="rw-log" id="rwLog"></div>
+    </div>
 
-  <!-- Core execution stack — ĐÚNG thứ tự workflow-editor.html, BỎ editor UI
+    <!-- Core execution stack — ĐÚNG thứ tự workflow-editor.html, BỎ editor UI
        (drawflow/html2canvas/DiagramCanvas/WorkflowList/WorkflowEditor/modal templates...).
        P2.5 verified: executor 0 coupling editor — chỉ cần data layer + core. -->
-  <script src="src/core/Diag566.js"></script>
-<script src="src/core/utils.js"></script>
-  <script src="src/core/IdGenerator.js"></script>
-  <script src="src/core/EventBus.js"></script>
-  <script src="src/core/I18n.js"></script>
-  <script src="src/core/LocalFetchShim.js"></script><script src="src/core/ApiBaseConfig.js"></script>
-  <script src="src/core/LocalStorage.js"></script>
-  <script src="src/core/AuthManager.js"></script>
-  <script src="src/core/FeatureGate.js"></script>
-  <script src="src/core/WatermarkClient.js"></script>
-  <script src="vendor/mediabunny.js"></script>
-  <script src="src/core/VideoWatermarkRemover.js"></script>
-  <script src="src/core/VideoWmClient.js"></script>
-  <script src="src/core/SystemConfig.js"></script>
-  <script src="src/core/ValidationRules.js"></script>
-  <script src="src/core/RequestSigner.js"></script>
-  <script src="src/core/ProviderConfigManager.js"></script>
-  <script src="src/core/ProviderMeta.js"></script>
-  <script src="src/core/ModelRegistry.js"></script>
-  <script src="src/core/VoiceRegistry.js"></script>
-  <script src="src/core/CharacterRegistry.js"></script>
-  <script src="src/core/ExecutionConfig.js"></script>
-  <script src="src/core/errors/ConfigRequiredError.js"></script>
-  <script src="src/core/UsageSync.js"></script>
-  <script src="src/core/ExecutionGate.js"></script>
-  <script src="src/core/errors/QuotaErrorHandler.js"></script>
-  <script src="src/core/TrialGate.js"></script>
-  <script src="src/core/RequestCoalescer.js"></script>
-  <script src="src/core/ApiStorage.js"></script>
-  <script src="src/core/StorageManager.js"></script>
-  <script src="src/core/SseBroadcastManager.js"></script>
-  <script src="src/core/SseClient.js"></script>
-  <script src="src/core/TelegramExecutor.js"></script>
-  <script src="src/core/RetryHelper.js"></script>
-  <script src="src/core/ExecutionLock.js"></script>
-  <script src="src/core/BlobUrlManager.js"></script>
-  <script src="src/core/ThumbnailCache.js"></script>
-  <script src="src/core/PendingUploadStore.js"></script>
-  <script src="src/core/WorkflowMuseVideoStore.js"></script>
-  <script src="src/core/TileCache.js"></script>
-  <script src="src/core/TileResolver.js"></script>
-  <script src="src/core/AlbumStore.js"></script>
-  <script src="src/core/ImageStore.js"></script>
-  <script src="src/core/FileUploader.js"></script>
-  <script src="src/core/MediaRegistry.js"></script>
-  <script src="src/settings/StorageSettings.js"></script>
-  <script src="src/core/flow-api/FlowApiTelemetry.js"></script>
-  <script src="src/core/QueueItem.js"></script>
-  <script src="src/core/Job.js"></script>
-  <script src="src/core/MentionParser.js"></script>
-  <script src="src/core/FlowV2CorrelationProtocol.js"></script>
-  <script src="src/core/FlowV2CorrelationBroker.js"></script>
+    <script src="src/core/Diag566.js"></script>
+    <script src="src/core/utils.js"></script>
+    <script src="src/core/IdGenerator.js"></script>
+    <script src="src/core/EventBus.js"></script>
+    <script src="src/core/I18n.js"></script>
+    <script src="src/core/LocalFetchShim.js"></script>
+    <script src="src/core/ApiBaseConfig.js"></script>
+    <script src="src/core/LocalStorage.js"></script>
+    <script src="src/core/AuthManager.js"></script>
+    <script src="src/core/FeatureGate.js"></script>
+    <script src="src/core/WatermarkClient.js"></script>
+    <script src="vendor/mediabunny.js"></script>
+    <script src="src/core/VideoWatermarkRemover.js"></script>
+    <script src="src/core/VideoWmClient.js"></script>
+    <script src="src/core/SystemConfig.js"></script>
+    <script src="src/core/ValidationRules.js"></script>
+    <script src="src/core/RequestSigner.js"></script>
+    <script src="src/core/ProviderConfigManager.js"></script>
+    <script src="src/core/ProviderMeta.js"></script>
+    <script src="src/core/ModelRegistry.js"></script>
+    <script src="src/core/VoiceRegistry.js"></script>
+    <script src="src/core/CharacterRegistry.js"></script>
+    <script src="src/core/ExecutionConfig.js"></script>
+    <script src="src/core/errors/ConfigRequiredError.js"></script>
+    <script src="src/core/UsageSync.js"></script>
+    <script src="src/core/ExecutionGate.js"></script>
+    <script src="src/core/errors/QuotaErrorHandler.js"></script>
+    <script src="src/core/TrialGate.js"></script>
+    <script src="src/core/RequestCoalescer.js"></script>
+    <script src="src/core/ApiStorage.js"></script>
+    <script src="src/core/StorageManager.js"></script>
+    <script src="src/core/SseBroadcastManager.js"></script>
+    <script src="src/core/SseClient.js"></script>
+    <script src="src/core/TelegramExecutor.js"></script>
+    <script src="src/core/RetryHelper.js"></script>
+    <script src="src/core/ExecutionLock.js"></script>
+    <script src="src/core/BlobUrlManager.js"></script>
+    <script src="src/core/ThumbnailCache.js"></script>
+    <script src="src/core/PendingUploadStore.js"></script>
+    <script src="src/core/WorkflowMuseVideoStore.js"></script>
+    <script src="src/core/TileCache.js"></script>
+    <script src="src/core/TileResolver.js"></script>
+    <script src="src/core/AlbumStore.js"></script>
+    <script src="src/core/ImageStore.js"></script>
+    <script src="src/core/FileUploader.js"></script>
+    <script src="src/core/MediaRegistry.js"></script>
+    <script src="src/settings/StorageSettings.js"></script>
+    <script src="src/core/flow-api/FlowApiTelemetry.js"></script>
+    <script src="src/core/QueueItem.js"></script>
+    <script src="src/core/Job.js"></script>
+    <script src="src/core/MentionParser.js"></script>
+    <script src="src/core/FlowV2CorrelationProtocol.js"></script>
+    <script src="src/core/FlowV2CorrelationBroker.js"></script>
 
-<script src="src/core/EditorExecutor.js"></script>
-  <script src="src/core/TileMonitor.js"></script>
-  <script src="src/core/FlowWebRecovery.js"></script>
-<script src="src/core/RefImageAssignment.js"></script>
-<script src="src/core/PromptQueue.js"></script>
-  <script src="src/core/WorkflowSingleNodeSession.js"></script>
-  <script src="src/motion/MotionMergeTask.js"></script>
-<script src="src/motion/MotionResolutionPolicy.js"></script>
-<script src="src/core/WorkflowVideoMerge.js"></script>
-<script src="src/core/WorkflowExecutor.js"></script>
-  <script src="src/core/ProviderWebQueueStore.js"></script>
-  <script src="src/core/ProviderWebScheduler.js"></script>
-  <script src="src/core/flow/FlowDriverRegistry.js"></script>
-  <script src="src/core/FlowUuidGateway.js"></script>
-  <script src="src/core/MessageBridge.js"></script>
-  <script src="src/core/ProviderTabLock.js"></script>
-  <script src="src/core/ChatGPTSession.js"></script>
-  <script src="src/core/ChatGPTConfig.js"></script>
-  <script src="src/core/GrokSession.js"></script>
-  <script src="src/core/MuseSession.js"></script>
-  <script src="src/core/GrokConfig.js"></script>
-  <script src="src/core/GeminiSession.js"></script>
-  <script src="src/core/providers/AIProviderAdapter.js"></script>
-  <script src="src/core/providers/FlowAdapter.js"></script>
-  <script src="src/core/providers/ChatGPTAdapter.js"></script>
-  <script src="src/core/providers/GrokAdapter.js"></script>
-  <script src="src/core/providers/MuseAdapter.js"></script>
-  <script src="src/core/providers/GeminiAdapter.js"></script>
-  <script src="src/core/providers/ProviderRegistry.js"></script>
-  <!-- FLOW_API_BRIDGE_PLAN — Flow API direct mode (TobyBridge) + last-frame extractor -->
-  <script src="src/core/VideoFrameExtractor.js"></script>
-  <script src="src/core/BridgeClient.js"></script>
-<script src="src/core/MuseApiMediaStore.js"></script>
-<script src="src/core/MuseApiFacade.js"></script>
-<script src="src/core/MuseVideoContinuity.js"></script>
-  <script src="src/core/providers/FlowApiAdapter.js"></script>
-  <script src="src/core/flow-api/FlowApiDriverError.js"></script>
-  <script src="src/core/flow-api/FlowApiV1Driver.js"></script>
-  <script src="src/core/flow-api/FlowApiV2CheckpointStore.js"></script>
-  <script src="src/core/flow-api/FlowApiV2Driver.js"></script>
-  <script src="src/core/flow-api/FlowApiDriverResolver.js"></script>
-  <script src="src/core/flow-api/FlowApiDownloadRetry.js"></script>
-  <script src="src/core/flow-api/FlowApiFacade.js"></script>
-  <script src="src/core/flow-api/FlowApiSessionCoordinator.js"></script>
-  <script src="src/core/ImmediateUploader.js"></script>
-  <script src="src/shared/CustomDialog.js"></script>
-  <script src="src/shared/ProjectHelper.js"></script>
-  <script src="src/shared/DownloadHelper.js"></script>
-  <script src="src/workflow/NodeTemplates.js"></script>
-  <script src="src/history/GenerationHistory.js"></script>
-  <script src="src/core/WorkflowRunLogStore.js"></script>
-<script src="run-log-ui.js"></script>
-<script src="src/core/WorkflowRunHostLifecycle.js"></script>
-<script src="src/core/generated/WorkflowGroupReferencePreflight.js"></script>
-<script src="src/core/WorkflowGroupRunPreparation.js"></script>
-<script src="run-window-init.js"></script>
-<script src="src/core/WorkflowSpaceHealth.js"></script>
-<script src="src/core/generated/WorkflowSpaceQueuePresentation.js"></script>
-<script src="src/core/WorkflowSpaceQueue.js"></script>
-<script src="src/core/generated/WorkflowSpaceErrorPresentation.js"></script>
-<script src="src/core/WorkflowSpaceRuntimeRelay.js"></script>
-</body>
+    <script src="src/core/EditorExecutor.js"></script>
+    <script src="src/core/TileMonitor.js"></script>
+    <script src="src/core/FlowWebRecovery.js"></script>
+    <script src="src/core/RefImageAssignment.js"></script>
+    <script src="src/core/PromptQueue.js"></script>
+    <script src="src/core/WorkflowSingleNodeSession.js"></script>
+    <script src="src/motion/MotionMergeTask.js"></script>
+    <script src="src/motion/MotionResolutionPolicy.js"></script>
+    <script src="src/core/WorkflowVideoMerge.js"></script>
+    <script src="src/core/WorkflowExecutor.js"></script>
+    <script src="src/core/ProviderWebQueueStore.js"></script>
+    <script src="src/core/ProviderWebScheduler.js"></script>
+    <script src="src/core/flow/FlowDriverRegistry.js"></script>
+    <script src="src/core/FlowUuidGateway.js"></script>
+    <script src="src/core/MessageBridge.js"></script>
+    <script src="src/core/ProviderTabLock.js"></script>
+    <script src="src/core/ChatGPTSession.js"></script>
+    <script src="src/core/ChatGPTConfig.js"></script>
+    <script src="src/core/GrokSession.js"></script>
+    <script src="src/core/MuseSession.js"></script>
+    <script src="src/core/GrokConfig.js"></script>
+    <script src="src/core/GeminiSession.js"></script>
+    <script src="src/core/providers/AIProviderAdapter.js"></script>
+    <script src="src/core/providers/FlowAdapter.js"></script>
+    <script src="src/core/providers/ChatGPTAdapter.js"></script>
+    <script src="src/core/providers/GrokAdapter.js"></script>
+    <script src="src/core/providers/MuseAdapter.js"></script>
+    <script src="src/core/providers/GeminiAdapter.js"></script>
+    <script src="src/core/providers/ProviderRegistry.js"></script>
+    <!-- FLOW_API_BRIDGE_PLAN — Flow API direct mode (TobyBridge) + last-frame extractor -->
+    <script src="src/core/VideoFrameExtractor.js"></script>
+    <script src="src/core/BridgeClient.js"></script>
+    <script src="src/core/MuseApiMediaStore.js"></script>
+    <script src="src/core/MuseApiFacade.js"></script>
+    <script src="src/core/MuseVideoContinuity.js"></script>
+    <script src="src/core/providers/FlowApiAdapter.js"></script>
+    <script src="src/core/flow-api/FlowApiDriverError.js"></script>
+    <script src="src/core/flow-api/FlowApiV1Driver.js"></script>
+    <script src="src/core/flow-api/FlowApiV2CheckpointStore.js"></script>
+    <script src="src/core/flow-api/FlowApiV2Driver.js"></script>
+    <script src="src/core/flow-api/FlowApiDriverResolver.js"></script>
+    <script src="src/core/flow-api/FlowApiDownloadRetry.js"></script>
+    <script src="src/core/flow-api/FlowApiFacade.js"></script>
+    <script src="src/core/flow-api/FlowApiSessionCoordinator.js"></script>
+    <script src="src/core/ImmediateUploader.js"></script>
+    <script src="src/shared/CustomDialog.js"></script>
+    <script src="src/shared/ProjectHelper.js"></script>
+    <script src="src/shared/DownloadHelper.js"></script>
+    <script src="src/workflow/NodeTemplates.js"></script>
+    <script src="src/history/GenerationHistory.js"></script>
+    <script src="src/core/WorkflowRunLogStore.js"></script>
+    <script src="run-log-ui.js"></script>
+    <script src="src/core/WorkflowRunHostLifecycle.js"></script>
+    <script src="src/core/generated/WorkflowGroupReferencePreflight.js"></script>
+    <script src="src/core/WorkflowGroupRunPreparation.js"></script>
+    <script src="run-window-init.js"></script>
+    <script src="src/core/WorkflowSpaceHealth.js"></script>
+    <script src="src/core/generated/WorkflowSpaceQueuePresentation.js"></script>
+    <script src="src/core/WorkflowSpaceQueue.js"></script>
+    <script src="src/core/generated/WorkflowSpaceErrorPresentation.js"></script>
+    <script src="src/core/WorkflowSpaceRuntimeRelay.js"></script>
+  </body>
 </html>

@@ -1,1 +1,151 @@
-globalThis.WorkflowSpaceQueuePresentation=function(workflow,snapshot,runId,translate){const window={workflowExecutor:{_flowRunId:runId},I18n:{t:translate}};const reader={workflow,_updateNodeLoadingText(){},_syncQueueNodeStatus(snapshot2){if(this._resetInProgress||!snapshot2?.jobs||!this.workflow?.wf_id)return;this._nodeQueueNotices||(this._nodeQueueNotices=new Map);this._nodeQueuePauses||(this._nodeQueuePauses=new Map);const active=new Set;for(const job of snapshot2.jobs){if(job.owner!=="workflow"||job.workflowId!==this.workflow.wf_id||!job.workflowNodeId||!["running","paused"].includes(job.status))continue;const node=this.workflow.nodes?.find(entry=>entry.node_id===job.workflowNodeId);if(!node||node.status!=="running")continue;const currentRun=window.workflowExecutor?._flowRunId;if(currentRun&&job.workflowRunId&&currentRun!==job.workflowRunId)continue;const live=(job.items||[]).filter(item=>!["COMPLETED","FAILED","PARTIAL_FAIL","CANCELLED","BLOCKED"].includes(item.state));if(!live.length)continue;active.add(node.node_id);const rank={unverified:0,paused:1,recovery:2,retry_queued:3,retrying:4};const notice=live.filter(item=>item.statusKind in rank).sort((a,b)=>rank[a.statusKind]-rank[b.statusKind])[0];if(!notice){const wasPaused2=this._nodeQueuePauses.delete(node.node_id);const hadNotice=this._nodeQueueNotices.delete(node.node_id);if(wasPaused2){this._renderPausedNodeControls?.(node.node_id);this._refreshResultTabIfSelected?.(node.node_id,"running",(node.result_file_ids||"").split(",").filter(Boolean))}if(wasPaused2||hadNotice){this._showProcessToast?.(`node:${node.node_id}`,node.node_name||node.node_id,window.I18n?.t("node.phase.generating")||"","running")}if(hadNotice){this._updateNodeLoadingText(node.node_id,window.I18n?.t("node.phase.generating")||window.I18n?.t("workflow.processing"))}continue}const promptIndex=Number(notice.promptIndex);const prefix=notice.promptIndex!=null&&Number.isInteger(promptIndex)&&promptIndex>=0?`#${promptIndex+1} \xB7 `:"";const text=prefix+[notice.statusLabel,notice.statusReason,notice.statusHint].filter(Boolean).join(" \u2014 ");const resumablePause=job.status==="paused"&&job.pauseReason==="api_unusual_activity"&&live.some(item=>item.state==="WAITING_PROVIDER"&&item.errorType==="bot_detected"&&!item.operationId&&!item.flowApiAccepted&&item.errorPolicy?.ambiguous!==true);const wasPaused=this._nodeQueuePauses.has(node.node_id);if(resumablePause){this._nodeQueuePauses.set(node.node_id,{nodeId:node.node_id,nodeName:node.node_name,jobId:job.id,runId:job.workflowRunId,text})}else this._nodeQueuePauses.delete(node.node_id);this._renderPausedNodeControls?.(node.node_id);if(text&&this._nodeQueueNotices.get(node.node_id)!==text){this._nodeQueueNotices.set(node.node_id,text);this._updateNodeLoadingText(node.node_id,text);if(resumablePause||wasPaused)this._showProcessToast?.(`node:${node.node_id}`,node.node_name||node.node_id,text,resumablePause?"warning":"running");this._refreshResultTabIfSelected?.(node.node_id,"running",(node.result_file_ids||"").split(",").filter(Boolean))}}for(const id of this._nodeQueueNotices.keys())if(!active.has(id))this._nodeQueueNotices.delete(id);for(const id of this._nodeQueuePauses.keys())if(!active.has(id)){this._nodeQueuePauses.delete(id);this._renderPausedNodeControls?.(id)}}};reader._syncQueueNodeStatus(snapshot);return[...reader._nodeQueueNotices||[]].map(([nodeId,text])=>({nodeId,text,pause:reader._nodeQueuePauses?.get(nodeId)||null}))};
+globalThis.WorkflowSpaceQueuePresentation = function (
+  workflow,
+  snapshot,
+  runId,
+  translate,
+) {
+  const window = {
+    workflowExecutor: { _flowRunId: runId },
+    I18n: { t: translate },
+  };
+  const reader = {
+    workflow,
+    _updateNodeLoadingText() {},
+    _syncQueueNodeStatus(snapshot2) {
+      if (this._resetInProgress || !snapshot2?.jobs || !this.workflow?.wf_id)
+        return;
+      this._nodeQueueNotices || (this._nodeQueueNotices = new Map());
+      this._nodeQueuePauses || (this._nodeQueuePauses = new Map());
+      const active = new Set();
+      for (const job of snapshot2.jobs) {
+        if (
+          job.owner !== "workflow" ||
+          job.workflowId !== this.workflow.wf_id ||
+          !job.workflowNodeId ||
+          !["running", "paused"].includes(job.status)
+        )
+          continue;
+        const node = this.workflow.nodes?.find(
+          (entry) => entry.node_id === job.workflowNodeId,
+        );
+        if (!node || node.status !== "running") continue;
+        const currentRun = window.workflowExecutor?._flowRunId;
+        if (currentRun && job.workflowRunId && currentRun !== job.workflowRunId)
+          continue;
+        const live = (job.items || []).filter(
+          (item) =>
+            ![
+              "COMPLETED",
+              "FAILED",
+              "PARTIAL_FAIL",
+              "CANCELLED",
+              "BLOCKED",
+            ].includes(item.state),
+        );
+        if (!live.length) continue;
+        active.add(node.node_id);
+        const rank = {
+          unverified: 0,
+          paused: 1,
+          recovery: 2,
+          retry_queued: 3,
+          retrying: 4,
+        };
+        const notice = live
+          .filter((item) => item.statusKind in rank)
+          .sort((a, b) => rank[a.statusKind] - rank[b.statusKind])[0];
+        if (!notice) {
+          const wasPaused2 = this._nodeQueuePauses.delete(node.node_id);
+          const hadNotice = this._nodeQueueNotices.delete(node.node_id);
+          if (wasPaused2) {
+            this._renderPausedNodeControls?.(node.node_id);
+            this._refreshResultTabIfSelected?.(
+              node.node_id,
+              "running",
+              (node.result_file_ids || "").split(",").filter(Boolean),
+            );
+          }
+          if (wasPaused2 || hadNotice) {
+            this._showProcessToast?.(
+              `node:${node.node_id}`,
+              node.node_name || node.node_id,
+              window.I18n?.t("node.phase.generating") || "",
+              "running",
+            );
+          }
+          if (hadNotice) {
+            this._updateNodeLoadingText(
+              node.node_id,
+              window.I18n?.t("node.phase.generating") ||
+                window.I18n?.t("workflow.processing"),
+            );
+          }
+          continue;
+        }
+        const promptIndex = Number(notice.promptIndex);
+        const prefix =
+          notice.promptIndex != null &&
+          Number.isInteger(promptIndex) &&
+          promptIndex >= 0
+            ? `#${promptIndex + 1} \xB7 `
+            : "";
+        const text =
+          prefix +
+          [notice.statusLabel, notice.statusReason, notice.statusHint]
+            .filter(Boolean)
+            .join(" \u2014 ");
+        const resumablePause =
+          job.status === "paused" &&
+          job.pauseReason === "api_unusual_activity" &&
+          live.some(
+            (item) =>
+              item.state === "WAITING_PROVIDER" &&
+              item.errorType === "bot_detected" &&
+              !item.operationId &&
+              !item.flowApiAccepted &&
+              item.errorPolicy?.ambiguous !== true,
+          );
+        const wasPaused = this._nodeQueuePauses.has(node.node_id);
+        if (resumablePause) {
+          this._nodeQueuePauses.set(node.node_id, {
+            nodeId: node.node_id,
+            nodeName: node.node_name,
+            jobId: job.id,
+            runId: job.workflowRunId,
+            text,
+          });
+        } else this._nodeQueuePauses.delete(node.node_id);
+        this._renderPausedNodeControls?.(node.node_id);
+        if (text && this._nodeQueueNotices.get(node.node_id) !== text) {
+          this._nodeQueueNotices.set(node.node_id, text);
+          this._updateNodeLoadingText(node.node_id, text);
+          if (resumablePause || wasPaused)
+            this._showProcessToast?.(
+              `node:${node.node_id}`,
+              node.node_name || node.node_id,
+              text,
+              resumablePause ? "warning" : "running",
+            );
+          this._refreshResultTabIfSelected?.(
+            node.node_id,
+            "running",
+            (node.result_file_ids || "").split(",").filter(Boolean),
+          );
+        }
+      }
+      for (const id of this._nodeQueueNotices.keys())
+        if (!active.has(id)) this._nodeQueueNotices.delete(id);
+      for (const id of this._nodeQueuePauses.keys())
+        if (!active.has(id)) {
+          this._nodeQueuePauses.delete(id);
+          this._renderPausedNodeControls?.(id);
+        }
+    },
+  };
+  reader._syncQueueNodeStatus(snapshot);
+  return [...(reader._nodeQueueNotices || [])].map(([nodeId, text]) => ({
+    nodeId,
+    text,
+    pause: reader._nodeQueuePauses?.get(nodeId) || null,
+  }));
+};

@@ -3,9 +3,7 @@
     "selectors": {},
     "profiles": {
       "v2": {
-        "host_patterns": [
-          "https://flow.google.com"
-        ],
+        "host_patterns": ["https://flow.google.com"],
         "selectors": {
           "slate_editor": {
             "selectors": [
@@ -21,9 +19,7 @@
             "icon_text": "arrow_forward"
           },
           "settings_button": {
-            "selectors": [
-              "flow-base-prompt-box button[class*=\"settings-\"]"
-            ]
+            "selectors": ["flow-base-prompt-box button[class*=\"settings-\"]"]
           },
           "flow_agent_toggle_button": {
             "selectors": [
@@ -33,19 +29,13 @@
             "aria_pressed_on": "true"
           },
           "agent_mode_active": {
-            "selectors": [
-              "button.agent-mode-chip[aria-pressed=\"true\"]"
-            ]
+            "selectors": ["button.agent-mode-chip[aria-pressed=\"true\"]"]
           },
           "add_component_root": {
-            "selectors": [
-              "flow-add-menu"
-            ]
+            "selectors": ["flow-add-menu"]
           },
           "tile_container": {
-            "selectors": [
-              "flow-grid-tile-container"
-            ]
+            "selectors": ["flow-grid-tile-container"]
           },
           "tile_image": {
             "selectors": [
@@ -55,19 +45,13 @@
             "attribute": "data-media-id"
           },
           "tile_video": {
-            "selectors": [
-              "flow-video-tile video"
-            ]
+            "selectors": ["flow-video-tile video"]
           },
           "tile_video_poster": {
-            "selectors": [
-              "flow-video-tile img.thumbnail"
-            ]
+            "selectors": ["flow-video-tile img.thumbnail"]
           },
           "tile_video_owner": {
-            "selectors": [
-              "flow-video-tile"
-            ]
+            "selectors": ["flow-video-tile"]
           },
           "tile_pending": {
             "selectors": [
@@ -77,61 +61,33 @@
             ]
           },
           "flow_scroll_container": {
-            "selectors": [
-              "cdk-virtual-scroll-viewport"
-            ]
+            "selectors": ["cdk-virtual-scroll-viewport"]
           },
           "context_menu": {
-            "selectors": [
-              ".mat-mdc-menu-panel",
-              "[role=\"menu\"]"
-            ]
+            "selectors": [".mat-mdc-menu-panel", "[role=\"menu\"]"]
           },
           "menu_item": {
-            "selectors": [
-              ".mat-mdc-menu-item",
-              "[role=\"menuitem\"]"
-            ]
+            "selectors": [".mat-mdc-menu-item", "[role=\"menuitem\"]"]
           },
           "download_menu_trigger": {
-            "selectors": [
-              ".mat-mdc-menu-item",
-              "[role=\"menuitem\"]"
-            ],
+            "selectors": [".mat-mdc-menu-item", "[role=\"menuitem\"]"],
             "icon_text": "download"
           },
           "download_submenu": {
-            "selectors": [
-              ".mat-mdc-menu-panel",
-              "[role=\"menu\"]"
-            ]
+            "selectors": [".mat-mdc-menu-panel", "[role=\"menu\"]"]
           },
           "download_submenu_item": {
-            "selectors": [
-              ".mat-mdc-menu-item",
-              "[role=\"menuitem\"]"
-            ],
-            "disabled_attributes": [
-              "disabled",
-              "aria-disabled"
-            ]
+            "selectors": [".mat-mdc-menu-item", "[role=\"menuitem\"]"],
+            "disabled_attributes": ["disabled", "aria-disabled"]
           },
           "model_picker_panel": {
-            "selectors": [
-              "[role=\"listbox\"]",
-              ".mat-mdc-menu-panel"
-            ]
+            "selectors": ["[role=\"listbox\"]", ".mat-mdc-menu-panel"]
           },
           "model_picker_item": {
-            "selectors": [
-              "[role=\"option\"]",
-              ".mat-mdc-menu-item"
-            ]
+            "selectors": ["[role=\"option\"]", ".mat-mdc-menu-item"]
           },
           "icon_element": {
-            "selectors": [
-              "mat-icon"
-            ]
+            "selectors": ["mat-icon"]
           },
           "ingredient_bar": {
             "selectors": [
@@ -160,53 +116,35 @@
             ]
           },
           "ingredient_chip_thumbnail": {
-            "selectors": [
-              "flow-add-menu img"
-            ]
+            "selectors": ["flow-add-menu img"]
           },
           "settings_panel_candidates": {
-            "selectors": [
-              ".cdk-overlay-pane"
-            ]
+            "selectors": [".cdk-overlay-pane"]
           },
           "settings_panel_marker": {
-            "selectors": [
-              "mat-button-toggle"
-            ]
+            "selectors": ["mat-button-toggle"]
           },
           "settings_panel_root": {
-            "selectors": [
-              ".cdk-overlay-pane"
-            ]
+            "selectors": [".cdk-overlay-pane"]
           },
           "mode_tab_image": {
-            "selectors": [
-              "mat-button-toggle button[role=\"radio\"]"
-            ],
+            "selectors": ["mat-button-toggle button[role=\"radio\"]"],
             "icon_text": "image"
           },
           "mode_tab_video": {
-            "selectors": [
-              "mat-button-toggle button[role=\"radio\"]"
-            ],
+            "selectors": ["mat-button-toggle button[role=\"radio\"]"],
             "icon_text": "videocam"
           },
           "video_mode_frames": {
-            "selectors": [
-              "mat-button-toggle button[role=\"radio\"]"
-            ],
+            "selectors": ["mat-button-toggle button[role=\"radio\"]"],
             "icon_text": "crop_free"
           },
           "video_mode_ingredients": {
-            "selectors": [
-              "mat-button-toggle button[role=\"radio\"]"
-            ],
+            "selectors": ["mat-button-toggle button[role=\"radio\"]"],
             "icon_text": "chrome_extension"
           },
           "ratio_button": {
-            "selectors": [
-              "mat-button-toggle button[role=\"radio\"]"
-            ],
+            "selectors": ["mat-button-toggle button[role=\"radio\"]"],
             "ratio_icons": {
               "16:9": "crop_16_9",
               "4:3": "crop_landscape",
@@ -216,15 +154,11 @@
             }
           },
           "quantity_button": {
-            "selectors": [
-              "mat-button-toggle button[role=\"radio\"]"
-            ],
+            "selectors": ["mat-button-toggle button[role=\"radio\"]"],
             "text_format": "x{value}"
           },
           "tab_button_generic": {
-            "selectors": [
-              "mat-button-toggle button[role=\"radio\"]"
-            ]
+            "selectors": ["mat-button-toggle button[role=\"radio\"]"]
           },
           "signed_out_indicator": {
             "selectors": [
@@ -233,264 +167,160 @@
             ]
           },
           "project_card": {
-            "selectors": [
-              "a[href*=\"/project/\"]"
-            ]
+            "selectors": ["a[href*=\"/project/\"]"]
           },
           "project_link": {
-            "selectors": [
-              "a[href*=\"/project/\"]"
-            ]
+            "selectors": ["a[href*=\"/project/\"]"]
           },
           "projects_page": {
-            "selectors": [
-              "main"
-            ]
+            "selectors": ["main"]
           },
           "project_title": {
-            "selectors": [
-              "flow-editable-text"
-            ]
+            "selectors": ["flow-editable-text"]
           },
           "add_component_apply_button": {
-            "selectors": [
-              "[data-566flow-unmapped]"
-            ]
+            "selectors": ["[data-566flow-unmapped]"]
           },
           "add_component_detail": {
-            "selectors": [
-              "[data-566flow-unmapped]"
-            ]
+            "selectors": ["[data-566flow-unmapped]"]
           },
           "add_component_listbox": {
-            "selectors": [
-              "[data-566flow-unmapped]"
-            ]
+            "selectors": ["[data-566flow-unmapped]"]
           },
           "add_component_mobile_close": {
-            "selectors": [
-              "[data-566flow-unmapped]"
-            ]
+            "selectors": ["[data-566flow-unmapped]"]
           },
           "add_component_mobile_filter_list": {
-            "selectors": [
-              "[data-566flow-unmapped]"
-            ]
+            "selectors": ["[data-566flow-unmapped]"]
           },
           "add_component_mobile_filter_trigger": {
-            "selectors": [
-              "[data-566flow-unmapped]"
-            ]
+            "selectors": ["[data-566flow-unmapped]"]
           },
           "add_component_option": {
-            "selectors": [
-              "[data-566flow-unmapped]"
-            ]
+            "selectors": ["[data-566flow-unmapped]"]
           },
           "add_menu_upload_tab": {
-            "selectors": [
-              "[data-566flow-unmapped]"
-            ]
+            "selectors": ["[data-566flow-unmapped]"]
           },
           "add_to_prompt_menu_item": {
-            "selectors": [
-              "[data-566flow-unmapped]"
-            ]
+            "selectors": ["[data-566flow-unmapped]"]
           },
           "advanced_menu_add_to_prompt_button": {
-            "selectors": [
-              "[data-566flow-unmapped]"
-            ]
+            "selectors": ["[data-566flow-unmapped]"]
           },
           "advanced_menu_characters_tab": {
-            "selectors": [
-              "[data-566flow-unmapped]"
-            ]
+            "selectors": ["[data-566flow-unmapped]"]
           },
           "advanced_menu_voices_tab": {
-            "selectors": [
-              "[data-566flow-unmapped]"
-            ]
+            "selectors": ["[data-566flow-unmapped]"]
           },
           "agent_instruction_dialog": {
-            "selectors": [
-              "[data-566flow-unmapped]"
-            ]
+            "selectors": ["[data-566flow-unmapped]"]
           },
           "agent_panel_close": {
-            "selectors": [
-              "[data-566flow-unmapped]"
-            ]
+            "selectors": ["[data-566flow-unmapped]"]
           },
           "agent_panel_owner": {
-            "selectors": [
-              "[data-566flow-unmapped]"
-            ]
+            "selectors": ["[data-566flow-unmapped]"]
           },
           "compact_layout_marker": {
-            "selectors": [
-              "[data-566flow-unmapped]"
-            ]
+            "selectors": ["[data-566flow-unmapped]"]
           },
           "edit_link": {
-            "selectors": [
-              "[data-566flow-unmapped]"
-            ]
+            "selectors": ["[data-566flow-unmapped]"]
           },
           "flow_agent_instruction_done_button": {
-            "selectors": [
-              "[data-566flow-unmapped]"
-            ]
+            "selectors": ["[data-566flow-unmapped]"]
           },
           "flow_chat_agent_close_button": {
-            "selectors": [
-              "[data-566flow-unmapped]"
-            ]
+            "selectors": ["[data-566flow-unmapped]"]
           },
           "flow_tab_slider_trigger": {
-            "selectors": [
-              "[data-566flow-unmapped]"
-            ]
+            "selectors": ["[data-566flow-unmapped]"]
           },
           "grid_size_small_button": {
-            "selectors": [
-              "[data-566flow-unmapped]"
-            ]
+            "selectors": ["[data-566flow-unmapped]"]
           },
           "mention_inline_chip": {
-            "selectors": [
-              "[data-566flow-unmapped]"
-            ]
+            "selectors": ["[data-566flow-unmapped]"]
           },
           "page_settings_grid_size": {
-            "selectors": [
-              "[data-566flow-unmapped]"
-            ]
+            "selectors": ["[data-566flow-unmapped]"]
           },
           "page_settings_grid_view": {
-            "selectors": [
-              "[data-566flow-unmapped]"
-            ]
+            "selectors": ["[data-566flow-unmapped]"]
           },
           "page_settings_root": {
-            "selectors": [
-              "[data-566flow-unmapped]"
-            ]
+            "selectors": ["[data-566flow-unmapped]"]
           },
           "page_settings_trigger": {
-            "selectors": [
-              "[data-566flow-unmapped]"
-            ]
+            "selectors": ["[data-566flow-unmapped]"]
           },
           "reference_picker_project": {
-            "selectors": [
-              "[data-566flow-unmapped]"
-            ]
+            "selectors": ["[data-566flow-unmapped]"]
           },
           "reference_picker_search": {
-            "selectors": [
-              "[data-566flow-unmapped]"
-            ]
+            "selectors": ["[data-566flow-unmapped]"]
           },
           "reference_picker_thumbnail": {
-            "selectors": [
-              "[data-566flow-unmapped]"
-            ]
+            "selectors": ["[data-566flow-unmapped]"]
           },
           "show_tile_details_setting": {
-            "selectors": [
-              "[data-566flow-unmapped]"
-            ]
+            "selectors": ["[data-566flow-unmapped]"]
           },
           "tile_error_owner": {
-            "selectors": [
-              "[data-566flow-unmapped]"
-            ]
+            "selectors": ["[data-566flow-unmapped]"]
           },
           "video_duration_slider": {
-            "selectors": [
-              "[data-566flow-unmapped]"
-            ]
+            "selectors": ["[data-566flow-unmapped]"]
           },
           "video_duration_slider_value": {
-            "selectors": [
-              "[data-566flow-unmapped]"
-            ]
+            "selectors": ["[data-566flow-unmapped]"]
           },
           "video_duration_tab": {
-            "selectors": [
-              "[data-566flow-unmapped]"
-            ]
+            "selectors": ["[data-566flow-unmapped]"]
           },
           "video_resolution_tab": {
-            "selectors": [
-              "[data-566flow-unmapped]"
-            ]
+            "selectors": ["[data-566flow-unmapped]"]
           },
           "video_upload_confirm": {
-            "selectors": [
-              "[data-566flow-unmapped]"
-            ]
+            "selectors": ["[data-566flow-unmapped]"]
           },
           "warning_icon": {
-            "selectors": [
-              "[data-566flow-unmapped]"
-            ]
+            "selectors": ["[data-566flow-unmapped]"]
           },
           "media_viewer_owner": {
-            "selectors": [
-              "[data-566flow-unmapped]"
-            ]
+            "selectors": ["[data-566flow-unmapped]"]
           },
           "prompt_clear_button": {
-            "selectors": [
-              "[data-566flow-unmapped]"
-            ]
+            "selectors": ["[data-566flow-unmapped]"]
           },
           "composer_advanced_menu_button": {
-            "selectors": [
-              "[data-566flow-unmapped]"
-            ]
+            "selectors": ["[data-566flow-unmapped]"]
           },
           "tile_retry_button": {
-            "selectors": [
-              "[data-566flow-unmapped]"
-            ]
+            "selectors": ["[data-566flow-unmapped]"]
           },
           "tile_error_message": {
-            "selectors": [
-              "[data-566flow-unmapped]"
-            ]
+            "selectors": ["[data-566flow-unmapped]"]
           },
           "tile_display_name": {
-            "selectors": [
-              "[data-566flow-unmapped]"
-            ]
+            "selectors": ["[data-566flow-unmapped]"]
           },
           "project_error_indicator": {
-            "selectors": [
-              "[data-566flow-unmapped]"
-            ]
+            "selectors": ["[data-566flow-unmapped]"]
           },
           "flow_credit_limit_alert": {
-            "selectors": [
-              "[data-566flow-unmapped]"
-            ]
+            "selectors": ["[data-566flow-unmapped]"]
           },
           "new_project_button": {
-            "selectors": [
-              "[data-566flow-unmapped]"
-            ]
+            "selectors": ["[data-566flow-unmapped]"]
           },
           "model_picker_button": {
-            "selectors": [
-              "[data-566flow-unmapped]"
-            ]
+            "selectors": ["[data-566flow-unmapped]"]
           },
           "add_menu_upload_media_button": {
-            "selectors": [
-              "[data-566flow-unmapped]"
-            ]
+            "selectors": ["[data-566flow-unmapped]"]
           }
         }
       }
@@ -521,9 +351,7 @@
         ]
       },
       "screen_reader_label": {
-        "selectors": [
-          ".model-response-label-announcer"
-        ]
+        "selectors": [".model-response-label-announcer"]
       },
       "image_result": {
         "selectors": [
@@ -533,10 +361,7 @@
         ]
       },
       "image_result_container": {
-        "selectors": [
-          "single-image",
-          "generated-image"
-        ]
+        "selectors": ["single-image", "generated-image"]
       },
       "generation_busy_indicator": {
         "selectors": [
@@ -552,20 +377,13 @@
         ]
       },
       "model_switcher_button": {
-        "selectors": [
-          "button[data-test-id=\"bard-mode-menu-button\"]"
-        ]
+        "selectors": ["button[data-test-id=\"bard-mode-menu-button\"]"]
       },
       "model_trigger_label": {
-        "selectors": [
-          "button[data-test-id=\"bard-mode-menu-button\"]"
-        ]
+        "selectors": ["button[data-test-id=\"bard-mode-menu-button\"]"]
       },
       "model_option_button": {
-        "selectors": [
-          "[role=\"menuitemradio\"]",
-          "button[role=\"menuitem\"]"
-        ]
+        "selectors": ["[role=\"menuitemradio\"]", "button[role=\"menuitem\"]"]
       },
       "model_option_label": {
         "selectors": [
@@ -600,56 +418,34 @@
         ]
       },
       "image_menu_download_item": {
-        "selectors": [
-          "[role=\"menuitem\"]"
-        ]
+        "selectors": ["[role=\"menuitem\"]"]
       },
       "video_result": {
-        "selectors": [
-          "[data-566flow-unmapped]"
-        ]
+        "selectors": ["[data-566flow-unmapped]"]
       },
       "video_result_container": {
-        "selectors": [
-          "[data-566flow-unmapped]"
-        ]
+        "selectors": ["[data-566flow-unmapped]"]
       },
       "video_download_button": {
-        "selectors": [
-          "[data-566flow-unmapped]"
-        ]
+        "selectors": ["[data-566flow-unmapped]"]
       },
       "video_more_menu_button": {
-        "selectors": [
-          "[data-566flow-unmapped]"
-        ]
+        "selectors": ["[data-566flow-unmapped]"]
       },
       "video_menu_download_item": {
-        "selectors": [
-          "[data-566flow-unmapped]"
-        ]
+        "selectors": ["[data-566flow-unmapped]"]
       },
       "motion_audio_user_turn": {
-        "selectors": [
-          "[data-566flow-unmapped]"
-        ]
+        "selectors": ["[data-566flow-unmapped]"]
       },
       "motion_audio_sent_file": {
-        "selectors": [
-          "[data-566flow-unmapped]"
-        ]
+        "selectors": ["[data-566flow-unmapped]"]
       },
       "delete_confirm_identity": {
-        "selectors": [
-          "[role=\"dialog\"]",
-          "mat-dialog-container"
-        ]
+        "selectors": ["[role=\"dialog\"]", "mat-dialog-container"]
       },
       "delete_confirm_action": {
-        "selectors": [
-          "[role=\"dialog\"] button",
-          "mat-dialog-container button"
-        ]
+        "selectors": ["[role=\"dialog\"] button", "mat-dialog-container button"]
       }
     },
     "profiles": {}

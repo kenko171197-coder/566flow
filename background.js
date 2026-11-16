@@ -990,7 +990,12 @@ function _getDeviceDisplayLabel() {
   return `${browser} - ${os}`;
 }
 async function _getEnrollment() {
-  return { client_id: "local", secret: "local", expires_at: null, device_fingerprint: "local" };
+  return {
+    client_id: "local",
+    secret: "local",
+    expires_at: null,
+    device_fingerprint: "local",
+  };
 }
 function _isEnrollmentValid(e) {
   if (!e || !e.client_id || !e.secret) return false;
@@ -1176,7 +1181,12 @@ async function _doEnrollment() {
   }
 }
 async function _ensureEnrollment() {
-  return { client_id: "local", secret: "local", expires_at: null, device_fingerprint: "local" };
+  return {
+    client_id: "local",
+    secret: "local",
+    expires_at: null,
+    device_fingerprint: "local",
+  };
 }
 async function _sha256Hex(text) {
   const buf = await crypto.subtle.digest(
@@ -1692,14 +1702,12 @@ async function getLiveFlowAdvisoryTabs(snapshot) {
       discarded: tab.discarded === true,
       project: !!describeFlowTab(tab)?.projectId,
     })),
-    windows: windows
-      .filter(Boolean)
-      .map((win) => ({
-        windowId: win.id,
-        type: win.type || null,
-        state: win.state || null,
-        focused: win.focused === true,
-      })),
+    windows: windows.filter(Boolean).map((win) => ({
+      windowId: win.id,
+      type: win.type || null,
+      state: win.state || null,
+      focused: win.focused === true,
+    })),
   };
   const signature = JSON.stringify(diagnostic);
   if (_flowTabsAdvisorySignature !== signature) {
@@ -6065,16 +6073,14 @@ chrome.runtime.onMessageExternal.addListener(
         origin,
       );
     if (message?.type === "workflowSpaceDiagnostics") {
-      _spaceDiagnostics
-        .handle(message, sender)
-        .then(sendResponse, (error) =>
-          sendResponse({
-            ok: false,
-            error:
-              WorkflowSpaceDiagnosticSchema.code(error?.message) ||
-              "SPACE_DIAGNOSTIC_FAILED",
-          }),
-        );
+      _spaceDiagnostics.handle(message, sender).then(sendResponse, (error) =>
+        sendResponse({
+          ok: false,
+          error:
+            WorkflowSpaceDiagnosticSchema.code(error?.message) ||
+            "SPACE_DIAGNOSTIC_FAILED",
+        }),
+      );
       return true;
     }
     if (message?._spaceDiagnostic) {
@@ -6098,15 +6104,13 @@ chrome.runtime.onMessageExternal.addListener(
       };
     }
     if (message?.type === "workflowSpaceCommandStatus") {
-      _spaceCommandJournal
-        .status(message, sender)
-        .then(sendResponse, (error) =>
-          sendResponse({
-            ok: false,
-            error: error.message,
-            dispatchStarted: false,
-          }),
-        );
+      _spaceCommandJournal.status(message, sender).then(sendResponse, (error) =>
+        sendResponse({
+          ok: false,
+          error: error.message,
+          dispatchStarted: false,
+        }),
+      );
       return true;
     }
     if (
@@ -7785,7 +7789,9 @@ async function openWorkflowRunLog(message, sender) {
     !sender.tab?.id ||
     typeof workflowId !== "string" ||
     !/^[a-zA-Z0-9_-]{1,255}$/.test(workflowId) ||
-    !["https://local.566flow.invalid", "https://566flow.invalid"].includes(source.origin) ||
+    !["https://local.566flow.invalid", "https://566flow.invalid"].includes(
+      source.origin,
+    ) ||
     source.pathname.replace(/\/$/, "") !== `/app/spaces/${workflowId}`
   )
     return { ok: false, error: "INVALID_LOG_SCOPE" };
@@ -8057,7 +8063,9 @@ function captureWorkflowRunSource(sender, workflowId, userId) {
     if (
       sender.frameId !== 0 ||
       !Number.isInteger(sender.tab?.id) ||
-      !["https://local.566flow.invalid", "https://566flow.invalid"].includes(url.origin) ||
+      !["https://local.566flow.invalid", "https://566flow.invalid"].includes(
+        url.origin,
+      ) ||
       (sender.origin && sender.origin !== url.origin) ||
       !route ||
       decodeURIComponent(route[1]) !== workflowId
@@ -9790,7 +9798,11 @@ function handleCoreRuntimeMessage(message, sender, sendResponse) {
     try {
       origin = new URL(sender?.url).origin;
     } catch (_) {}
-    if (!["https://local.566flow.invalid", "https://566flow.invalid"].includes(origin)) {
+    if (
+      !["https://local.566flow.invalid", "https://566flow.invalid"].includes(
+        origin,
+      )
+    ) {
       sendResponse({ ok: false, error: "BAD_ORIGIN" });
       return false;
     }
@@ -9940,15 +9952,13 @@ function handleCoreRuntimeMessage(message, sender, sendResponse) {
           httpStatus: 403,
         }),
       );
-    task
-      .then(sendResponse)
-      .catch((error) =>
-        sendResponse({
-          success: false,
-          error: { code: error.code || "CONFIG_FETCH_FAILED" },
-          httpStatus: error.httpStatus || 503,
-        }),
-      );
+    task.then(sendResponse).catch((error) =>
+      sendResponse({
+        success: false,
+        error: { code: error.code || "CONFIG_FETCH_FAILED" },
+        httpStatus: error.httpStatus || 503,
+      }),
+    );
     return true;
   }
   if (message.action === "ensureEnrollment") {
@@ -9992,14 +10002,12 @@ function handleCoreRuntimeMessage(message, sender, sendResponse) {
           record: map[pid]?._ftMetadataOnly ? null : map[pid] || null,
         };
       });
-    _ftCacheWriteChain
-      .then(sendResponse)
-      .catch((error) =>
-        sendResponse({
-          ok: false,
-          error: error?.message || "CACHE_READ_FAILED",
-        }),
-      );
+    _ftCacheWriteChain.then(sendResponse).catch((error) =>
+      sendResponse({
+        ok: false,
+        error: error?.message || "CACHE_READ_FAILED",
+      }),
+    );
     return true;
   }
   if (message.action === "ft:removeHistoryJob") {
@@ -10038,14 +10046,12 @@ function handleCoreRuntimeMessage(message, sender, sendResponse) {
         await _ftWriteCacheMap(key, map, pid);
         return { ok: true };
       });
-    _ftCacheWriteChain
-      .then(sendResponse)
-      .catch((error) =>
-        sendResponse({
-          ok: false,
-          error: error?.message || "CACHE_REMOVE_FAILED",
-        }),
-      );
+    _ftCacheWriteChain.then(sendResponse).catch((error) =>
+      sendResponse({
+        ok: false,
+        error: error?.message || "CACHE_REMOVE_FAILED",
+      }),
+    );
     return true;
   }
   if (message.action === "ft:removeHistoryItem") {
@@ -10118,14 +10124,12 @@ function handleCoreRuntimeMessage(message, sender, sendResponse) {
           );
         return { ok: true };
       });
-    _ftCacheWriteChain
-      .then(sendResponse)
-      .catch((error) =>
-        sendResponse({
-          ok: false,
-          error: error?.message || "CACHE_REMOVE_FAILED",
-        }),
-      );
+    _ftCacheWriteChain.then(sendResponse).catch((error) =>
+      sendResponse({
+        ok: false,
+        error: error?.message || "CACHE_REMOVE_FAILED",
+      }),
+    );
     return true;
   }
   if (message.action === "ft:updateHistoryPrompt") {
@@ -10174,14 +10178,12 @@ function handleCoreRuntimeMessage(message, sender, sendResponse) {
           );
         return { ok: true, cached: true };
       });
-    _ftCacheWriteChain
-      .then(sendResponse)
-      .catch((error) =>
-        sendResponse({
-          ok: false,
-          error: error?.message || "CACHE_SAVE_FAILED",
-        }),
-      );
+    _ftCacheWriteChain.then(sendResponse).catch((error) =>
+      sendResponse({
+        ok: false,
+        error: error?.message || "CACHE_SAVE_FAILED",
+      }),
+    );
     return true;
   }
   if (message.action === "ft:updateHistoryItem") {
@@ -10273,14 +10275,12 @@ function handleCoreRuntimeMessage(message, sender, sendResponse) {
         await _ftWriteCacheMap(key, map, pid);
         return { ok: true, cached: true };
       });
-    _ftCacheWriteChain
-      .then(sendResponse)
-      .catch((error) =>
-        sendResponse({
-          ok: false,
-          error: error?.message || "CACHE_SAVE_FAILED",
-        }),
-      );
+    _ftCacheWriteChain.then(sendResponse).catch((error) =>
+      sendResponse({
+        ok: false,
+        error: error?.message || "CACHE_SAVE_FAILED",
+      }),
+    );
     return true;
   }
   if (message.action === "ft:clearProjectHistory") {
@@ -10295,14 +10295,12 @@ function handleCoreRuntimeMessage(message, sender, sendResponse) {
         await _ftWriteCacheMap(key, map, pid);
         return { ok: true };
       });
-    _ftCacheWriteChain
-      .then(sendResponse)
-      .catch((error) =>
-        sendResponse({
-          ok: false,
-          error: error?.message || "CACHE_CLEAR_FAILED",
-        }),
-      );
+    _ftCacheWriteChain.then(sendResponse).catch((error) =>
+      sendResponse({
+        ok: false,
+        error: error?.message || "CACHE_CLEAR_FAILED",
+      }),
+    );
     return true;
   }
   if (message.action === "ft:recoveryPatch") {
@@ -10451,14 +10449,12 @@ function handleCoreRuntimeMessage(message, sender, sendResponse) {
         await _ftWriteCacheMap(key, map, pid);
         return { ok: true };
       });
-    _ftCacheWriteChain
-      .then(sendResponse)
-      .catch((error) =>
-        sendResponse({
-          ok: false,
-          error: error?.message || "RECOVERY_PATCH_FAILED",
-        }),
-      );
+    _ftCacheWriteChain.then(sendResponse).catch((error) =>
+      sendResponse({
+        ok: false,
+        error: error?.message || "RECOVERY_PATCH_FAILED",
+      }),
+    );
     return true;
   }
   if (message.action === "ft:stopCachedJob") {
@@ -10548,14 +10544,12 @@ function handleCoreRuntimeMessage(message, sender, sendResponse) {
         }
         return { ok: true, cacheFound: found };
       });
-    _ftCacheWriteChain
-      .then(sendResponse)
-      .catch((error) =>
-        sendResponse({
-          ok: false,
-          error: error?.message || "CACHE_STOP_FAILED",
-        }),
-      );
+    _ftCacheWriteChain.then(sendResponse).catch((error) =>
+      sendResponse({
+        ok: false,
+        error: error?.message || "CACHE_STOP_FAILED",
+      }),
+    );
     return true;
   }
   if (message?.type === "uploadToFlow") {
@@ -17216,7 +17210,10 @@ function handleCoreRuntimeMessage(message, sender, sendResponse) {
       .catch((err) =>
         sendResponse({
           success: false,
-          error: { code: "LOCAL_BACKEND_ERROR", message: err?.message || String(err) },
+          error: {
+            code: "LOCAL_BACKEND_ERROR",
+            message: err?.message || String(err),
+          },
           httpStatus: 500,
         }),
       );

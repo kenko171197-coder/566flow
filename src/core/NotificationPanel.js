@@ -1,4 +1,54 @@
-class NotificationPanel{constructor(){this.isOpen=false;this.notifications=[];this.element=null;this.loading=false;this.page=1;this.hasMore=true;this._scrollHandler=null}async toggle(){if(this.isOpen){this.close()}else{await this.open()}}async open(){if(this.isOpen)return;this.notifications=[];this.page=1;this.hasMore=true;this._createPanel();requestAnimationFrame(()=>{this.element?.classList.add("visible")});this.isOpen=true;await this.fetchNotifications();this._bindScrollHandler()}close(){if(!this.isOpen)return;this.element?.classList.remove("visible");setTimeout(()=>{this.element?.remove();this.element=null},300);this.isOpen=false;if(this._scrollHandler){this.element?.querySelector(".notification-panel-body")?.removeEventListener("scroll",this._scrollHandler);this._scrollHandler=null}}_createPanel(){const t=(key,fallback)=>window.I18n?.t(key)||fallback;document.querySelector(".notification-panel-overlay")?.remove();this.element=document.createElement("div");this.element.className="notification-panel-overlay";this.element.innerHTML=`
+class NotificationPanel {
+  constructor() {
+    this.isOpen = false;
+    this.notifications = [];
+    this.element = null;
+    this.loading = false;
+    this.page = 1;
+    this.hasMore = true;
+    this._scrollHandler = null;
+  }
+  async toggle() {
+    if (this.isOpen) {
+      this.close();
+    } else {
+      await this.open();
+    }
+  }
+  async open() {
+    if (this.isOpen) return;
+    this.notifications = [];
+    this.page = 1;
+    this.hasMore = true;
+    this._createPanel();
+    requestAnimationFrame(() => {
+      this.element?.classList.add("visible");
+    });
+    this.isOpen = true;
+    await this.fetchNotifications();
+    this._bindScrollHandler();
+  }
+  close() {
+    if (!this.isOpen) return;
+    this.element?.classList.remove("visible");
+    setTimeout(() => {
+      this.element?.remove();
+      this.element = null;
+    }, 300);
+    this.isOpen = false;
+    if (this._scrollHandler) {
+      this.element
+        ?.querySelector(".notification-panel-body")
+        ?.removeEventListener("scroll", this._scrollHandler);
+      this._scrollHandler = null;
+    }
+  }
+  _createPanel() {
+    const t = (key, fallback) => window.I18n?.t(key) || fallback;
+    document.querySelector(".notification-panel-overlay")?.remove();
+    this.element = document.createElement("div");
+    this.element.className = "notification-panel-overlay";
+    this.element.innerHTML = `
       <div class="notification-panel-dialog">
         <div class="notification-panel-header">
           <h3>
@@ -7,11 +57,11 @@ class NotificationPanel{constructor(){this.isOpen=false;this.notifications=[];th
               <path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/>
               <path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/>
             </svg>
-            ${t("notification.panel.title","Notifications")}
+            ${t("notification.panel.title", "Notifications")}
           </h3>
           <div class="notification-panel-actions">
             <button class="notification-panel-mark-all" type="button"
-                    title="${t("notification.panel.markAllRead","Mark all as read")}">
+                    title="${t("notification.panel.markAllRead", "Mark all as read")}">
               <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor"
                    stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                 <polyline points="9 11 12 14 22 4"/>
@@ -19,7 +69,7 @@ class NotificationPanel{constructor(){this.isOpen=false;this.notifications=[];th
               </svg>
             </button>
             <button class="notification-panel-close" type="button"
-                    title="${t("common.close","Close")}">
+                    title="${t("common.close", "Close")}">
               <svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor"
                    stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
                 <line x1="18" y1="6" x2="6" y2="18"></line>
@@ -34,17 +84,164 @@ class NotificationPanel{constructor(){this.isOpen=false;this.notifications=[];th
               <circle cx="12" cy="12" r="10" stroke-opacity="0.25"/>
               <path d="M12 2a10 10 0 0 1 10 10" stroke-linecap="round"/>
             </svg>
-            <span>${t("notification.panel.loading","Loading...")}</span>
+            <span>${t("notification.panel.loading", "Loading...")}</span>
           </div>
         </div>
       </div>
-    `;document.body.appendChild(this.element);this._bindEvents();this._injectStyles()}_bindEvents(){const closeBtn=this.element?.querySelector(".notification-panel-close");closeBtn?.addEventListener("click",()=>this.close());this.element?.addEventListener("click",e=>{if(e.target===this.element){this.close()}});const markAllBtn=this.element?.querySelector(".notification-panel-mark-all");markAllBtn?.addEventListener("click",()=>this.markAllAsRead());["mousedown","mouseup","pointerdown","pointerup"].forEach(evt=>{this.element?.addEventListener(evt,e=>e.stopPropagation())})}_bindScrollHandler(){const body=this.element?.querySelector(".notification-panel-body");if(!body)return;this._scrollHandler=()=>{if(this.loading||!this.hasMore)return;const{scrollTop,scrollHeight,clientHeight}=body;if(scrollTop+clientHeight>=scrollHeight-100){this._loadMore()}};body.addEventListener("scroll",this._scrollHandler)}async fetchNotifications(){console.log("[NotificationPanel] fetchNotifications called, page:",this.page);console.log("[NotificationPanel] isLoggedIn:",window.authManager?.isLoggedIn());if(!window.authManager?.isLoggedIn()){console.log("[NotificationPanel] Not logged in, showing empty");this._renderEmpty();return}this.loading=true;try{const response=await new Promise((resolve,reject)=>{chrome.runtime.sendMessage({action:"apiRequest",method:"GET",endpoint:`notifications?page=${this.page}&per_page=20`,token:window.authManager?.token},resp=>{if(chrome.runtime.lastError){console.error("[NotificationPanel] Chrome error:",chrome.runtime.lastError);reject(new Error(chrome.runtime.lastError.message));return}if(resp?.success){resolve(resp)}else{console.error("[NotificationPanel] API error:",resp?.error);reject(new Error(resp?.error?.message||"Failed to load notifications"))}})});const apiData=response.data?.data||response.data||{};const items=apiData.notifications||[];const meta=response.data?.meta||response.meta||apiData.meta;console.log("[NotificationPanel] Items:",items.length,"Meta:",meta);if(this.page===1){this.notifications=items}else{this.notifications=[...this.notifications,...items]}this.hasMore=meta?.has_more??(meta?meta.current_page<meta.last_page:false);console.log("[NotificationPanel] hasMore:",this.hasMore);this._renderList()}catch(err){console.error("[NotificationPanel] Fetch error:",err.message);if(this.page===1){this._renderEmpty()}}finally{this.loading=false}}async _loadMore(){if(this.loading||!this.hasMore)return;this.page++;const body=this.element?.querySelector(".notification-panel-body");const loadingMore=document.createElement("div");loadingMore.className="notification-panel-loading-more";loadingMore.innerHTML=`
+    `;
+    document.body.appendChild(this.element);
+    this._bindEvents();
+    this._injectStyles();
+  }
+  _bindEvents() {
+    const closeBtn = this.element?.querySelector(".notification-panel-close");
+    closeBtn?.addEventListener("click", () => this.close());
+    this.element?.addEventListener("click", (e) => {
+      if (e.target === this.element) {
+        this.close();
+      }
+    });
+    const markAllBtn = this.element?.querySelector(
+      ".notification-panel-mark-all",
+    );
+    markAllBtn?.addEventListener("click", () => this.markAllAsRead());
+    ["mousedown", "mouseup", "pointerdown", "pointerup"].forEach((evt) => {
+      this.element?.addEventListener(evt, (e) => e.stopPropagation());
+    });
+  }
+  _bindScrollHandler() {
+    const body = this.element?.querySelector(".notification-panel-body");
+    if (!body) return;
+    this._scrollHandler = () => {
+      if (this.loading || !this.hasMore) return;
+      const { scrollTop, scrollHeight, clientHeight } = body;
+      if (scrollTop + clientHeight >= scrollHeight - 100) {
+        this._loadMore();
+      }
+    };
+    body.addEventListener("scroll", this._scrollHandler);
+  }
+  async fetchNotifications() {
+    console.log(
+      "[NotificationPanel] fetchNotifications called, page:",
+      this.page,
+    );
+    console.log(
+      "[NotificationPanel] isLoggedIn:",
+      window.authManager?.isLoggedIn(),
+    );
+    if (!window.authManager?.isLoggedIn()) {
+      console.log("[NotificationPanel] Not logged in, showing empty");
+      this._renderEmpty();
+      return;
+    }
+    this.loading = true;
+    try {
+      const response = await new Promise((resolve, reject) => {
+        chrome.runtime.sendMessage(
+          {
+            action: "apiRequest",
+            method: "GET",
+            endpoint: `notifications?page=${this.page}&per_page=20`,
+            token: window.authManager?.token,
+          },
+          (resp) => {
+            if (chrome.runtime.lastError) {
+              console.error(
+                "[NotificationPanel] Chrome error:",
+                chrome.runtime.lastError,
+              );
+              reject(new Error(chrome.runtime.lastError.message));
+              return;
+            }
+            if (resp?.success) {
+              resolve(resp);
+            } else {
+              console.error("[NotificationPanel] API error:", resp?.error);
+              reject(
+                new Error(
+                  resp?.error?.message || "Failed to load notifications",
+                ),
+              );
+            }
+          },
+        );
+      });
+      const apiData = response.data?.data || response.data || {};
+      const items = apiData.notifications || [];
+      const meta = response.data?.meta || response.meta || apiData.meta;
+      console.log("[NotificationPanel] Items:", items.length, "Meta:", meta);
+      if (this.page === 1) {
+        this.notifications = items;
+      } else {
+        this.notifications = [...this.notifications, ...items];
+      }
+      this.hasMore =
+        meta?.has_more ?? (meta ? meta.current_page < meta.last_page : false);
+      console.log("[NotificationPanel] hasMore:", this.hasMore);
+      this._renderList();
+    } catch (err) {
+      console.error("[NotificationPanel] Fetch error:", err.message);
+      if (this.page === 1) {
+        this._renderEmpty();
+      }
+    } finally {
+      this.loading = false;
+    }
+  }
+  async _loadMore() {
+    if (this.loading || !this.hasMore) return;
+    this.page++;
+    const body = this.element?.querySelector(".notification-panel-body");
+    const loadingMore = document.createElement("div");
+    loadingMore.className = "notification-panel-loading-more";
+    loadingMore.innerHTML = `
       <svg class="spin" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
         <circle cx="12" cy="12" r="10" stroke-opacity="0.25"/>
         <path d="M12 2a10 10 0 0 1 10 10" stroke-linecap="round"/>
       </svg>
-    `;body?.appendChild(loadingMore);await this.fetchNotifications();loadingMore.remove()}_renderList(){const body=this.element?.querySelector(".notification-panel-body");if(!body)return;if(this.notifications.length===0){this._renderEmpty();return}body.innerHTML=this.notifications.map(n=>this._renderItem(n)).join("");body.querySelectorAll(".notification-item").forEach(item=>{item.addEventListener("click",e=>{const id=item.dataset.id;const notification=this.notifications.find(n=>String(n.id)===id);if(notification){this._handleItemClick(notification)}})})}_renderItem(notification){const isUnread=!notification.read_at;const icon=this._getIcon(notification.type);const time=this._formatTime(notification.created_at);const title=this._escapeHtml(notification.title||notification.data?.title||"Notification");const message=this._escapeHtml(notification.body||notification.message||notification.data?.message||"");return`
-      <div class="notification-item ${isUnread?"unread":""}"
+    `;
+    body?.appendChild(loadingMore);
+    await this.fetchNotifications();
+    loadingMore.remove();
+  }
+  _renderList() {
+    const body = this.element?.querySelector(".notification-panel-body");
+    if (!body) return;
+    if (this.notifications.length === 0) {
+      this._renderEmpty();
+      return;
+    }
+    body.innerHTML = this.notifications
+      .map((n) => this._renderItem(n))
+      .join("");
+    body.querySelectorAll(".notification-item").forEach((item) => {
+      item.addEventListener("click", (e) => {
+        const id = item.dataset.id;
+        const notification = this.notifications.find(
+          (n) => String(n.id) === id,
+        );
+        if (notification) {
+          this._handleItemClick(notification);
+        }
+      });
+    });
+  }
+  _renderItem(notification) {
+    const isUnread = !notification.read_at;
+    const icon = this._getIcon(notification.type);
+    const time = this._formatTime(notification.created_at);
+    const title = this._escapeHtml(
+      notification.title || notification.data?.title || "Notification",
+    );
+    const message = this._escapeHtml(
+      notification.body ||
+        notification.message ||
+        notification.data?.message ||
+        "",
+    );
+    return `
+      <div class="notification-item ${isUnread ? "unread" : ""}"
            data-id="${notification.id}"
            data-type="${notification.type}">
         <div class="notification-item-icon ${notification.type}">
@@ -52,51 +249,122 @@ class NotificationPanel{constructor(){this.isOpen=false;this.notifications=[];th
         </div>
         <div class="notification-item-content">
           <div class="notification-item-title">${title}</div>
-          ${message?`<div class="notification-item-message">${message}</div>`:""}
+          ${message ? `<div class="notification-item-message">${message}</div>` : ""}
           <div class="notification-item-time">${time}</div>
         </div>
-        ${isUnread?'<div class="notification-item-dot"></div>':""}
+        ${isUnread ? '<div class="notification-item-dot"></div>' : ""}
       </div>
-    `}_getIcon(type){switch(type){case"workflow_shared":return`<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+    `;
+  }
+  _getIcon(type) {
+    switch (type) {
+      case "workflow_shared":
+        return `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <path d="M4 12v8a2 2 0 0 0 2 2h12a2 2 0 0 0 2-2v-8"/>
           <polyline points="16 6 12 2 8 6"/>
           <line x1="12" y1="2" x2="12" y2="15"/>
-        </svg>`;case"account_expiring":return`<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        </svg>`;
+      case "account_expiring":
+        return `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <circle cx="12" cy="12" r="10"/>
           <polyline points="12 6 12 12 16 14"/>
-        </svg>`;case"feature_announcement":return`<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        </svg>`;
+      case "feature_announcement":
+        return `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <path d="m3 11 18-5v12L3 14v-3z"/>
           <path d="M11.6 16.8a3 3 0 1 1-5.8-1.6"/>
-        </svg>`;case"system":return`<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        </svg>`;
+      case "system":
+        return `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <circle cx="12" cy="12" r="10"/>
           <line x1="12" y1="16" x2="12" y2="12"/>
           <line x1="12" y1="8" x2="12.01" y2="8"/>
-        </svg>`;case"payment":case"order_paid":case"order_failed":return`<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        </svg>`;
+      case "payment":
+      case "order_paid":
+      case "order_failed":
+        return `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <rect x="1" y="4" width="22" height="16" rx="2" ry="2"/>
           <line x1="1" y1="10" x2="23" y2="10"/>
-        </svg>`;case"order_admin_notify":return`<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        </svg>`;
+      case "order_admin_notify":
+        return `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/>
           <circle cx="9" cy="7" r="4"/>
           <path d="M22 21v-2a4 4 0 0 0-3-3.87"/>
           <path d="M16 3.13a4 4 0 0 1 0 7.75"/>
-        </svg>`;case"affiliate_commission":return`<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
+        </svg>`;
+      case "affiliate_commission":
+        return `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
           <line x1="12" y1="1" x2="12" y2="23"/>
           <path d="M17 5H9.5a3.5 3.5 0 0 0 0 7h5a3.5 3.5 0 0 1 0 7H6"/>
-        </svg>`;case"creator_template_reviewed":return`<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        </svg>`;
+      case "creator_template_reviewed":
+        return `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <rect x="3" y="3" width="18" height="18" rx="2"/><path d="M3 9h18M9 3v18"/>
-        </svg>`;default:return`<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
+        </svg>`;
+      default:
+        return `<svg width="18" height="18" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/>
           <path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/>
-        </svg>`}}_formatTime(dateStr){if(!dateStr)return"";const normalized=typeof dateStr==="string"&&!/[zZ]|[+-]\d{2}:?\d{2}$/.test(dateStr)?dateStr.replace(" ","T")+"Z":dateStr;const date=new Date(normalized);const now=new Date;const diffMs=now-date;const diffSec=Math.floor(diffMs/1e3);const diffMin=Math.floor(diffSec/60);const diffHour=Math.floor(diffMin/60);const diffDay=Math.floor(diffHour/24);const t=(key,fallback)=>window.I18n?.t(key)||fallback;if(diffSec<60){return t("notification.time.justNow","Just now")}else if(diffMin<60){return`${diffMin} ${t("notification.time.minutesAgo","minutes ago")}`}else if(diffHour<24){return`${diffHour} ${t("notification.time.hoursAgo","hours ago")}`}else if(diffDay<7){return`${diffDay} ${t("notification.time.daysAgo","days ago")}`}else{const day=date.getDate().toString().padStart(2,"0");const month=(date.getMonth()+1).toString().padStart(2,"0");const year=date.getFullYear();return`${day}/${month}/${year}`}}_escapeHtml(str){if(!str)return"";const div=document.createElement("div");div.textContent=str;return div.innerHTML}_renderEmpty(){const t=(key,fallback)=>window.I18n?.t(key)||fallback;const body=this.element?.querySelector(".notification-panel-body");if(!body)return;body.innerHTML=`
+        </svg>`;
+    }
+  }
+  _formatTime(dateStr) {
+    if (!dateStr) return "";
+    const normalized =
+      typeof dateStr === "string" && !/[zZ]|[+-]\d{2}:?\d{2}$/.test(dateStr)
+        ? dateStr.replace(" ", "T") + "Z"
+        : dateStr;
+    const date = new Date(normalized);
+    const now = new Date();
+    const diffMs = now - date;
+    const diffSec = Math.floor(diffMs / 1e3);
+    const diffMin = Math.floor(diffSec / 60);
+    const diffHour = Math.floor(diffMin / 60);
+    const diffDay = Math.floor(diffHour / 24);
+    const t = (key, fallback) => window.I18n?.t(key) || fallback;
+    if (diffSec < 60) {
+      return t("notification.time.justNow", "Just now");
+    } else if (diffMin < 60) {
+      return `${diffMin} ${t("notification.time.minutesAgo", "minutes ago")}`;
+    } else if (diffHour < 24) {
+      return `${diffHour} ${t("notification.time.hoursAgo", "hours ago")}`;
+    } else if (diffDay < 7) {
+      return `${diffDay} ${t("notification.time.daysAgo", "days ago")}`;
+    } else {
+      const day = date.getDate().toString().padStart(2, "0");
+      const month = (date.getMonth() + 1).toString().padStart(2, "0");
+      const year = date.getFullYear();
+      return `${day}/${month}/${year}`;
+    }
+  }
+  _escapeHtml(str) {
+    if (!str) return "";
+    const div = document.createElement("div");
+    div.textContent = str;
+    return div.innerHTML;
+  }
+  _renderEmpty() {
+    const t = (key, fallback) => window.I18n?.t(key) || fallback;
+    const body = this.element?.querySelector(".notification-panel-body");
+    if (!body) return;
+    body.innerHTML = `
       <div class="notification-panel-empty">
         <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor"
              stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
           <path d="M6 8a6 6 0 0 1 12 0c0 7 3 9 3 9H3s3-2 3-9"/>
           <path d="M10.3 21a1.94 1.94 0 0 0 3.4 0"/>
         </svg>
-        <p>${t("notification.panel.empty","No notifications yet")}</p>
+        <p>${t("notification.panel.empty", "No notifications yet")}</p>
       </div>
-    `}_renderError(message){const t=(key,fallback)=>window.I18n?.t(key)||fallback;const body=this.element?.querySelector(".notification-panel-body");if(!body)return;body.innerHTML=`
+    `;
+  }
+  _renderError(message) {
+    const t = (key, fallback) => window.I18n?.t(key) || fallback;
+    const body = this.element?.querySelector(".notification-panel-body");
+    if (!body) return;
+    body.innerHTML = `
       <div class="notification-panel-error">
         <svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor"
              stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round">
@@ -104,13 +372,124 @@ class NotificationPanel{constructor(){this.isOpen=false;this.notifications=[];th
           <line x1="12" y1="8" x2="12" y2="12"/>
           <line x1="12" y1="16" x2="12.01" y2="16"/>
         </svg>
-        <p>${t("notification.panel.error","Could not load notifications")}</p>
+        <p>${t("notification.panel.error", "Could not load notifications")}</p>
         <span>${this._escapeHtml(message)}</span>
         <button class="notification-panel-retry" type="button">
-          ${t("common.retry","Retry")}
+          ${t("common.retry", "Retry")}
         </button>
       </div>
-    `;body.querySelector(".notification-panel-retry")?.addEventListener("click",()=>{this.page=1;this.fetchNotifications()})}async markAllAsRead(){if(!window.authManager?.isLoggedIn())return;const t=(key,fallback)=>window.I18n?.t(key)||fallback;try{await new Promise((resolve,reject)=>{chrome.runtime.sendMessage({action:"apiRequest",method:"POST",endpoint:"notifications/mark-all-read",token:window.authManager?.token},resp=>{if(chrome.runtime.lastError){reject(new Error(chrome.runtime.lastError.message));return}if(resp?.success){resolve(resp.data)}else{reject(new Error(resp?.error?.message||"Failed to mark as read"))}})});this.notifications=this.notifications.map(n=>({...n,read_at:new Date().toISOString()}));this._renderList();const bell=window.NotificationBell?.getInstance();bell?.updateBadge(0);window.showNotification?.(t("notification.panel.markedAllRead","Marked all as read"),"success")}catch(err){console.error("[NotificationPanel] L\u1ED7i mark all as read:",err.message);window.showNotification?.(err.message,"error")}}async _handleItemClick(notification){console.log("[NotificationPanel] Item clicked:",notification);if(!notification.read_at){await this._markAsRead(notification.id)}if(window.NotificationModal){this.close();window.NotificationModal.show(notification)}}async _markAsRead(id){if(!window.authManager?.isLoggedIn())return;try{await new Promise((resolve,reject)=>{chrome.runtime.sendMessage({action:"apiRequest",method:"POST",endpoint:`notifications/${id}/read`,token:window.authManager?.token},resp=>{if(chrome.runtime.lastError){reject(new Error(chrome.runtime.lastError.message));return}if(resp?.success){resolve(resp.data)}else{reject(new Error(resp?.error?.message||"Failed to mark as read"))}})});const index=this.notifications.findIndex(n=>n.id===id);if(index>=0){this.notifications[index].read_at=new Date().toISOString();const item=this.element?.querySelector(`.notification-item[data-id="${id}"]`);item?.classList.remove("unread");item?.querySelector(".notification-item-dot")?.remove()}const bell=window.NotificationBell?.getInstance();if(bell&&bell.unreadCount>0){bell.updateBadge(bell.unreadCount-1)}}catch(err){console.warn("[NotificationPanel] L\u1ED7i mark as read:",err.message)}}_injectStyles(){if(document.getElementById("notification-panel-styles"))return;const style=document.createElement("style");style.id="notification-panel-styles";style.textContent=`
+    `;
+    body
+      .querySelector(".notification-panel-retry")
+      ?.addEventListener("click", () => {
+        this.page = 1;
+        this.fetchNotifications();
+      });
+  }
+  async markAllAsRead() {
+    if (!window.authManager?.isLoggedIn()) return;
+    const t = (key, fallback) => window.I18n?.t(key) || fallback;
+    try {
+      await new Promise((resolve, reject) => {
+        chrome.runtime.sendMessage(
+          {
+            action: "apiRequest",
+            method: "POST",
+            endpoint: "notifications/mark-all-read",
+            token: window.authManager?.token,
+          },
+          (resp) => {
+            if (chrome.runtime.lastError) {
+              reject(new Error(chrome.runtime.lastError.message));
+              return;
+            }
+            if (resp?.success) {
+              resolve(resp.data);
+            } else {
+              reject(
+                new Error(resp?.error?.message || "Failed to mark as read"),
+              );
+            }
+          },
+        );
+      });
+      this.notifications = this.notifications.map((n) => ({
+        ...n,
+        read_at: new Date().toISOString(),
+      }));
+      this._renderList();
+      const bell = window.NotificationBell?.getInstance();
+      bell?.updateBadge(0);
+      window.showNotification?.(
+        t("notification.panel.markedAllRead", "Marked all as read"),
+        "success",
+      );
+    } catch (err) {
+      console.error(
+        "[NotificationPanel] L\u1ED7i mark all as read:",
+        err.message,
+      );
+      window.showNotification?.(err.message, "error");
+    }
+  }
+  async _handleItemClick(notification) {
+    console.log("[NotificationPanel] Item clicked:", notification);
+    if (!notification.read_at) {
+      await this._markAsRead(notification.id);
+    }
+    if (window.NotificationModal) {
+      this.close();
+      window.NotificationModal.show(notification);
+    }
+  }
+  async _markAsRead(id) {
+    if (!window.authManager?.isLoggedIn()) return;
+    try {
+      await new Promise((resolve, reject) => {
+        chrome.runtime.sendMessage(
+          {
+            action: "apiRequest",
+            method: "POST",
+            endpoint: `notifications/${id}/read`,
+            token: window.authManager?.token,
+          },
+          (resp) => {
+            if (chrome.runtime.lastError) {
+              reject(new Error(chrome.runtime.lastError.message));
+              return;
+            }
+            if (resp?.success) {
+              resolve(resp.data);
+            } else {
+              reject(
+                new Error(resp?.error?.message || "Failed to mark as read"),
+              );
+            }
+          },
+        );
+      });
+      const index = this.notifications.findIndex((n) => n.id === id);
+      if (index >= 0) {
+        this.notifications[index].read_at = new Date().toISOString();
+        const item = this.element?.querySelector(
+          `.notification-item[data-id="${id}"]`,
+        );
+        item?.classList.remove("unread");
+        item?.querySelector(".notification-item-dot")?.remove();
+      }
+      const bell = window.NotificationBell?.getInstance();
+      if (bell && bell.unreadCount > 0) {
+        bell.updateBadge(bell.unreadCount - 1);
+      }
+    } catch (err) {
+      console.warn("[NotificationPanel] L\u1ED7i mark as read:", err.message);
+    }
+  }
+  _injectStyles() {
+    if (document.getElementById("notification-panel-styles")) return;
+    const style = document.createElement("style");
+    style.id = "notification-panel-styles";
+    style.textContent = `
       /* NotificationPanel Overlay - Pattern gi\u1ED1ng chat-ai.css */
       .notification-panel-overlay {
         position: fixed;
@@ -478,4 +857,8 @@ class NotificationPanel{constructor(){this.isOpen=false;this.notifications=[];th
       .theme-light .notification-panel-dialog .notification-item:hover .notification-item-title {
         color: var(--foreground, #1a1a1a);
       }
-    `;document.head.appendChild(style)}}window.NotificationPanel=NotificationPanel;
+    `;
+    document.head.appendChild(style);
+  }
+}
+window.NotificationPanel = NotificationPanel;

@@ -35,7 +35,9 @@
   });
   const cache = new Map();
 
-  const META = Object.freeze({ access: { contract: "device-v1", mode: "local" } });
+  const META = Object.freeze({
+    access: { contract: "device-v1", mode: "local" },
+  });
   const fail = (code, httpStatus = 404) =>
     Object.assign(new Error(code), { code, httpStatus });
 
@@ -43,7 +45,8 @@
     return v && typeof v === "object" && !Array.isArray(v);
   }
   function merge(base, extra) {
-    if (!isObject(base) || !isObject(extra)) return extra === undefined ? base : extra;
+    if (!isObject(base) || !isObject(extra))
+      return extra === undefined ? base : extra;
     const out = { ...base };
     for (const [k, v] of Object.entries(extra)) out[k] = merge(base[k], v);
     return out;
@@ -79,7 +82,11 @@
     if (snapshotKey) {
       try {
         await chrome.storage.local.set({
-          [snapshotKey]: { data, fetched_at: Date.now(), scope: { contract: "local" } },
+          [snapshotKey]: {
+            data,
+            fetched_at: Date.now(),
+            scope: { contract: "local" },
+          },
           _tobyConfigsReady: Date.now(),
         });
       } catch (_) {}

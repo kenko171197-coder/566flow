@@ -90,7 +90,8 @@
 
   function buildFeatures() {
     const features = {};
-    for (const key of BOOLEAN_KEYS) features[key] = { type: "boolean", value: true };
+    for (const key of BOOLEAN_KEYS)
+      features[key] = { type: "boolean", value: true };
     for (const key of QUOTA_KEYS)
       features[key] = { type: "quota", value: -1, usage_today: 0 };
     return features;
@@ -147,15 +148,26 @@
       return ok({ client_id: "local", secret: "local", expires_at: null });
 
     // ---- auth: single local user, always signed in
-    if (path === "auth/login" || path === "auth/register" || path === "auth/refresh")
-      return ok({ token: LOCAL_TOKEN, refresh_token: LOCAL_TOKEN, user: LOCAL_USER });
+    if (
+      path === "auth/login" ||
+      path === "auth/register" ||
+      path === "auth/refresh"
+    )
+      return ok({
+        token: LOCAL_TOKEN,
+        refresh_token: LOCAL_TOKEN,
+        user: LOCAL_USER,
+      });
     if (path === "auth/me") return ok({ user: LOCAL_USER });
     if (path === "auth/logout") return ok({});
 
     // ---- plan / quota: everything on, nothing limited
     if (path === "entitlements")
       return ok(
-        { features: buildFeatures(), plan: { slug: "local", name: "566Flow Local" } },
+        {
+          features: buildFeatures(),
+          plan: { slug: "local", name: "566Flow Local" },
+        },
         { version: 1 },
       );
     if (path === "system-settings/public")
@@ -202,7 +214,8 @@
       return ok({});
 
     // ---- telemetry / realtime: no-ops
-    if (path.startsWith("usage/") || path === "mcp/executor-heartbeat") return ok({});
+    if (path.startsWith("usage/") || path === "mcp/executor-heartbeat")
+      return ok({});
     if (path.startsWith("sse/")) return fail("SSE_DISABLED", 404);
 
     // ---- public/admin-provided defaults: nothing to override locally
@@ -238,7 +251,11 @@
       const id = parts[1] ? Number(parts[1]) : null;
       if (method === "GET" && id === null) return page(db.prompts, query);
       if (method === "POST" && id === null) {
-        const row = { ...data, id: db.seq++, created_at: new Date().toISOString() };
+        const row = {
+          ...data,
+          id: db.seq++,
+          created_at: new Date().toISOString(),
+        };
         db.prompts.unshift(row);
         await writeDb(db);
         return ok(row);
@@ -260,9 +277,14 @@
     // ---- generation history
     if (parts[0] === "history") {
       const db = await readDb();
-      if (method === "GET" && parts.length === 1) return page(db.history, query);
+      if (method === "GET" && parts.length === 1)
+        return page(db.history, query);
       if (method === "POST" && parts.length === 1) {
-        const row = { ...data, id: db.seq++, created_at: new Date().toISOString() };
+        const row = {
+          ...data,
+          id: db.seq++,
+          created_at: new Date().toISOString(),
+        };
         db.history.unshift(row);
         db.history = db.history.slice(0, 5000);
         await writeDb(db);
@@ -277,14 +299,26 @@
         return ok({});
       }
       if (method === "PATCH") {
-        db.history[idx] = { ...db.history[idx], ...data, favorite: !db.history[idx].favorite };
+        db.history[idx] = {
+          ...db.history[idx],
+          ...data,
+          favorite: !db.history[idx].favorite,
+        };
         await writeDb(db);
         return ok(db.history[idx]);
       }
     }
 
-    console.info("[LocalBackend] unsupported endpoint (no remote in 566Flow):", method, path);
-    return fail("LOCAL_MODE_UNSUPPORTED", 404, `Not available in local mode: ${path}`);
+    console.info(
+      "[LocalBackend] unsupported endpoint (no remote in 566Flow):",
+      method,
+      path,
+    );
+    return fail(
+      "LOCAL_MODE_UNSUPPORTED",
+      404,
+      `Not available in local mode: ${path}`,
+    );
   }
 
   // Base URL kept on a non-routable host so the page fetch shim can intercept
@@ -295,7 +329,8 @@
   async function ensureLocalUser() {
     const stored = await chrome.storage.local.get(["af_auth"]);
     const auth = stored.af_auth;
-    if (auth?.token === LOCAL_TOKEN && auth?.apiBaseUrl === LOCAL_API_BASE) return;
+    if (auth?.token === LOCAL_TOKEN && auth?.apiBaseUrl === LOCAL_API_BASE)
+      return;
     await chrome.storage.local.set({
       af_auth: {
         token: LOCAL_TOKEN,
@@ -304,6 +339,14 @@
         savedAt: Date.now(),
       },
       af_api_url: LOCAL_API_BASE,
+      // Pre-seed the entitlements cache so every feature is unlocked from the
+      // first paint (before FeatureGate's own fetch runs), e.g. Pipeline Queue.
+      af_entitlements: {
+        entitlements: buildFeatures(),
+        plan: { slug: "local", name: "566Flow Local" },
+        lastFetch: Date.now(),
+        user_id: LOCAL_USER.id,
+      },
     });
   }
 

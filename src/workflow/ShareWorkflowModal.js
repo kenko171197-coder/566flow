@@ -1,4 +1,48 @@
-var __defProp=Object.defineProperty;var __defNormalProp=(obj,key,value)=>key in obj?__defProp(obj,key,{enumerable:true,configurable:true,writable:true,value}):obj[key]=value;var __publicField=(obj,key,value)=>__defNormalProp(obj,typeof key!=="symbol"?key+"":key,value);class ShareWorkflowModal{static async show(wfId){const t=(key,fallback)=>window.I18n?.t(key)||fallback;this._close();return new Promise(resolve=>{const modal=this._createModal();document.body.appendChild(modal);this._instance=modal;this._bindEvents(modal,wfId,resolve);requestAnimationFrame(()=>{modal.classList.add("visible");const emailInput=modal.querySelector("#shareWorkflowEmail");emailInput?.focus()})})}static _close(){if(this._instance){this._instance.classList.remove("visible");setTimeout(()=>{this._instance?.remove();this._instance=null},200)}}static isValidEmail(email){return/^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email)}static _createModal(){const t=(key,fallback)=>window.I18n?.t(key)||fallback;const modal=document.createElement("div");modal.className="share-workflow-modal";modal.innerHTML=`
+var __defProp = Object.defineProperty;
+var __defNormalProp = (obj, key, value) =>
+  key in obj
+    ? __defProp(obj, key, {
+        enumerable: true,
+        configurable: true,
+        writable: true,
+        value,
+      })
+    : (obj[key] = value);
+var __publicField = (obj, key, value) =>
+  __defNormalProp(obj, typeof key !== "symbol" ? key + "" : key, value);
+class ShareWorkflowModal {
+  static async show(wfId) {
+    const t = (key, fallback) => window.I18n?.t(key) || fallback;
+    this._close();
+    return new Promise((resolve) => {
+      const modal = this._createModal();
+      document.body.appendChild(modal);
+      this._instance = modal;
+      this._bindEvents(modal, wfId, resolve);
+      requestAnimationFrame(() => {
+        modal.classList.add("visible");
+        const emailInput = modal.querySelector("#shareWorkflowEmail");
+        emailInput?.focus();
+      });
+    });
+  }
+  static _close() {
+    if (this._instance) {
+      this._instance.classList.remove("visible");
+      setTimeout(() => {
+        this._instance?.remove();
+        this._instance = null;
+      }, 200);
+    }
+  }
+  static isValidEmail(email) {
+    return /^[^\s@]+@[^\s@]+\.[^\s@]+$/.test(email);
+  }
+  static _createModal() {
+    const t = (key, fallback) => window.I18n?.t(key) || fallback;
+    const modal = document.createElement("div");
+    modal.className = "share-workflow-modal";
+    modal.innerHTML = `
       <div class="share-workflow-backdrop"></div>
       <div class="share-workflow-content">
         <div class="share-workflow-header">
@@ -10,9 +54,9 @@ var __defProp=Object.defineProperty;var __defNormalProp=(obj,key,value)=>key in 
               <line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/>
               <line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/>
             </svg>
-            ${t("workflow.share.title","Share Workflow")}
+            ${t("workflow.share.title", "Share Workflow")}
           </h3>
-          <button class="share-workflow-close" type="button" aria-label="${t("common.close","Close")}">
+          <button class="share-workflow-close" type="button" aria-label="${t("common.close", "Close")}">
             <svg width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round">
               <line x1="18" y1="6" x2="6" y2="18"></line>
               <line x1="6" y1="6" x2="18" y2="18"></line>
@@ -23,10 +67,10 @@ var __defProp=Object.defineProperty;var __defNormalProp=(obj,key,value)=>key in 
         <div class="share-workflow-body">
           <!-- Email -->
           <div class="share-workflow-field">
-            <label for="shareWorkflowEmail">${t("workflow.share.emailLabel","Recipient email")} <span class="required">*</span></label>
+            <label for="shareWorkflowEmail">${t("workflow.share.emailLabel", "Recipient email")} <span class="required">*</span></label>
             <input type="email"
                    id="shareWorkflowEmail"
-                   placeholder="${t("workflow.share.emailPlaceholder","Enter email of the person you want to share with...")}"
+                   placeholder="${t("workflow.share.emailPlaceholder", "Enter email of the person you want to share with...")}"
                    required
                    maxlength="255"
                    autocomplete="email" />
@@ -35,12 +79,12 @@ var __defProp=Object.defineProperty;var __defNormalProp=(obj,key,value)=>key in 
           <!-- Note -->
           <div class="share-workflow-field">
             <label for="shareWorkflowNote">
-              ${t("workflow.share.noteLabel","Note")}
+              ${t("workflow.share.noteLabel", "Note")}
               <span class="char-count"><span id="shareWorkflowNoteCount">0</span>/500</span>
             </label>
             <textarea id="shareWorkflowNote"
                       rows="3"
-                      placeholder="${t("workflow.share.notePlaceholder","Add a note for the recipient (optional)...")}"
+                      placeholder="${t("workflow.share.notePlaceholder", "Add a note for the recipient (optional)...")}"
                       maxlength="500"></textarea>
           </div>
 
@@ -56,7 +100,7 @@ var __defProp=Object.defineProperty;var __defNormalProp=(obj,key,value)=>key in 
         </div>
 
         <div class="share-workflow-footer">
-          <button class="btn btn-secondary" type="button" id="shareWorkflowCancelBtn">${t("common.cancel","Cancel")}</button>
+          <button class="btn btn-secondary" type="button" id="shareWorkflowCancelBtn">${t("common.cancel", "Cancel")}</button>
           <button class="btn btn-primary" type="button" id="shareWorkflowSubmitBtn">
             <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
               <circle cx="18" cy="5" r="3"/>
@@ -65,7 +109,7 @@ var __defProp=Object.defineProperty;var __defNormalProp=(obj,key,value)=>key in 
               <line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/>
               <line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/>
             </svg>
-            ${t("workflow.share.submit","Share")}
+            ${t("workflow.share.submit", "Share")}
           </button>
         </div>
       </div>
@@ -298,13 +342,162 @@ var __defProp=Object.defineProperty;var __defNormalProp=(obj,key,value)=>key in 
           to { transform: rotate(360deg); }
         }
       </style>
-    `;return modal}static _bindEvents(modal,wfId,resolve){const closeBtn=modal.querySelector(".share-workflow-close");const cancelBtn=modal.querySelector("#shareWorkflowCancelBtn");const submitBtn=modal.querySelector("#shareWorkflowSubmitBtn");const backdrop=modal.querySelector(".share-workflow-backdrop");const emailInput=modal.querySelector("#shareWorkflowEmail");const noteTextarea=modal.querySelector("#shareWorkflowNote");const noteCount=modal.querySelector("#shareWorkflowNoteCount");const handleClose=()=>{this._close();resolve(false)};closeBtn?.addEventListener("click",handleClose);cancelBtn?.addEventListener("click",handleClose);backdrop?.addEventListener("click",handleClose);const handleKeydown=e=>{if(e.key==="Escape"){handleClose();document.removeEventListener("keydown",handleKeydown)}};document.addEventListener("keydown",handleKeydown);noteTextarea?.addEventListener("input",()=>{const count=noteTextarea.value.length;if(noteCount){noteCount.textContent=count}});emailInput?.addEventListener("input",()=>{emailInput.classList.remove("error");this._hideError(modal)});emailInput?.addEventListener("keydown",async e=>{if(e.key==="Enter"){e.preventDefault();await this._handleSubmit(modal,wfId,resolve)}});submitBtn?.addEventListener("click",async()=>{await this._handleSubmit(modal,wfId,resolve)})}static async _handleSubmit(modal,wfId,resolve){const t=(key,fallback)=>window.I18n?.t(key)||fallback;const emailInput=modal.querySelector("#shareWorkflowEmail");const noteTextarea=modal.querySelector("#shareWorkflowNote");const submitBtn=modal.querySelector("#shareWorkflowSubmitBtn");const email=emailInput?.value?.trim();const note=noteTextarea?.value?.trim()||"";if(!email){this._showError(modal,t("workflow.share.emailRequired","Please enter recipient email"));emailInput?.classList.add("error");emailInput?.focus();return}if(!this.isValidEmail(email)){this._showError(modal,t("workflow.share.emailInvalid","Invalid email address"));emailInput?.classList.add("error");emailInput?.focus();return}submitBtn.disabled=true;submitBtn.innerHTML=`
+    `;
+    return modal;
+  }
+  static _bindEvents(modal, wfId, resolve) {
+    const closeBtn = modal.querySelector(".share-workflow-close");
+    const cancelBtn = modal.querySelector("#shareWorkflowCancelBtn");
+    const submitBtn = modal.querySelector("#shareWorkflowSubmitBtn");
+    const backdrop = modal.querySelector(".share-workflow-backdrop");
+    const emailInput = modal.querySelector("#shareWorkflowEmail");
+    const noteTextarea = modal.querySelector("#shareWorkflowNote");
+    const noteCount = modal.querySelector("#shareWorkflowNoteCount");
+    const handleClose = () => {
+      this._close();
+      resolve(false);
+    };
+    closeBtn?.addEventListener("click", handleClose);
+    cancelBtn?.addEventListener("click", handleClose);
+    backdrop?.addEventListener("click", handleClose);
+    const handleKeydown = (e) => {
+      if (e.key === "Escape") {
+        handleClose();
+        document.removeEventListener("keydown", handleKeydown);
+      }
+    };
+    document.addEventListener("keydown", handleKeydown);
+    noteTextarea?.addEventListener("input", () => {
+      const count = noteTextarea.value.length;
+      if (noteCount) {
+        noteCount.textContent = count;
+      }
+    });
+    emailInput?.addEventListener("input", () => {
+      emailInput.classList.remove("error");
+      this._hideError(modal);
+    });
+    emailInput?.addEventListener("keydown", async (e) => {
+      if (e.key === "Enter") {
+        e.preventDefault();
+        await this._handleSubmit(modal, wfId, resolve);
+      }
+    });
+    submitBtn?.addEventListener("click", async () => {
+      await this._handleSubmit(modal, wfId, resolve);
+    });
+  }
+  static async _handleSubmit(modal, wfId, resolve) {
+    const t = (key, fallback) => window.I18n?.t(key) || fallback;
+    const emailInput = modal.querySelector("#shareWorkflowEmail");
+    const noteTextarea = modal.querySelector("#shareWorkflowNote");
+    const submitBtn = modal.querySelector("#shareWorkflowSubmitBtn");
+    const email = emailInput?.value?.trim();
+    const note = noteTextarea?.value?.trim() || "";
+    if (!email) {
+      this._showError(
+        modal,
+        t("workflow.share.emailRequired", "Please enter recipient email"),
+      );
+      emailInput?.classList.add("error");
+      emailInput?.focus();
+      return;
+    }
+    if (!this.isValidEmail(email)) {
+      this._showError(
+        modal,
+        t("workflow.share.emailInvalid", "Invalid email address"),
+      );
+      emailInput?.classList.add("error");
+      emailInput?.focus();
+      return;
+    }
+    submitBtn.disabled = true;
+    submitBtn.innerHTML = `
       <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" class="spin">
         <circle cx="12" cy="12" r="10" stroke-opacity="0.25"/>
         <path d="M12 2a10 10 0 0 1 10 10" stroke-linecap="round"/>
       </svg>
-      ${t("workflow.share.submitting","Sharing...")}
-    `;try{const result=await this._submitShare(wfId,email,note);this._close();const successMsg=result?.replaced?result.message||t("workflow.share.successResend","Resent workflow share invitation"):result?.message||t("workflow.share.success","Workflow share invitation sent successfully");window.showNotification?.(successMsg,"success");resolve(true)}catch(err){console.error("[ShareWorkflowModal] L\u1ED7i chia s\u1EBB:",err);const httpStatus=err.httpStatus;const errorCode=err.code;let errorMessage=err.message;if(httpStatus===422){if(errorCode==="INVALID_RECIPIENT"||errorCode==="SHARE_SELF"){errorMessage=t("workflow.share.errorShareSelf","You cannot share a workflow with yourself")}else if(errorCode==="EMAIL_INVALID"){errorMessage=t("workflow.share.errorEmailInvalid","Invalid email or user does not exist")}else if(errorCode==="SHARE_EXISTS"||errorCode==="ALREADY_SHARED"){errorMessage=t("workflow.share.errorAlreadyShared","This workflow has already been shared with this person")}else{errorMessage=err.message||t("workflow.share.errorValidation","Invalid data")}this._showError(modal,errorMessage);emailInput?.classList.add("error")}else if(httpStatus===403){if(errorCode==="FEATURE_DISABLED"){errorMessage=err.message||t("workflow.share.errorFeatureDisabled","Workflow sharing is not enabled for your plan.")}else if(errorCode==="EMAIL_NOT_VERIFIED"){errorMessage=err.message||t("workflow.share.errorEmailNotVerified","You need to verify your email before sharing a workflow.")}else{errorMessage=err.message||t("workflow.share.error","Failed to share workflow")}this._showError(modal,errorMessage)}else if(httpStatus===429){errorMessage=t("workflow.share.errorRateLimit","You have sent too many invitations. Please try again later.");this._showError(modal,errorMessage)}else{window.showNotification?.(err.message||t("workflow.share.error","Failed to share workflow"),"error")}submitBtn.disabled=false;submitBtn.innerHTML=`
+      ${t("workflow.share.submitting", "Sharing...")}
+    `;
+    try {
+      const result = await this._submitShare(wfId, email, note);
+      this._close();
+      const successMsg = result?.replaced
+        ? result.message ||
+          t("workflow.share.successResend", "Resent workflow share invitation")
+        : result?.message ||
+          t(
+            "workflow.share.success",
+            "Workflow share invitation sent successfully",
+          );
+      window.showNotification?.(successMsg, "success");
+      resolve(true);
+    } catch (err) {
+      console.error("[ShareWorkflowModal] L\u1ED7i chia s\u1EBB:", err);
+      const httpStatus = err.httpStatus;
+      const errorCode = err.code;
+      let errorMessage = err.message;
+      if (httpStatus === 422) {
+        if (errorCode === "INVALID_RECIPIENT" || errorCode === "SHARE_SELF") {
+          errorMessage = t(
+            "workflow.share.errorShareSelf",
+            "You cannot share a workflow with yourself",
+          );
+        } else if (errorCode === "EMAIL_INVALID") {
+          errorMessage = t(
+            "workflow.share.errorEmailInvalid",
+            "Invalid email or user does not exist",
+          );
+        } else if (
+          errorCode === "SHARE_EXISTS" ||
+          errorCode === "ALREADY_SHARED"
+        ) {
+          errorMessage = t(
+            "workflow.share.errorAlreadyShared",
+            "This workflow has already been shared with this person",
+          );
+        } else {
+          errorMessage =
+            err.message || t("workflow.share.errorValidation", "Invalid data");
+        }
+        this._showError(modal, errorMessage);
+        emailInput?.classList.add("error");
+      } else if (httpStatus === 403) {
+        if (errorCode === "FEATURE_DISABLED") {
+          errorMessage =
+            err.message ||
+            t(
+              "workflow.share.errorFeatureDisabled",
+              "Workflow sharing is not enabled for your plan.",
+            );
+        } else if (errorCode === "EMAIL_NOT_VERIFIED") {
+          errorMessage =
+            err.message ||
+            t(
+              "workflow.share.errorEmailNotVerified",
+              "You need to verify your email before sharing a workflow.",
+            );
+        } else {
+          errorMessage =
+            err.message ||
+            t("workflow.share.error", "Failed to share workflow");
+        }
+        this._showError(modal, errorMessage);
+      } else if (httpStatus === 429) {
+        errorMessage = t(
+          "workflow.share.errorRateLimit",
+          "You have sent too many invitations. Please try again later.",
+        );
+        this._showError(modal, errorMessage);
+      } else {
+        window.showNotification?.(
+          err.message || t("workflow.share.error", "Failed to share workflow"),
+          "error",
+        );
+      }
+      submitBtn.disabled = false;
+      submitBtn.innerHTML = `
         <svg width="16" height="16" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2">
           <circle cx="18" cy="5" r="3"/>
           <circle cx="6" cy="12" r="3"/>
@@ -312,5 +505,68 @@ var __defProp=Object.defineProperty;var __defNormalProp=(obj,key,value)=>key in 
           <line x1="8.59" y1="13.51" x2="15.42" y2="17.49"/>
           <line x1="15.41" y1="6.51" x2="8.59" y2="10.49"/>
         </svg>
-        ${t("workflow.share.submit","Share")}
-      `}}static async _submitShare(wfId,email,note){return new Promise((resolve,reject)=>{chrome.runtime.sendMessage({action:"apiRequest",method:"POST",endpoint:`workflows/${wfId}/shares`,token:window.authManager?.getToken(),data:{recipient_email:email,note:note||null}},response=>{if(chrome.runtime.lastError){reject(new Error(chrome.runtime.lastError.message||"Connection error"));return}if(!response){reject(new Error("Kh\xF4ng nh\u1EADn \u0111\u01B0\u1EE3c ph\u1EA3n h\u1ED3i t\u1EEB server"));return}if(response.success){resolve({data:response.data,replaced:response.replaced||false,replacedPreviousStatus:response.replaced_previous_status||null,message:response.message||null})}else{const error=new Error(response.error?.message||"Failed to share workflow");error.code=response.error?.code;error.httpStatus=response.httpStatus;reject(error)}})})}static _showError(modal,message){const errorEl=modal.querySelector("#shareWorkflowError");const textEl=modal.querySelector("#shareWorkflowErrorText");if(errorEl&&textEl){textEl.textContent=message;errorEl.classList.remove("hidden")}}static _hideError(modal){const errorEl=modal.querySelector("#shareWorkflowError");if(errorEl){errorEl.classList.add("hidden")}}}__publicField(ShareWorkflowModal,"_instance",null);window.ShareWorkflowModal=ShareWorkflowModal;
+        ${t("workflow.share.submit", "Share")}
+      `;
+    }
+  }
+  static async _submitShare(wfId, email, note) {
+    return new Promise((resolve, reject) => {
+      chrome.runtime.sendMessage(
+        {
+          action: "apiRequest",
+          method: "POST",
+          endpoint: `workflows/${wfId}/shares`,
+          token: window.authManager?.getToken(),
+          data: { recipient_email: email, note: note || null },
+        },
+        (response) => {
+          if (chrome.runtime.lastError) {
+            reject(
+              new Error(chrome.runtime.lastError.message || "Connection error"),
+            );
+            return;
+          }
+          if (!response) {
+            reject(
+              new Error(
+                "Kh\xF4ng nh\u1EADn \u0111\u01B0\u1EE3c ph\u1EA3n h\u1ED3i t\u1EEB server",
+              ),
+            );
+            return;
+          }
+          if (response.success) {
+            resolve({
+              data: response.data,
+              replaced: response.replaced || false,
+              replacedPreviousStatus: response.replaced_previous_status || null,
+              message: response.message || null,
+            });
+          } else {
+            const error = new Error(
+              response.error?.message || "Failed to share workflow",
+            );
+            error.code = response.error?.code;
+            error.httpStatus = response.httpStatus;
+            reject(error);
+          }
+        },
+      );
+    });
+  }
+  static _showError(modal, message) {
+    const errorEl = modal.querySelector("#shareWorkflowError");
+    const textEl = modal.querySelector("#shareWorkflowErrorText");
+    if (errorEl && textEl) {
+      textEl.textContent = message;
+      errorEl.classList.remove("hidden");
+    }
+  }
+  static _hideError(modal) {
+    const errorEl = modal.querySelector("#shareWorkflowError");
+    if (errorEl) {
+      errorEl.classList.add("hidden");
+    }
+  }
+}
+__publicField(ShareWorkflowModal, "_instance", null);
+window.ShareWorkflowModal = ShareWorkflowModal;

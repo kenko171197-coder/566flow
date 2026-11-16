@@ -1,3 +1,674 @@
-class MotionFlowQueueRequest{static errorCode(...values){for(const value of values.flat(Infinity)){if(typeof value!=="string")continue;const text=value.replace(/^(?:Google Flow:\s*)?SUBMIT_NOT_TRIGGERED:\s*/,"");const code=/^[A-Za-z][A-Za-z0-9_:-]{0,99}$/.test(text)?text:text.match(/^(?:Google Flow:\s*)?([A-Z][A-Z0-9_]{1,99}):\s+\S/)?.[1];if(!code||code==="MOTION_FLOW_GENERATION_FAILED")continue;return/^MODEL_OPTION_(?:NOT_FOUND|NOT_APPLIED)$/.test(code)?"MOTION_FLOW_MODEL_UNAVAILABLE":code}return"MOTION_FLOW_GENERATION_FAILED"}static failureCode(result,observedCode=null){const failures=Array.isArray(result?.errorDetails)?result.errorDetails:[];const receipt=result?.attempts?.at?.(-1)?.correlationReceipt;const children=Array.isArray(receipt?.children)?receipt.children:[];const webCodes=receipt?.strong===true?[...children.filter(child=>child.status==="failed").flatMap(child=>Array.isArray(child.errorCodes)?child.errorCodes:[]),...!children.length&&Array.isArray(receipt.errorCodes)?receipt.errorCodes:[]]:[];return this.errorCode(failures.flatMap(failure=>Array.isArray(failure?.providerErrorCodes)?failure.providerErrorCodes:[]),webCodes,result?.failedPrompts?.[0]?.errorCode,failures.map(failure=>failure?.code),observedCode,result?.failedPrompts?.[0]?.error)}static confirmedRetry(item,submit,receipt,itemId=item?.id){const proof=item?._motionConfirmedRetry;if(!receipt||submit?.state!=="ready"||receipt.flow_mode!=="api"||!proof||proof.terminal!==true||proof.itemId!==itemId||item?.id!==itemId||proof.attemptId!==item.attemptId||proof.retryCount!==item.retrySubmitCount||!Number.isSafeInteger(proof.retryCount)||proof.retryCount<1||!Array.isArray(proof.previousOperationIds)||proof.previousOperationIds.length!==1||proof.previousOperationIds[0]!==receipt.provider_operation_id||!/^[A-Za-z][A-Za-z0-9_:-]{0,99}$/.test(proof.code||"")||Object.entries(receipt).some(([key,value])=>submit[key]!==value))return null;return{previousOperationId:receipt.provider_operation_id,code:proof.code}}static scopeError(code,{frameId,stage,runId=null,sourceRevision=null,inputRevision=null,profileRevision=null,current=null,providerCode=null,onStage=()=>{}}={}){const observedProviderCode=current?.data_json?.frames?.[frameId]?.stages?.monitor?.error_code??providerCode;const diagnostic={phase:"flow_scope",operation:stage,eventState:"failed",code,conflictReason:stage,sourceRevision,inputRevision,revision:profileRevision,serverRevision:current?.data_json?.frames?.[frameId]?.stages?.submit?.profile_revision??null,submitState:current?.data_json?.frames?.[frameId]?.stages?.submit?.state??null,monitorState:current?.data_json?.frames?.[frameId]?.stages?.monitor?.state??null,providerCode:/^[A-Za-z][A-Za-z0-9_:-]{0,99}$/.test(observedProviderCode||"")?observedProviderCode:null};try{console.warn("[MotionFlowScope]",JSON.stringify({runId,frameId,...diagnostic,currentSourceRevision:current?.data_json?.source_revision??null,currentInputRevision:current?.data_json?.frames?.[frameId]?.input_revision??null,submitState:current?.data_json?.frames?.[frameId]?.stages?.submit?.state??null,projectMode:current?.data_json?.flow_run_mode??null}));onStage({frameId,stage:"flow",apiDiagnostic:diagnostic})}catch(_){}return Object.assign(new Error(code),{code,apiDiagnostic:diagnostic})}static logFailure({frameId,frame,sourceRevision,mode,accepted,code,result}){const token=value=>typeof value==="string"&&/^[A-Za-z0-9][A-Za-z0-9_:-]{0,99}$/.test(value)?value:null;const failure=result?.errorDetails?.[0];const failedPrompt=result?.failedPrompts?.[0];console.warn("[MotionFlowFailure]",JSON.stringify({at:Date.now(),frameId:token(frameId),frameRunId:token(frame?.run_id),sourceRevision,inputRevision:frame?.input_revision,jobId:token(result?.jobId),mode,apiAccepted:accepted===true,checkpointStage:accepted?"monitor":"submit",code:token(code),promptErrorCode:token(failedPrompt?.errorCode),detailCode:token(failure?.code),hasErrorText:typeof failedPrompt?.error==="string"||typeof failure?.code==="string",errorType:token(failedPrompt?.errorType),apiStage:token(failure?.apiStage),httpStatus:Number.isInteger(failure?.httpStatus)?failure.httpStatus:null,grpcCode:Number.isInteger(failure?.grpcCode)?failure.grpcCode:null,providerErrorCodes:(Array.isArray(failure?.providerErrorCodes)?failure.providerErrorCodes:[]).map(token).filter(Boolean).slice(0,8),failed:result?.failed,resultCount:result?.resultTileIds?.length||0,durationMs:Number.isFinite(result?.durationMs)?result.durationMs:null,attempts:(Array.isArray(result?.attempts)?result.attempts:[]).slice(0,4).map(attempt=>{const receipt=attempt?.correlationReceipt;return{attemptId:token(attempt?.attemptId),correlationState:token(attempt?.correlationState),strong:receipt?.strong===true,operationCount:receipt?.operationIds?.length||0,mediaCount:receipt?.mediaIds?.length||0,children:(Array.isArray(receipt?.children)?receipt.children:[]).slice(0,4).map(child=>({status:token(child?.status),errorCodes:(Array.isArray(child?.errorCodes)?child.errorCodes:[]).map(token).filter(Boolean).slice(0,8)}))}})}))}static async publishHistory(request,result,toolProjectId,assertScope=()=>{}){if(!window.generationHistory||!result)return;await assertScope();const refIds=result.refFileIdsUsed||request.refFileIds||[];const previews={};const safeUrl=value=>typeof value==="string"&&value.length<=4096&&/^https:\/\//i.test(value)?value:null;const add=(id,entry)=>{const value=typeof entry==="string"?{thumbnail:entry}:entry||{};const thumbnail=safeUrl(value.thumbnail||value.thumbnailUrl||value.thumbnail_url);if(!thumbnail)return;previews[id]=value.type==="video"?{thumbnail,type:"video",video_url:safeUrl(value.video_url)}:thumbnail};for(const id of refIds)add(id,request.refThumbnails?.[id]);const bridge=window.MessageBridge;const missing=refIds.filter(id=>!previews[id]||request.refThumbnails?.[id]?.type==="video"&&!previews[id]?.video_url);if(missing.length&&bridge?.getThumbnailsByIds){try{const target=await bridge.getProjectTargetContext(request.projectId);if(target?.projectId===request.projectId){const result2=await bridge.getThumbnailsByIds(missing,{deep:false,activateForMetadata:false,expectedFlowTarget:target,fileNamesById:request.refFileNames||{},ownerRecords:missing.map(id=>({resultId:id,mediaUuid:request.refThumbnails?.[id]?.media_uuid||null,mediaType:request.refThumbnails?.[id]?.type||null}))});const current=await bridge.getTargetContext(target);await assertScope();if(["tabId","projectId","driverKey","origin"].every(key=>current?.[key]===target[key])){for(const id of missing){const entry=result2?.results?.[id];if(entry)add(id,{...request.refThumbnails?.[id],...entry,...request.refThumbnails?.[id]?.type==="video"?{type:"video"}:{}})}}}}catch(error){console.warn("[Motion] History ref preview lookup failed",error?.code||error?.message)}}await assertScope();const ids=Array.isArray(result.resultTileIds)?result.resultTileIds.filter(Boolean):[];const failures=Array.isArray(result.failedPrompts)?result.failedPrompts:[];const status=result.stopped&&!ids.length?"stopped":ids.length?result.failed||result.partial?"partial":"success":"failed";await window.generationHistory.saveRecord({prompt:request.prompts?.[0]||"",media_type:"video",provider:"flow",source:"motion_studio",source_id:toolProjectId,project_id:request.projectId,model:request.settings.model,ratio:request.settings.ratio,prompt_count:1,quantity:1,ref_file_ids:refIds.join(", "),ref_thumbnails:previews,result_file_ids:ids.join(", "),result_flow_file_ids:result.apiResultTileIds||[],result_thumbnails:Object.values(result.resultThumbnails||{}),result_file_names:result.resultFileNames||{},result_provider_urls:result.resultProviderUrls||{},flow_api_versions:result.flowApiVersions||[],historyRoute:result.historyRoute||null,error_details:result.errorDetails||[],error_reason:failures[0]?.error||result.recoveryRequired||result.reason||null,status,stop_origin:status==="stopped"?result.stopOrigin||null:null,duration_ms:Number.isFinite(result.durationMs)?result.durationMs:null,auto_download:false});await window.generationHistory._flushBuffer()}static async resolveVoice(slug){if(!slug)return null;const registry=window.VoiceRegistry;if(!registry)return null;let voice=registry.findBySlug?.(slug);if(voice?.search_value)return voice;const[scraped,base]=await Promise.all([registry.getScrapedList?.().catch(()=>null),registry.getBaseCatalog?.("flow").catch(()=>null)]);voice=[...scraped||[],...base||[]].find(item=>item?.slug===slug&&item?.search_value);return voice||null}static receipt(result,mode,projectId){if(result?.genMode!==mode||result?.stopped||result?.failed||result?.resultTileIds?.length!==1||result?.attempts?.length!==1){throw new Error("MOTION_FLOW_RESULT_UNVERIFIED")}const id=result.resultTileIds[0];const attempt=result.attempts[0];if(mode==="api"){const data=result.resultProviderUrls?.[id]||result.resultThumbnails?.[id];const operationId=data?.operation_uuid||attempt.flowOperationId;if(!operationId||!data?.media_uuid||!["v1","v2"].includes(data.api_driver)||!data.protocol_revision||data.api_driver==="v2"&&!data.protocol_fingerprint||data.project_id&&data.project_id!==projectId)throw new Error("MOTION_FLOW_RESULT_UNVERIFIED");return{provider_operation_id:operationId,provider_media_id:data.media_uuid,flow_mode:mode,api_driver:data.api_driver,protocol_revision:data.protocol_revision,...data.protocol_fingerprint?{protocol_fingerprint:data.protocol_fingerprint}:{}}}const correlation=attempt.correlationReceipt;const children=correlation?.children?.filter(child=>child.mediaId===id&&child.operationId&&child.status==="completed")||[];if(mode!=="web"||correlation?.strong!==true||children.length!==1){throw new Error("MOTION_FLOW_RESULT_UNVERIFIED")}return{provider_operation_id:children[0].operationId,provider_media_id:id,flow_mode:mode}}static build({project,profile,frameId,uploadReceipt,frameIndex,frameCount,resolvedVoice=null,continuity=null}){const data=project?.data_json;const frame=data?.frames?.[frameId];const mode=data?.flow_run_mode;if(!frame||!["web","api"].includes(mode)||!uploadReceipt?.mediaId||!["web","api"].includes(uploadReceipt.mode)||uploadReceipt.projectId!==project.flow_project_id){throw new Error("MOTION_FLOW_RECEIPT_INVALID")}if(!/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(frame.run_id||"")){throw new Error("MOTION_FRAME_RUN_INVALID")}if(!Number.isInteger(frameIndex)||!Number.isInteger(frameCount)||frameIndex<1||frameIndex>frameCount)throw new Error("MOTION_FRAME_INDEX_INVALID");const refs=data.references||{};const characters=MotionCharacterReferences.characters(data);const backgrounds=refs.mode==="character_background"?Array.isArray(refs.background)?refs.background:[]:[];const characterCount=MotionCharacterReferences.assert(data,profile);if(continuity||data.preferences?.continuity_enabled===true)MotionContinuity.assertCurrent(project,frameId,continuity?.binding);const images=[...characters,...backgrounds,...continuity?[continuity.reference]:[]];if(images.some(ref=>!ref.fileId||ref.project_id!==project.flow_project_id)){throw new Error("MOTION_REF_PROJECT_MISMATCH")}const ids=images.map(ref=>ref.fileId);if(new Set([...ids,uploadReceipt.mediaId]).size!==ids.length+1){throw new Error("MOTION_DUPLICATE_REFERENCE")}const preferences=data.preferences||{};const voiceSlug=preferences.voice_enabled===true?String(preferences.voice_slug||""):"";const voice=voiceSlug?resolvedVoice?.slug===voiceSlug?resolvedVoice:window.VoiceRegistry?.findBySlug?.(voiceSlug):null;if(voiceSlug&&!voice?.search_value)throw new Error("MOTION_VOICE_UNAVAILABLE");if(voice&&mode!=="web")throw new Error("MOTION_VOICE_REQUIRES_WEB");const transcript=frame.transcript||{};if((preferences.voice_enabled||preferences.subtitle_enabled)&&!frame.transcript){throw new Error("MOTION_TRANSCRIPT_REQUIRED")}if(preferences.translate_enabled===true&&transcript.has_speech===true&&(transcript.translation_stale===true||!String(transcript.translated_text||"").trim())){throw new Error("MOTION_TRANSLATION_REQUIRED")}const speech=preferences.translate_enabled===true?transcript.translated_text||"":transcript.text||"";const voiceMode=preferences.voice_mode||"character";const delivery=transcript.has_speech===true&&(preferences.voice_enabled||preferences.subtitle_enabled)?MotionPromptComposer.delivery(profile,voiceMode):null;const consumesTimeline=[preferences.voice_enabled?delivery?.voice:null,preferences.subtitle_enabled?delivery?.subtitle:null].some(template=>String(template||"").includes("{speech_timeline}"));const speechTimeline=!consumesTimeline||transcript.speech_timeline==null?"UNAVAILABLE":MotionTranscriptContract.formatTimeline(transcript,{duration:Number(frame.end)-Number(frame.start),translate:preferences.translate_enabled===true});const values={speech_timeline:speechTimeline,character_1_ref:"image 1",character_2_ref:characterCount===2?"image 2":"",character_refs:characters.map((_,i)=>`image ${i+1}`).join(", "),background_refs:backgrounds.map((_,i)=>`image ${characters.length+i+1}`).join(", "),continuity_ref:continuity?`image ${images.length}`:"",transcript:transcript.text||"",translated_text:speech,target_language:preferences.target_language||"",voice_slug:preferences.voice_slug||"",voice_description:preferences.voice_description||"",ratio:preferences.ratio||"",clip_duration:Number(frame.end)-Number(frame.start),frame_index:frameIndex,frame_count:frameCount,audio_manifest:"",source_motion_summary:""};if(!Number.isFinite(values.clip_duration)||values.clip_duration<=0||!values.ratio||!profile?.settings?.flow_model)throw new Error("MOTION_FLOW_SETTINGS_INVALID");console.info("[MotionSpeechTiming]",JSON.stringify({frameId,profileRevision:profile.revision,available:transcript.speech_timeline!=null,segments:transcript.speech_timeline?.length||0,duration:values.clip_duration,voice:preferences.voice_enabled===true,translated:preferences.translate_enabled===true,voiceMode,promptConsumesTimeline:consumesTimeline}));let prompt=MotionPromptComposer.motion(profile,values,{characterCount,voice:preferences.voice_enabled===true,subtitle:preferences.subtitle_enabled===true,voiceMode,hasSpeech:transcript.has_speech===true,hasBackgroundRefs:backgrounds.length>0,continuity:!!continuity}).text;if(preferences.translate_enabled!==true&&transcript.has_speech===true&&(preferences.voice_enabled===true||preferences.subtitle_enabled===true)){prompt+="\n\nKeep the spoken dialogue and subtitles in the original spoken language. Do not translate or paraphrase the supplied dialogue."}const customPrompt=typeof preferences.custom_prompt==="string"?preferences.custom_prompt.trim():"";if(customPrompt)prompt+=`
+class MotionFlowQueueRequest {
+  static errorCode(...values) {
+    for (const value of values.flat(Infinity)) {
+      if (typeof value !== "string") continue;
+      const text = value.replace(
+        /^(?:Google Flow:\s*)?SUBMIT_NOT_TRIGGERED:\s*/,
+        "",
+      );
+      const code = /^[A-Za-z][A-Za-z0-9_:-]{0,99}$/.test(text)
+        ? text
+        : text.match(/^(?:Google Flow:\s*)?([A-Z][A-Z0-9_]{1,99}):\s+\S/)?.[1];
+      if (!code || code === "MOTION_FLOW_GENERATION_FAILED") continue;
+      return /^MODEL_OPTION_(?:NOT_FOUND|NOT_APPLIED)$/.test(code)
+        ? "MOTION_FLOW_MODEL_UNAVAILABLE"
+        : code;
+    }
+    return "MOTION_FLOW_GENERATION_FAILED";
+  }
+  static failureCode(result, observedCode = null) {
+    const failures = Array.isArray(result?.errorDetails)
+      ? result.errorDetails
+      : [];
+    const receipt = result?.attempts?.at?.(-1)?.correlationReceipt;
+    const children = Array.isArray(receipt?.children) ? receipt.children : [];
+    const webCodes =
+      receipt?.strong === true
+        ? [
+            ...children
+              .filter((child) => child.status === "failed")
+              .flatMap((child) =>
+                Array.isArray(child.errorCodes) ? child.errorCodes : [],
+              ),
+            ...(!children.length && Array.isArray(receipt.errorCodes)
+              ? receipt.errorCodes
+              : []),
+          ]
+        : [];
+    return this.errorCode(
+      failures.flatMap((failure) =>
+        Array.isArray(failure?.providerErrorCodes)
+          ? failure.providerErrorCodes
+          : [],
+      ),
+      webCodes,
+      result?.failedPrompts?.[0]?.errorCode,
+      failures.map((failure) => failure?.code),
+      observedCode,
+      result?.failedPrompts?.[0]?.error,
+    );
+  }
+  static confirmedRetry(item, submit, receipt, itemId = item?.id) {
+    const proof = item?._motionConfirmedRetry;
+    if (
+      !receipt ||
+      submit?.state !== "ready" ||
+      receipt.flow_mode !== "api" ||
+      !proof ||
+      proof.terminal !== true ||
+      proof.itemId !== itemId ||
+      item?.id !== itemId ||
+      proof.attemptId !== item.attemptId ||
+      proof.retryCount !== item.retrySubmitCount ||
+      !Number.isSafeInteger(proof.retryCount) ||
+      proof.retryCount < 1 ||
+      !Array.isArray(proof.previousOperationIds) ||
+      proof.previousOperationIds.length !== 1 ||
+      proof.previousOperationIds[0] !== receipt.provider_operation_id ||
+      !/^[A-Za-z][A-Za-z0-9_:-]{0,99}$/.test(proof.code || "") ||
+      Object.entries(receipt).some(([key, value]) => submit[key] !== value)
+    )
+      return null;
+    return {
+      previousOperationId: receipt.provider_operation_id,
+      code: proof.code,
+    };
+  }
+  static scopeError(
+    code,
+    {
+      frameId,
+      stage,
+      runId = null,
+      sourceRevision = null,
+      inputRevision = null,
+      profileRevision = null,
+      current = null,
+      providerCode = null,
+      onStage = () => {},
+    } = {},
+  ) {
+    const observedProviderCode =
+      current?.data_json?.frames?.[frameId]?.stages?.monitor?.error_code ??
+      providerCode;
+    const diagnostic = {
+      phase: "flow_scope",
+      operation: stage,
+      eventState: "failed",
+      code,
+      conflictReason: stage,
+      sourceRevision,
+      inputRevision,
+      revision: profileRevision,
+      serverRevision:
+        current?.data_json?.frames?.[frameId]?.stages?.submit
+          ?.profile_revision ?? null,
+      submitState:
+        current?.data_json?.frames?.[frameId]?.stages?.submit?.state ?? null,
+      monitorState:
+        current?.data_json?.frames?.[frameId]?.stages?.monitor?.state ?? null,
+      providerCode: /^[A-Za-z][A-Za-z0-9_:-]{0,99}$/.test(
+        observedProviderCode || "",
+      )
+        ? observedProviderCode
+        : null,
+    };
+    try {
+      console.warn(
+        "[MotionFlowScope]",
+        JSON.stringify({
+          runId,
+          frameId,
+          ...diagnostic,
+          currentSourceRevision: current?.data_json?.source_revision ?? null,
+          currentInputRevision:
+            current?.data_json?.frames?.[frameId]?.input_revision ?? null,
+          submitState:
+            current?.data_json?.frames?.[frameId]?.stages?.submit?.state ??
+            null,
+          projectMode: current?.data_json?.flow_run_mode ?? null,
+        }),
+      );
+      onStage({ frameId, stage: "flow", apiDiagnostic: diagnostic });
+    } catch (_) {}
+    return Object.assign(new Error(code), { code, apiDiagnostic: diagnostic });
+  }
+  static logFailure({
+    frameId,
+    frame,
+    sourceRevision,
+    mode,
+    accepted,
+    code,
+    result,
+  }) {
+    const token = (value) =>
+      typeof value === "string" &&
+      /^[A-Za-z0-9][A-Za-z0-9_:-]{0,99}$/.test(value)
+        ? value
+        : null;
+    const failure = result?.errorDetails?.[0];
+    const failedPrompt = result?.failedPrompts?.[0];
+    console.warn(
+      "[MotionFlowFailure]",
+      JSON.stringify({
+        at: Date.now(),
+        frameId: token(frameId),
+        frameRunId: token(frame?.run_id),
+        sourceRevision,
+        inputRevision: frame?.input_revision,
+        jobId: token(result?.jobId),
+        mode,
+        apiAccepted: accepted === true,
+        checkpointStage: accepted ? "monitor" : "submit",
+        code: token(code),
+        promptErrorCode: token(failedPrompt?.errorCode),
+        detailCode: token(failure?.code),
+        hasErrorText:
+          typeof failedPrompt?.error === "string" ||
+          typeof failure?.code === "string",
+        errorType: token(failedPrompt?.errorType),
+        apiStage: token(failure?.apiStage),
+        httpStatus: Number.isInteger(failure?.httpStatus)
+          ? failure.httpStatus
+          : null,
+        grpcCode: Number.isInteger(failure?.grpcCode) ? failure.grpcCode : null,
+        providerErrorCodes: (Array.isArray(failure?.providerErrorCodes)
+          ? failure.providerErrorCodes
+          : []
+        )
+          .map(token)
+          .filter(Boolean)
+          .slice(0, 8),
+        failed: result?.failed,
+        resultCount: result?.resultTileIds?.length || 0,
+        durationMs: Number.isFinite(result?.durationMs)
+          ? result.durationMs
+          : null,
+        attempts: (Array.isArray(result?.attempts) ? result.attempts : [])
+          .slice(0, 4)
+          .map((attempt) => {
+            const receipt = attempt?.correlationReceipt;
+            return {
+              attemptId: token(attempt?.attemptId),
+              correlationState: token(attempt?.correlationState),
+              strong: receipt?.strong === true,
+              operationCount: receipt?.operationIds?.length || 0,
+              mediaCount: receipt?.mediaIds?.length || 0,
+              children: (Array.isArray(receipt?.children)
+                ? receipt.children
+                : []
+              )
+                .slice(0, 4)
+                .map((child) => ({
+                  status: token(child?.status),
+                  errorCodes: (Array.isArray(child?.errorCodes)
+                    ? child.errorCodes
+                    : []
+                  )
+                    .map(token)
+                    .filter(Boolean)
+                    .slice(0, 8),
+                })),
+            };
+          }),
+      }),
+    );
+  }
+  static async publishHistory(
+    request,
+    result,
+    toolProjectId,
+    assertScope = () => {},
+  ) {
+    if (!window.generationHistory || !result) return;
+    await assertScope();
+    const refIds = result.refFileIdsUsed || request.refFileIds || [];
+    const previews = {};
+    const safeUrl = (value) =>
+      typeof value === "string" &&
+      value.length <= 4096 &&
+      /^https:\/\//i.test(value)
+        ? value
+        : null;
+    const add = (id, entry) => {
+      const value =
+        typeof entry === "string" ? { thumbnail: entry } : entry || {};
+      const thumbnail = safeUrl(
+        value.thumbnail || value.thumbnailUrl || value.thumbnail_url,
+      );
+      if (!thumbnail) return;
+      previews[id] =
+        value.type === "video"
+          ? { thumbnail, type: "video", video_url: safeUrl(value.video_url) }
+          : thumbnail;
+    };
+    for (const id of refIds) add(id, request.refThumbnails?.[id]);
+    const bridge = window.MessageBridge;
+    const missing = refIds.filter(
+      (id) =>
+        !previews[id] ||
+        (request.refThumbnails?.[id]?.type === "video" &&
+          !previews[id]?.video_url),
+    );
+    if (missing.length && bridge?.getThumbnailsByIds) {
+      try {
+        const target = await bridge.getProjectTargetContext(request.projectId);
+        if (target?.projectId === request.projectId) {
+          const result2 = await bridge.getThumbnailsByIds(missing, {
+            deep: false,
+            activateForMetadata: false,
+            expectedFlowTarget: target,
+            fileNamesById: request.refFileNames || {},
+            ownerRecords: missing.map((id) => ({
+              resultId: id,
+              mediaUuid: request.refThumbnails?.[id]?.media_uuid || null,
+              mediaType: request.refThumbnails?.[id]?.type || null,
+            })),
+          });
+          const current = await bridge.getTargetContext(target);
+          await assertScope();
+          if (
+            ["tabId", "projectId", "driverKey", "origin"].every(
+              (key) => current?.[key] === target[key],
+            )
+          ) {
+            for (const id of missing) {
+              const entry = result2?.results?.[id];
+              if (entry)
+                add(id, {
+                  ...request.refThumbnails?.[id],
+                  ...entry,
+                  ...(request.refThumbnails?.[id]?.type === "video"
+                    ? { type: "video" }
+                    : {}),
+                });
+            }
+          }
+        }
+      } catch (error) {
+        console.warn(
+          "[Motion] History ref preview lookup failed",
+          error?.code || error?.message,
+        );
+      }
+    }
+    await assertScope();
+    const ids = Array.isArray(result.resultTileIds)
+      ? result.resultTileIds.filter(Boolean)
+      : [];
+    const failures = Array.isArray(result.failedPrompts)
+      ? result.failedPrompts
+      : [];
+    const status =
+      result.stopped && !ids.length
+        ? "stopped"
+        : ids.length
+          ? result.failed || result.partial
+            ? "partial"
+            : "success"
+          : "failed";
+    await window.generationHistory.saveRecord({
+      prompt: request.prompts?.[0] || "",
+      media_type: "video",
+      provider: "flow",
+      source: "motion_studio",
+      source_id: toolProjectId,
+      project_id: request.projectId,
+      model: request.settings.model,
+      ratio: request.settings.ratio,
+      prompt_count: 1,
+      quantity: 1,
+      ref_file_ids: refIds.join(", "),
+      ref_thumbnails: previews,
+      result_file_ids: ids.join(", "),
+      result_flow_file_ids: result.apiResultTileIds || [],
+      result_thumbnails: Object.values(result.resultThumbnails || {}),
+      result_file_names: result.resultFileNames || {},
+      result_provider_urls: result.resultProviderUrls || {},
+      flow_api_versions: result.flowApiVersions || [],
+      historyRoute: result.historyRoute || null,
+      error_details: result.errorDetails || [],
+      error_reason:
+        failures[0]?.error || result.recoveryRequired || result.reason || null,
+      status,
+      stop_origin: status === "stopped" ? result.stopOrigin || null : null,
+      duration_ms: Number.isFinite(result.durationMs)
+        ? result.durationMs
+        : null,
+      auto_download: false,
+    });
+    await window.generationHistory._flushBuffer();
+  }
+  static async resolveVoice(slug) {
+    if (!slug) return null;
+    const registry = window.VoiceRegistry;
+    if (!registry) return null;
+    let voice = registry.findBySlug?.(slug);
+    if (voice?.search_value) return voice;
+    const [scraped, base] = await Promise.all([
+      registry.getScrapedList?.().catch(() => null),
+      registry.getBaseCatalog?.("flow").catch(() => null),
+    ]);
+    voice = [...(scraped || []), ...(base || [])].find(
+      (item) => item?.slug === slug && item?.search_value,
+    );
+    return voice || null;
+  }
+  static receipt(result, mode, projectId) {
+    if (
+      result?.genMode !== mode ||
+      result?.stopped ||
+      result?.failed ||
+      result?.resultTileIds?.length !== 1 ||
+      result?.attempts?.length !== 1
+    ) {
+      throw new Error("MOTION_FLOW_RESULT_UNVERIFIED");
+    }
+    const id = result.resultTileIds[0];
+    const attempt = result.attempts[0];
+    if (mode === "api") {
+      const data =
+        result.resultProviderUrls?.[id] || result.resultThumbnails?.[id];
+      const operationId = data?.operation_uuid || attempt.flowOperationId;
+      if (
+        !operationId ||
+        !data?.media_uuid ||
+        !["v1", "v2"].includes(data.api_driver) ||
+        !data.protocol_revision ||
+        (data.api_driver === "v2" && !data.protocol_fingerprint) ||
+        (data.project_id && data.project_id !== projectId)
+      )
+        throw new Error("MOTION_FLOW_RESULT_UNVERIFIED");
+      return {
+        provider_operation_id: operationId,
+        provider_media_id: data.media_uuid,
+        flow_mode: mode,
+        api_driver: data.api_driver,
+        protocol_revision: data.protocol_revision,
+        ...(data.protocol_fingerprint
+          ? { protocol_fingerprint: data.protocol_fingerprint }
+          : {}),
+      };
+    }
+    const correlation = attempt.correlationReceipt;
+    const children =
+      correlation?.children?.filter(
+        (child) =>
+          child.mediaId === id &&
+          child.operationId &&
+          child.status === "completed",
+      ) || [];
+    if (
+      mode !== "web" ||
+      correlation?.strong !== true ||
+      children.length !== 1
+    ) {
+      throw new Error("MOTION_FLOW_RESULT_UNVERIFIED");
+    }
+    return {
+      provider_operation_id: children[0].operationId,
+      provider_media_id: id,
+      flow_mode: mode,
+    };
+  }
+  static build({
+    project,
+    profile,
+    frameId,
+    uploadReceipt,
+    frameIndex,
+    frameCount,
+    resolvedVoice = null,
+    continuity = null,
+  }) {
+    const data = project?.data_json;
+    const frame = data?.frames?.[frameId];
+    const mode = data?.flow_run_mode;
+    if (
+      !frame ||
+      !["web", "api"].includes(mode) ||
+      !uploadReceipt?.mediaId ||
+      !["web", "api"].includes(uploadReceipt.mode) ||
+      uploadReceipt.projectId !== project.flow_project_id
+    ) {
+      throw new Error("MOTION_FLOW_RECEIPT_INVALID");
+    }
+    if (
+      !/^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i.test(
+        frame.run_id || "",
+      )
+    ) {
+      throw new Error("MOTION_FRAME_RUN_INVALID");
+    }
+    if (
+      !Number.isInteger(frameIndex) ||
+      !Number.isInteger(frameCount) ||
+      frameIndex < 1 ||
+      frameIndex > frameCount
+    )
+      throw new Error("MOTION_FRAME_INDEX_INVALID");
+    const refs = data.references || {};
+    const characters = MotionCharacterReferences.characters(data);
+    const backgrounds =
+      refs.mode === "character_background"
+        ? Array.isArray(refs.background)
+          ? refs.background
+          : []
+        : [];
+    const characterCount = MotionCharacterReferences.assert(data, profile);
+    if (continuity || data.preferences?.continuity_enabled === true)
+      MotionContinuity.assertCurrent(project, frameId, continuity?.binding);
+    const images = [
+      ...characters,
+      ...backgrounds,
+      ...(continuity ? [continuity.reference] : []),
+    ];
+    if (
+      images.some(
+        (ref) => !ref.fileId || ref.project_id !== project.flow_project_id,
+      )
+    ) {
+      throw new Error("MOTION_REF_PROJECT_MISMATCH");
+    }
+    const ids = images.map((ref) => ref.fileId);
+    if (new Set([...ids, uploadReceipt.mediaId]).size !== ids.length + 1) {
+      throw new Error("MOTION_DUPLICATE_REFERENCE");
+    }
+    const preferences = data.preferences || {};
+    const voiceSlug =
+      preferences.voice_enabled === true
+        ? String(preferences.voice_slug || "")
+        : "";
+    const voice = voiceSlug
+      ? resolvedVoice?.slug === voiceSlug
+        ? resolvedVoice
+        : window.VoiceRegistry?.findBySlug?.(voiceSlug)
+      : null;
+    if (voiceSlug && !voice?.search_value)
+      throw new Error("MOTION_VOICE_UNAVAILABLE");
+    if (voice && mode !== "web") throw new Error("MOTION_VOICE_REQUIRES_WEB");
+    const transcript = frame.transcript || {};
+    if (
+      (preferences.voice_enabled || preferences.subtitle_enabled) &&
+      !frame.transcript
+    ) {
+      throw new Error("MOTION_TRANSCRIPT_REQUIRED");
+    }
+    if (
+      preferences.translate_enabled === true &&
+      transcript.has_speech === true &&
+      (transcript.translation_stale === true ||
+        !String(transcript.translated_text || "").trim())
+    ) {
+      throw new Error("MOTION_TRANSLATION_REQUIRED");
+    }
+    const speech =
+      preferences.translate_enabled === true
+        ? transcript.translated_text || ""
+        : transcript.text || "";
+    const voiceMode = preferences.voice_mode || "character";
+    const delivery =
+      transcript.has_speech === true &&
+      (preferences.voice_enabled || preferences.subtitle_enabled)
+        ? MotionPromptComposer.delivery(profile, voiceMode)
+        : null;
+    const consumesTimeline = [
+      preferences.voice_enabled ? delivery?.voice : null,
+      preferences.subtitle_enabled ? delivery?.subtitle : null,
+    ].some((template) => String(template || "").includes("{speech_timeline}"));
+    const speechTimeline =
+      !consumesTimeline || transcript.speech_timeline == null
+        ? "UNAVAILABLE"
+        : MotionTranscriptContract.formatTimeline(transcript, {
+            duration: Number(frame.end) - Number(frame.start),
+            translate: preferences.translate_enabled === true,
+          });
+    const values = {
+      speech_timeline: speechTimeline,
+      character_1_ref: "image 1",
+      character_2_ref: characterCount === 2 ? "image 2" : "",
+      character_refs: characters.map((_, i) => `image ${i + 1}`).join(", "),
+      background_refs: backgrounds
+        .map((_, i) => `image ${characters.length + i + 1}`)
+        .join(", "),
+      continuity_ref: continuity ? `image ${images.length}` : "",
+      transcript: transcript.text || "",
+      translated_text: speech,
+      target_language: preferences.target_language || "",
+      voice_slug: preferences.voice_slug || "",
+      voice_description: preferences.voice_description || "",
+      ratio: preferences.ratio || "",
+      clip_duration: Number(frame.end) - Number(frame.start),
+      frame_index: frameIndex,
+      frame_count: frameCount,
+      audio_manifest: "",
+      source_motion_summary: "",
+    };
+    if (
+      !Number.isFinite(values.clip_duration) ||
+      values.clip_duration <= 0 ||
+      !values.ratio ||
+      !profile?.settings?.flow_model
+    )
+      throw new Error("MOTION_FLOW_SETTINGS_INVALID");
+    console.info(
+      "[MotionSpeechTiming]",
+      JSON.stringify({
+        frameId,
+        profileRevision: profile.revision,
+        available: transcript.speech_timeline != null,
+        segments: transcript.speech_timeline?.length || 0,
+        duration: values.clip_duration,
+        voice: preferences.voice_enabled === true,
+        translated: preferences.translate_enabled === true,
+        voiceMode,
+        promptConsumesTimeline: consumesTimeline,
+      }),
+    );
+    let prompt = MotionPromptComposer.motion(profile, values, {
+      characterCount,
+      voice: preferences.voice_enabled === true,
+      subtitle: preferences.subtitle_enabled === true,
+      voiceMode,
+      hasSpeech: transcript.has_speech === true,
+      hasBackgroundRefs: backgrounds.length > 0,
+      continuity: !!continuity,
+    }).text;
+    if (
+      preferences.translate_enabled !== true &&
+      transcript.has_speech === true &&
+      (preferences.voice_enabled === true ||
+        preferences.subtitle_enabled === true)
+    ) {
+      prompt +=
+        "\n\nKeep the spoken dialogue and subtitles in the original spoken language. Do not translate or paraphrase the supplied dialogue.";
+    }
+    const customPrompt =
+      typeof preferences.custom_prompt === "string"
+        ? preferences.custom_prompt.trim()
+        : "";
+    if (customPrompt)
+      prompt += `
 
-${customPrompt}`;const videoId=uploadReceipt.mediaId;const thumbnails=Object.fromEntries(images.map(ref=>[ref.fileId,{...ref,type:"image"}]));thumbnails[videoId]={type:"video",media_uuid:uploadReceipt.mediaUuid,persistent_media_id:uploadReceipt.persistentMediaId||videoId,file_name:uploadReceipt.fileName,...uploadReceipt.display_name&&{display_name:uploadReceipt.display_name},...uploadReceipt.upload_name&&{upload_name:uploadReceipt.upload_name},api_driver:uploadReceipt.apiDriver,project_id:uploadReceipt.projectId};const generationConfig=globalThis.ModelRegistry?.getGenerationResolutionConfig?.("flow",preferences.flow_model||profile.settings.flow_model);const selectedResolution=preferences.flow_download_resolution;const generationResolution=generationConfig?.options?.some(option=>option.value===selectedResolution)?selectedResolution:profile.settings.flow_resolution||null;console.info("[MotionRequestSettings]",JSON.stringify({frameId,frameRunId:frame.run_id,sourceRevision:data.source_revision,profileRevision:profile.revision,mode,savedModel:preferences.flow_model||null,defaultModel:profile.settings.flow_model,effectiveModel:preferences.flow_model||profile.settings.flow_model,continuityEnabled:preferences.continuity_enabled===true,hasContinuityReference:!!continuity,imageReferences:images.length,videoReferences:1,generationResolution,downloadResolution:selectedResolution||null}));return{owner:"motion",flowModeLock:mode,projectId:project.flow_project_id,continuity,voice:voice?{slug:voice.slug,search_value:voice.search_value}:null,prompts:[prompt],settings:{genType:"Video",ratio:values.ratio,model:preferences.flow_model||profile.settings.flow_model,isFrames:false,quantity:1,flowExecutionMode:mode,flowVideoDuration:profile.settings.flow_duration||null,flowVideoResolution:generationResolution,refVideoIds:[videoId]},refFileIds:[...ids,videoId],refImageMode:"all",refThumbnails:thumbnails,refFileNames:Object.fromEntries([...images.map(ref=>[ref.fileId,ref.file_name||ref.fileId]),[videoId,uploadReceipt.fileName||videoId]]),autoDownload:false}}}globalThis.MotionFlowQueueRequest=MotionFlowQueueRequest;
+${customPrompt}`;
+    const videoId = uploadReceipt.mediaId;
+    const thumbnails = Object.fromEntries(
+      images.map((ref) => [ref.fileId, { ...ref, type: "image" }]),
+    );
+    thumbnails[videoId] = {
+      type: "video",
+      media_uuid: uploadReceipt.mediaUuid,
+      persistent_media_id: uploadReceipt.persistentMediaId || videoId,
+      file_name: uploadReceipt.fileName,
+      ...(uploadReceipt.display_name && {
+        display_name: uploadReceipt.display_name,
+      }),
+      ...(uploadReceipt.upload_name && {
+        upload_name: uploadReceipt.upload_name,
+      }),
+      api_driver: uploadReceipt.apiDriver,
+      project_id: uploadReceipt.projectId,
+    };
+    const generationConfig =
+      globalThis.ModelRegistry?.getGenerationResolutionConfig?.(
+        "flow",
+        preferences.flow_model || profile.settings.flow_model,
+      );
+    const selectedResolution = preferences.flow_download_resolution;
+    const generationResolution = generationConfig?.options?.some(
+      (option) => option.value === selectedResolution,
+    )
+      ? selectedResolution
+      : profile.settings.flow_resolution || null;
+    console.info(
+      "[MotionRequestSettings]",
+      JSON.stringify({
+        frameId,
+        frameRunId: frame.run_id,
+        sourceRevision: data.source_revision,
+        profileRevision: profile.revision,
+        mode,
+        savedModel: preferences.flow_model || null,
+        defaultModel: profile.settings.flow_model,
+        effectiveModel: preferences.flow_model || profile.settings.flow_model,
+        continuityEnabled: preferences.continuity_enabled === true,
+        hasContinuityReference: !!continuity,
+        imageReferences: images.length,
+        videoReferences: 1,
+        generationResolution,
+        downloadResolution: selectedResolution || null,
+      }),
+    );
+    return {
+      owner: "motion",
+      flowModeLock: mode,
+      projectId: project.flow_project_id,
+      continuity,
+      voice: voice
+        ? { slug: voice.slug, search_value: voice.search_value }
+        : null,
+      prompts: [prompt],
+      settings: {
+        genType: "Video",
+        ratio: values.ratio,
+        model: preferences.flow_model || profile.settings.flow_model,
+        isFrames: false,
+        quantity: 1,
+        flowExecutionMode: mode,
+        flowVideoDuration: profile.settings.flow_duration || null,
+        flowVideoResolution: generationResolution,
+        refVideoIds: [videoId],
+      },
+      refFileIds: [...ids, videoId],
+      refImageMode: "all",
+      refThumbnails: thumbnails,
+      refFileNames: Object.fromEntries([
+        ...images.map((ref) => [ref.fileId, ref.file_name || ref.fileId]),
+        [videoId, uploadReceipt.fileName || videoId],
+      ]),
+      autoDownload: false,
+    };
+  }
+}
+globalThis.MotionFlowQueueRequest = MotionFlowQueueRequest;

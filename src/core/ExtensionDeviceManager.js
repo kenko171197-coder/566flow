@@ -1,9 +1,272 @@
-var __defProp=Object.defineProperty;var __defNormalProp=(obj,key,value)=>key in obj?__defProp(obj,key,{enumerable:true,configurable:true,writable:true,value}):obj[key]=value;var __publicField=(obj,key,value)=>__defNormalProp(obj,typeof key!=="symbol"?key+"":key,value);class ExtensionDeviceManager{static init(){if(this._initialized)return;this._initialized=true;const blockUnactivatedAction=event=>{const ownerId=String(window.authManager?.user?.id||"");if(!ownerId||this._blockedDeviceOwner!==ownerId)return;const action=event.target?.closest?.('button, [role="button"], a[href], input[type="submit"]');if(!action||this._limitModal?.contains(action))return;if((this._limitModal?.dataset.confirmInFlight==="1"||this._limitModal?.dataset.replaceInFlight==="1")&&window.customDialog?._overlay?.contains?.(action))return;event.preventDefault();event.stopImmediatePropagation();const claimResult=this._blockedDeviceClaim||{};this._dismissLimitModal();this._promptedOwner=null;void this._showLimitModal(claimResult)};document.addEventListener("pointerdown",blockUnactivatedAction,true);document.addEventListener("click",blockUnactivatedAction,true);const claim=()=>this.claim().catch(error=>{console.warn("[ExtensionDeviceManager] Auto-claim failed",{code:error?.code||null,status:error?.httpStatus||null,message:error?.message||null})});window.eventBus?.on("auth:login",()=>{this._resetSession();claim()});window.eventBus?.on("auth:restored",claim);window.eventBus?.on("sse:entitlements_changed",data=>{this.handleEntitlementsChanged(data).catch(error=>{console.warn("[ExtensionDeviceManager] Entitlement seat update failed",{code:error?.code||null,status:error?.httpStatus||null,message:error?.message||null})})});window.eventBus?.on("auth:logout",()=>this._resetSession());const probe=(force=false)=>Promise.resolve(this.retryBlockedRegistration(force)).catch(error=>{console.warn("[ExtensionDeviceManager] Device registration probe failed",{code:error?.code||null,status:error?.httpStatus||null})});window.addEventListener("focus",()=>probe(false));document.addEventListener("visibilitychange",()=>{if(!document.hidden)probe(false)});window.eventBus?.on("sse:system_settings_changed",data=>{if(data?.section==="security"&&data.device_seat_capacity_changed===true)probe(true)});this._lastDeviceLimit=this._getDeviceLimit(window.featureGate?.entitlements?.extension_device_max);if(window.authManager?.isLoggedIn?.())claim()}static _resetSession(){this._sessionEpoch++;this._claimPromise=null;this._claimScope=null;this._recoveryProbePromise=null;this._blockedDeviceOwner=null;this._blockedDeviceClaim=null;this._promptedOwner=null;this._lastDeviceLimit=0;this._lastRecoveryProbeAt=0;this._dismissLimitModal()}static _activateDevice(source){this._blockedDeviceOwner=null;this._blockedDeviceClaim=null;this._promptedOwner=null;this._limitModalActivation?.();window.eventBus?.emit?.("extension-device:claimed",{source})}static async handleEntitlementsChanged(data){if(!window.authManager?.isLoggedIn?.())return null;if(!Object.prototype.hasOwnProperty.call(data?.features||{},"extension_device_max"))return null;const nextLimit=this._getDeviceLimit(data.features.extension_device_max);const previousLimit=this._lastDeviceLimit;this._lastDeviceLimit=nextLimit;if(!this._isLimitIncrease(previousLimit,nextLimit))return null;console.info("[ExtensionDeviceManager] Device seat limit increased; claiming this extension",{previousLimit,nextLimit});return this.claim()}static _getDeviceLimit(feature){const raw=feature&&typeof feature==="object"?feature.value:feature;const value=Number(raw);if(!Number.isFinite(value))return 0;return Math.trunc(value)}static _isLimitIncrease(previous,next){if(next===-1)return previous!==-1;if(next<=0)return false;if(previous===-1)return false;return next>Math.max(0,previous)}static async claim({force=false}={}){if(!window.authManager?.isLoggedIn?.()||!window.authManager?._apiCall)return null;const ownerId=String(window.authManager?.user?.id||"");const epoch=this._sessionEpoch;if(!force&&this._claimPromise&&this._claimScope?.ownerId===ownerId&&this._claimScope.epoch===epoch)return this._claimPromise;if(this._limitModal&&this._limitModal.dataset.ownerId!==ownerId){this._dismissLimitModal();this._blockedDeviceOwner=null;this._blockedDeviceClaim=null;this._promptedOwner=null}const scope={ownerId,epoch};this._claimScope=scope;const task=chrome.runtime.sendMessage({action:"CLAIM_PROTECTED_DEVICE"}).then(response=>{if(this._claimScope!==scope||this._sessionEpoch!==epoch||String(window.authManager?.user?.id||"")!==ownerId||!window.authManager?.isLoggedIn?.())throw Object.assign(new Error("CONFIG_SCOPE_CHANGED"),{code:"CONFIG_SCOPE_CHANGED"});if(response?.success!==true)throw Object.assign(new Error(response?.error?.code||"CONFIG_ACCESS_REQUIRED"),{code:response?.error?.code,httpStatus:response?.httpStatus});const result=response.data;if(result?.device_limit_reached===true)this._showLimitModal(result);if(result?.registered===true){this._activateDevice("device_claim")}return result}).finally(()=>{if(this._claimPromise===task){this._claimPromise=null;this._claimScope=null}});this._claimPromise=task;return task}static retryBlockedRegistration(force=false){if(this._recoveryProbePromise)return this._recoveryProbePromise;if(!window.authManager?.isLoggedIn?.()||this._claimPromise)return null;const now=Date.now();if(!force&&now-this._lastRecoveryProbeAt<15e3)return null;this._lastRecoveryProbeAt=now;const ownerId=String(window.authManager?.user?.id||"");const epoch=this._sessionEpoch;const task=(async()=>{const status=await chrome.runtime.sendMessage({action:"PROTECTED_CONFIG_STATUS"});if(this._sessionEpoch!==epoch||String(window.authManager?.user?.id||"")!==ownerId||!window.authManager?.isLoggedIn?.()||status?.success!==true)return null;if(status.data?.ready===true){if(this._blockedDeviceOwner===ownerId)this._activateDevice("protected_status_ready");return null}if(!["DEVICE_UNREGISTERED","EXTENSION_DEVICE_LIMIT_REACHED","EXTENSION_DEVICE_LIMIT_UNCONFIGURED"].includes(status.data?.code))return null;return this.claim()})();this._recoveryProbePromise=task;task.finally(()=>{if(this._recoveryProbePromise===task)this._recoveryProbePromise=null}).catch(()=>{});return task}static async _showLimitModal(claimResult={}){const ownerId=String(window.authManager?.user?.id||"");if(!ownerId)return;this._blockedDeviceOwner=ownerId;this._blockedDeviceClaim=claimResult;if(this._promptedOwner===ownerId)return;this._promptedOwner=ownerId;const escape=value=>{const el=document.createElement("div");el.textContent=String(value||"");return el.innerHTML};const formatTime=value=>{if(!value)return"Ch\u01B0a c\xF3 ho\u1EA1t \u0111\u1ED9ng";const date=new Date(value);return Number.isNaN(date.getTime())?"Ch\u01B0a c\xF3 ho\u1EA1t \u0111\u1ED9ng":date.toLocaleString()};const close=()=>{if(modal.dataset.activated==="1"&&modal.dataset.replaceInFlight!=="1")this._dismissLimitModal()};const modal=document.createElement("div");modal.className="extension-device-limit-overlay";modal.dataset.ownerId=ownerId;modal.innerHTML=`
+var __defProp = Object.defineProperty;
+var __defNormalProp = (obj, key, value) =>
+  key in obj
+    ? __defProp(obj, key, {
+        enumerable: true,
+        configurable: true,
+        writable: true,
+        value,
+      })
+    : (obj[key] = value);
+var __publicField = (obj, key, value) =>
+  __defNormalProp(obj, typeof key !== "symbol" ? key + "" : key, value);
+class ExtensionDeviceManager {
+  static init() {
+    if (this._initialized) return;
+    this._initialized = true;
+    const blockUnactivatedAction = (event) => {
+      const ownerId = String(window.authManager?.user?.id || "");
+      if (!ownerId || this._blockedDeviceOwner !== ownerId) return;
+      const action = event.target?.closest?.(
+        'button, [role="button"], a[href], input[type="submit"]',
+      );
+      if (!action || this._limitModal?.contains(action)) return;
+      if (
+        (this._limitModal?.dataset.confirmInFlight === "1" ||
+          this._limitModal?.dataset.replaceInFlight === "1") &&
+        window.customDialog?._overlay?.contains?.(action)
+      )
+        return;
+      event.preventDefault();
+      event.stopImmediatePropagation();
+      const claimResult = this._blockedDeviceClaim || {};
+      this._dismissLimitModal();
+      this._promptedOwner = null;
+      void this._showLimitModal(claimResult);
+    };
+    document.addEventListener("pointerdown", blockUnactivatedAction, true);
+    document.addEventListener("click", blockUnactivatedAction, true);
+    const claim = () =>
+      this.claim().catch((error) => {
+        console.warn("[ExtensionDeviceManager] Auto-claim failed", {
+          code: error?.code || null,
+          status: error?.httpStatus || null,
+          message: error?.message || null,
+        });
+      });
+    window.eventBus?.on("auth:login", () => {
+      this._resetSession();
+      claim();
+    });
+    window.eventBus?.on("auth:restored", claim);
+    window.eventBus?.on("sse:entitlements_changed", (data) => {
+      this.handleEntitlementsChanged(data).catch((error) => {
+        console.warn(
+          "[ExtensionDeviceManager] Entitlement seat update failed",
+          {
+            code: error?.code || null,
+            status: error?.httpStatus || null,
+            message: error?.message || null,
+          },
+        );
+      });
+    });
+    window.eventBus?.on("auth:logout", () => this._resetSession());
+    const probe = (force = false) =>
+      Promise.resolve(this.retryBlockedRegistration(force)).catch((error) => {
+        console.warn(
+          "[ExtensionDeviceManager] Device registration probe failed",
+          { code: error?.code || null, status: error?.httpStatus || null },
+        );
+      });
+    window.addEventListener("focus", () => probe(false));
+    document.addEventListener("visibilitychange", () => {
+      if (!document.hidden) probe(false);
+    });
+    window.eventBus?.on("sse:system_settings_changed", (data) => {
+      if (
+        data?.section === "security" &&
+        data.device_seat_capacity_changed === true
+      )
+        probe(true);
+    });
+    this._lastDeviceLimit = this._getDeviceLimit(
+      window.featureGate?.entitlements?.extension_device_max,
+    );
+    if (window.authManager?.isLoggedIn?.()) claim();
+  }
+  static _resetSession() {
+    this._sessionEpoch++;
+    this._claimPromise = null;
+    this._claimScope = null;
+    this._recoveryProbePromise = null;
+    this._blockedDeviceOwner = null;
+    this._blockedDeviceClaim = null;
+    this._promptedOwner = null;
+    this._lastDeviceLimit = 0;
+    this._lastRecoveryProbeAt = 0;
+    this._dismissLimitModal();
+  }
+  static _activateDevice(source) {
+    this._blockedDeviceOwner = null;
+    this._blockedDeviceClaim = null;
+    this._promptedOwner = null;
+    this._limitModalActivation?.();
+    window.eventBus?.emit?.("extension-device:claimed", { source });
+  }
+  static async handleEntitlementsChanged(data) {
+    if (!window.authManager?.isLoggedIn?.()) return null;
+    if (
+      !Object.prototype.hasOwnProperty.call(
+        data?.features || {},
+        "extension_device_max",
+      )
+    )
+      return null;
+    const nextLimit = this._getDeviceLimit(data.features.extension_device_max);
+    const previousLimit = this._lastDeviceLimit;
+    this._lastDeviceLimit = nextLimit;
+    if (!this._isLimitIncrease(previousLimit, nextLimit)) return null;
+    console.info(
+      "[ExtensionDeviceManager] Device seat limit increased; claiming this extension",
+      { previousLimit, nextLimit },
+    );
+    return this.claim();
+  }
+  static _getDeviceLimit(feature) {
+    const raw =
+      feature && typeof feature === "object" ? feature.value : feature;
+    const value = Number(raw);
+    if (!Number.isFinite(value)) return 0;
+    return Math.trunc(value);
+  }
+  static _isLimitIncrease(previous, next) {
+    if (next === -1) return previous !== -1;
+    if (next <= 0) return false;
+    if (previous === -1) return false;
+    return next > Math.max(0, previous);
+  }
+  static async claim({ force = false } = {}) {
+    if (!window.authManager?.isLoggedIn?.() || !window.authManager?._apiCall)
+      return null;
+    const ownerId = String(window.authManager?.user?.id || "");
+    const epoch = this._sessionEpoch;
+    if (
+      !force &&
+      this._claimPromise &&
+      this._claimScope?.ownerId === ownerId &&
+      this._claimScope.epoch === epoch
+    )
+      return this._claimPromise;
+    if (this._limitModal && this._limitModal.dataset.ownerId !== ownerId) {
+      this._dismissLimitModal();
+      this._blockedDeviceOwner = null;
+      this._blockedDeviceClaim = null;
+      this._promptedOwner = null;
+    }
+    const scope = { ownerId, epoch };
+    this._claimScope = scope;
+    const task = chrome.runtime
+      .sendMessage({ action: "CLAIM_PROTECTED_DEVICE" })
+      .then((response) => {
+        if (
+          this._claimScope !== scope ||
+          this._sessionEpoch !== epoch ||
+          String(window.authManager?.user?.id || "") !== ownerId ||
+          !window.authManager?.isLoggedIn?.()
+        )
+          throw Object.assign(new Error("CONFIG_SCOPE_CHANGED"), {
+            code: "CONFIG_SCOPE_CHANGED",
+          });
+        if (response?.success !== true)
+          throw Object.assign(
+            new Error(response?.error?.code || "CONFIG_ACCESS_REQUIRED"),
+            { code: response?.error?.code, httpStatus: response?.httpStatus },
+          );
+        const result = response.data;
+        if (result?.device_limit_reached === true) this._showLimitModal(result);
+        if (result?.registered === true) {
+          this._activateDevice("device_claim");
+        }
+        return result;
+      })
+      .finally(() => {
+        if (this._claimPromise === task) {
+          this._claimPromise = null;
+          this._claimScope = null;
+        }
+      });
+    this._claimPromise = task;
+    return task;
+  }
+  static retryBlockedRegistration(force = false) {
+    if (this._recoveryProbePromise) return this._recoveryProbePromise;
+    if (!window.authManager?.isLoggedIn?.() || this._claimPromise) return null;
+    const now = Date.now();
+    if (!force && now - this._lastRecoveryProbeAt < 15e3) return null;
+    this._lastRecoveryProbeAt = now;
+    const ownerId = String(window.authManager?.user?.id || "");
+    const epoch = this._sessionEpoch;
+    const task = (async () => {
+      const status = await chrome.runtime.sendMessage({
+        action: "PROTECTED_CONFIG_STATUS",
+      });
+      if (
+        this._sessionEpoch !== epoch ||
+        String(window.authManager?.user?.id || "") !== ownerId ||
+        !window.authManager?.isLoggedIn?.() ||
+        status?.success !== true
+      )
+        return null;
+      if (status.data?.ready === true) {
+        if (this._blockedDeviceOwner === ownerId)
+          this._activateDevice("protected_status_ready");
+        return null;
+      }
+      if (
+        ![
+          "DEVICE_UNREGISTERED",
+          "EXTENSION_DEVICE_LIMIT_REACHED",
+          "EXTENSION_DEVICE_LIMIT_UNCONFIGURED",
+        ].includes(status.data?.code)
+      )
+        return null;
+      return this.claim();
+    })();
+    this._recoveryProbePromise = task;
+    task
+      .finally(() => {
+        if (this._recoveryProbePromise === task)
+          this._recoveryProbePromise = null;
+      })
+      .catch(() => {});
+    return task;
+  }
+  static async _showLimitModal(claimResult = {}) {
+    const ownerId = String(window.authManager?.user?.id || "");
+    if (!ownerId) return;
+    this._blockedDeviceOwner = ownerId;
+    this._blockedDeviceClaim = claimResult;
+    if (this._promptedOwner === ownerId) return;
+    this._promptedOwner = ownerId;
+    const escape = (value) => {
+      const el = document.createElement("div");
+      el.textContent = String(value || "");
+      return el.innerHTML;
+    };
+    const formatTime = (value) => {
+      if (!value) return "Ch\u01B0a c\xF3 ho\u1EA1t \u0111\u1ED9ng";
+      const date = new Date(value);
+      return Number.isNaN(date.getTime())
+        ? "Ch\u01B0a c\xF3 ho\u1EA1t \u0111\u1ED9ng"
+        : date.toLocaleString();
+    };
+    const close = () => {
+      if (
+        modal.dataset.activated === "1" &&
+        modal.dataset.replaceInFlight !== "1"
+      )
+        this._dismissLimitModal();
+    };
+    const modal = document.createElement("div");
+    modal.className = "extension-device-limit-overlay";
+    modal.dataset.ownerId = ownerId;
+    modal.innerHTML = `
       <div class="extension-device-limit-content" role="dialog" aria-modal="true" aria-labelledby="extension-device-limit-title">
         <div class="extension-device-limit-header">
           <svg class="extension-device-limit-icon" width="20" height="20" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7" aria-hidden="true"><rect x="3" y="4" width="18" height="13" rx="2"></rect><path d="M8 21h8M12 17v4"></path></svg>
           <div class="extension-device-limit-header-text">
-            <div class="extension-device-limit-title" id="extension-device-limit-title">\u0110\xE3 \u0111\u1EA1t gi\u1EDBi h\u1EA1n ${escape(claimResult.device_limit??"")} thi\u1EBFt b\u1ECB</div>
+            <div class="extension-device-limit-title" id="extension-device-limit-title">\u0110\xE3 \u0111\u1EA1t gi\u1EDBi h\u1EA1n ${escape(claimResult.device_limit ?? "")} thi\u1EBFt b\u1ECB</div>
           </div>
         </div>
         <div class="extension-device-limit-intro">G\u1EE1 thi\u1EBFt b\u1ECB c\u0169 \u0111\u1EC3 k\xEDch ho\u1EA1t thi\u1EBFt b\u1ECB n\xE0y.</div>
@@ -11,11 +274,257 @@ var __defProp=Object.defineProperty;var __defNormalProp=(obj,key,value)=>key in 
         <div class="extension-device-limit-note">Thi\u1EBFt b\u1ECB \u0111\u01B0\u1EE3c g\u1EE1 s\u1EBD ng\u1EEBng ho\u1EA1t \u0111\u1ED9ng.</div>
         <p class="extension-device-limit-error" data-device-error hidden></p>
         <div class="extension-device-limit-actions" data-device-actions></div>
-      </div>`;this._limitModal=modal;modal.addEventListener("click",event=>event.stopPropagation());this._limitModalEscHandler=event=>{if(event.key==="Escape"){if(window.customDialog?._overlay?.contains?.(event.target))return;event.preventDefault();event.stopImmediatePropagation();close()}};document.addEventListener("keydown",this._limitModalEscHandler);(document.getElementById("sidebar-content")||document.body).appendChild(modal);const dismiss=document.createElement("button");dismiss.type="button";dismiss.className="btn";dismiss.textContent=window.I18n?.t?.("auth.logout")||"";dismiss.disabled=typeof window.authManager?.logout!=="function";dismiss.addEventListener("click",async()=>{if(modal.dataset.activated==="1")return close();if(modal.dataset.replaceInFlight==="1"||typeof window.authManager?.logout!=="function")return;dismiss.disabled=true;try{await window.authManager.logout();if(window.authManager?.isLoggedIn?.()===false||!window.authManager?.user)this._dismissLimitModal()}catch(_){if(this._limitModal===modal)showError(window.I18n?.t?.("common.error")||"")}finally{if(this._limitModal===modal)dismiss.disabled=false}});modal.querySelector(".extension-device-limit-header")?.appendChild(dismiss);const listEl=modal.querySelector("[data-device-list]");const errorEl=modal.querySelector("[data-device-error]");const actionsEl=modal.querySelector("[data-device-actions]");const showError=message=>{errorEl.textContent=message;errorEl.hidden=false};const activateCurrentExtension=()=>{if(this._limitModal!==modal||modal.dataset.activated==="1")return;modal.dataset.activated="1";this._blockedDeviceOwner=null;this._blockedDeviceClaim=null;dismiss.textContent=window.I18n?.t?.("common.close")||"";dismiss.disabled=false;this._stopLimitHealthCheck();listEl.innerHTML='<div class="extension-device-limit-empty extension-device-limit-success">Extension n\xE0y \u0111\xE3 \u0111\u01B0\u1EE3c k\xEDch ho\u1EA1t th\xE0nh c\xF4ng.</div>';errorEl.hidden=true;actionsEl.innerHTML='<button class="btn btn-primary" data-action="complete">Ho\xE0n t\u1EA5t</button>';actionsEl.querySelector('[data-action="complete"]')?.addEventListener("click",close)};this._limitModalActivation=activateCurrentExtension;const checkSlot=async()=>{try{const result=await this.claim();if(result?.registered===true)activateCurrentExtension();else if(result?.device_limit_reached!==true)showError("Kh\xF4ng th\u1EC3 ki\u1EC3m tra ch\u1ED7 tr\u1ED1ng cho extension n\xE0y.")}catch(error){showError(error?.message||"Kh\xF4ng th\u1EC3 ki\u1EC3m tra ch\u1ED7 tr\u1ED1ng. \u0110ang t\u1EF1 ki\u1EC3m tra l\u1EA1i.")}};this._startLimitHealthCheck(modal,checkSlot);try{const response=await window.authManager._apiCall("GET","extension-devices");if(this._limitModal!==modal||modal.dataset.activated==="1")return;const devices=Array.isArray(response)?response:Array.isArray(response?.data)?response.data:[];const removable=devices.filter(device=>!device.current&&!device.revoked_at);if(!removable.length){listEl.innerHTML='<div class="extension-device-limit-empty">Kh\xF4ng c\xF2n thi\u1EBFt b\u1ECB c\u0169 c\xF3 th\u1EC3 g\u1EE1. H\xE3y li\xEAn h\u1EC7 h\u1ED7 tr\u1EE3 \u0111\u1EC3 ki\u1EC3m tra gi\u1EDBi h\u1EA1n thi\u1EBFt b\u1ECB c\u1EE7a t\xE0i kho\u1EA3n.</div>';return}listEl.innerHTML=removable.map(device=>`
+      </div>`;
+    this._limitModal = modal;
+    modal.addEventListener("click", (event) => event.stopPropagation());
+    this._limitModalEscHandler = (event) => {
+      if (event.key === "Escape") {
+        if (window.customDialog?._overlay?.contains?.(event.target)) return;
+        event.preventDefault();
+        event.stopImmediatePropagation();
+        close();
+      }
+    };
+    document.addEventListener("keydown", this._limitModalEscHandler);
+    (document.getElementById("sidebar-content") || document.body).appendChild(
+      modal,
+    );
+    const dismiss = document.createElement("button");
+    dismiss.type = "button";
+    dismiss.className = "btn";
+    dismiss.textContent = window.I18n?.t?.("auth.logout") || "";
+    dismiss.disabled = typeof window.authManager?.logout !== "function";
+    dismiss.addEventListener("click", async () => {
+      if (modal.dataset.activated === "1") return close();
+      if (
+        modal.dataset.replaceInFlight === "1" ||
+        typeof window.authManager?.logout !== "function"
+      )
+        return;
+      dismiss.disabled = true;
+      try {
+        await window.authManager.logout();
+        if (
+          window.authManager?.isLoggedIn?.() === false ||
+          !window.authManager?.user
+        )
+          this._dismissLimitModal();
+      } catch (_) {
+        if (this._limitModal === modal)
+          showError(window.I18n?.t?.("common.error") || "");
+      } finally {
+        if (this._limitModal === modal) dismiss.disabled = false;
+      }
+    });
+    modal.querySelector(".extension-device-limit-header")?.appendChild(dismiss);
+    const listEl = modal.querySelector("[data-device-list]");
+    const errorEl = modal.querySelector("[data-device-error]");
+    const actionsEl = modal.querySelector("[data-device-actions]");
+    const showError = (message) => {
+      errorEl.textContent = message;
+      errorEl.hidden = false;
+    };
+    const activateCurrentExtension = () => {
+      if (this._limitModal !== modal || modal.dataset.activated === "1") return;
+      modal.dataset.activated = "1";
+      this._blockedDeviceOwner = null;
+      this._blockedDeviceClaim = null;
+      dismiss.textContent = window.I18n?.t?.("common.close") || "";
+      dismiss.disabled = false;
+      this._stopLimitHealthCheck();
+      listEl.innerHTML =
+        '<div class="extension-device-limit-empty extension-device-limit-success">Extension n\xE0y \u0111\xE3 \u0111\u01B0\u1EE3c k\xEDch ho\u1EA1t th\xE0nh c\xF4ng.</div>';
+      errorEl.hidden = true;
+      actionsEl.innerHTML =
+        '<button class="btn btn-primary" data-action="complete">Ho\xE0n t\u1EA5t</button>';
+      actionsEl
+        .querySelector('[data-action="complete"]')
+        ?.addEventListener("click", close);
+    };
+    this._limitModalActivation = activateCurrentExtension;
+    const checkSlot = async () => {
+      try {
+        const result = await this.claim();
+        if (result?.registered === true) activateCurrentExtension();
+        else if (result?.device_limit_reached !== true)
+          showError(
+            "Kh\xF4ng th\u1EC3 ki\u1EC3m tra ch\u1ED7 tr\u1ED1ng cho extension n\xE0y.",
+          );
+      } catch (error) {
+        showError(
+          error?.message ||
+            "Kh\xF4ng th\u1EC3 ki\u1EC3m tra ch\u1ED7 tr\u1ED1ng. \u0110ang t\u1EF1 ki\u1EC3m tra l\u1EA1i.",
+        );
+      }
+    };
+    this._startLimitHealthCheck(modal, checkSlot);
+    try {
+      const response = await window.authManager._apiCall(
+        "GET",
+        "extension-devices",
+      );
+      if (this._limitModal !== modal || modal.dataset.activated === "1") return;
+      const devices = Array.isArray(response)
+        ? response
+        : Array.isArray(response?.data)
+          ? response.data
+          : [];
+      const removable = devices.filter(
+        (device) => !device.current && !device.revoked_at,
+      );
+      if (!removable.length) {
+        listEl.innerHTML =
+          '<div class="extension-device-limit-empty">Kh\xF4ng c\xF2n thi\u1EBFt b\u1ECB c\u0169 c\xF3 th\u1EC3 g\u1EE1. H\xE3y li\xEAn h\u1EC7 h\u1ED7 tr\u1EE3 \u0111\u1EC3 ki\u1EC3m tra gi\u1EDBi h\u1EA1n thi\u1EBFt b\u1ECB c\u1EE7a t\xE0i kho\u1EA3n.</div>';
+        return;
+      }
+      listEl.innerHTML = removable
+        .map(
+          (device) => `
         <div class="extension-device-limit-item">
           <div class="extension-device-limit-device-icon" aria-hidden="true"><svg width="17" height="17" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.7"><rect x="3" y="4" width="18" height="13" rx="2"></rect><path d="M8 21h8M12 17v4"></path></svg></div>
-          <div class="extension-device-limit-item-info"><span class="extension-device-limit-name">${escape(device.label||"TobyFlow extension")}</span><span class="extension-device-limit-date">${escape(device.device_code?`#${device.device_code} \xB7 `:"")}${escape(formatTime(device.last_seen_at))}</span></div>
+          <div class="extension-device-limit-item-info"><span class="extension-device-limit-name">${escape(device.label || "TobyFlow extension")}</span><span class="extension-device-limit-date">${escape(device.device_code ? `#${device.device_code} \xB7 ` : "")}${escape(formatTime(device.last_seen_at))}</span></div>
           <button class="extension-device-limit-remove" data-remove-device="${escape(device.id)}" title="G\u1EE1 thi\u1EBFt b\u1ECB" aria-label="G\u1EE1 thi\u1EBFt b\u1ECB">
             <svg width="12" height="12" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.4" aria-hidden="true"><path d="M3 6h18"></path><path d="M8 6V4h8v2"></path><path d="M19 6l-1 14H6L5 6"></path><path d="M10 11v5M14 11v5"></path></svg>
           </button>
-        </div>`).join("");listEl.querySelectorAll("[data-remove-device]").forEach(button=>button.addEventListener("click",async()=>{const deviceId=button.dataset.removeDevice;if(!deviceId)return;const device=removable.find(item=>String(item.id)===String(deviceId));let confirmed=false;modal.dataset.confirmInFlight="1";try{confirmed=window.customDialog?.confirmDangerous?await window.customDialog.confirmDangerous("Thi\u1EBFt b\u1ECB n\xE0y s\u1EBD b\u1ECB g\u1EE1 v\xE0 extension hi\u1EC7n t\u1EA1i s\u1EBD \u0111\u01B0\u1EE3c k\xEDch ho\u1EA1t thay th\u1EBF.",{title:"G\u1EE1 thi\u1EBFt b\u1ECB",itemName:device?.label||"TobyFlow extension",confirmText:"G\u1EE1 & k\xEDch ho\u1EA1t",cancelText:"H\u1EE7y",zIndex:10000080}):false}finally{delete modal.dataset.confirmInFlight}if(!confirmed||this._limitModal!==modal||modal.dataset.activated==="1"||String(window.authManager?.user?.id||"")!==ownerId)return;modal.dataset.replaceInFlight="1";const originalButtonContent=button.innerHTML;button.disabled=true;button.textContent="\u2026";errorEl.hidden=true;try{const result=await window.authManager._apiCall("DELETE",`extension-devices/${encodeURIComponent(deviceId)}`);if(this._limitModal!==modal||modal.dataset.activated==="1")return;if(result?.replacement_registered===true){const claimed=await this.claim({force:true}).catch(()=>null);if(claimed?.registered===true){activateCurrentExtension();window.eventBus?.emit?.("extension-device:replacement-completed")}else{button.closest(".extension-device-limit-item")?.remove();showError("Thi\u1EBFt b\u1ECB c\u0169 \u0111\xE3 \u0111\u01B0\u1EE3c g\u1EE1, nh\u01B0ng ch\u01B0a x\xE1c nh\u1EADn \u0111\u01B0\u1EE3c tr\u1EA1ng th\xE1i thi\u1EBFt b\u1ECB n\xE0y. H\xE3y m\u1EDF C\xE0i \u0111\u1EB7t \u2192 Thi\u1EBFt b\u1ECB \u0111\u1EC3 th\u1EED l\u1EA1i.")}}else{button.closest(".extension-device-limit-item")?.remove();if(!listEl.querySelector("[data-remove-device]")){listEl.innerHTML='<div class="extension-device-limit-empty">Kh\xF4ng c\xF2n thi\u1EBFt b\u1ECB c\u0169 n\xE0o \u0111\u1EC3 g\u1EE1. H\xE3y li\xEAn h\u1EC7 h\u1ED7 tr\u1EE3 n\u1EBFu thi\u1EBFt b\u1ECB n\xE0y v\u1EABn ch\u01B0a \u0111\u01B0\u1EE3c k\xEDch ho\u1EA1t.</div>'}showError(result?.replacement_code==="EXTENSION_DEVICE_LIMIT_REACHED"?"\u0110\xE3 g\u1EE1 thi\u1EBFt b\u1ECB c\u0169, nh\u01B0ng t\xE0i kho\u1EA3n v\u1EABn h\u1EBFt ch\u1ED7 n\xEAn ch\u01B0a k\xEDch ho\u1EA1t \u0111\u01B0\u1EE3c thi\u1EBFt b\u1ECB n\xE0y. H\xE3y g\u1EE1 th\xEAm thi\u1EBFt b\u1ECB c\u0169 n\u1EBFu c\xF2n; n\u1EBFu kh\xF4ng c\xF2n, h\xE3y li\xEAn h\u1EC7 h\u1ED7 tr\u1EE3.":"\u0110\xE3 g\u1EE1 thi\u1EBFt b\u1ECB c\u0169, nh\u01B0ng ch\u01B0a k\xEDch ho\u1EA1t \u0111\u01B0\u1EE3c thi\u1EBFt b\u1ECB n\xE0y. H\xE3y m\u1EDF C\xE0i \u0111\u1EB7t \u2192 Thi\u1EBFt b\u1ECB \u0111\u1EC3 ki\u1EC3m tra tr\u1EA1ng th\xE1i.")}}catch(error){console.warn("[ExtensionDeviceManager] Remove failed",{code:error?.code||"UNKNOWN",httpStatus:error?.httpStatus||0});button.disabled=false;button.innerHTML=originalButtonContent;const code=error?.code!=="EXTENSION_DEVICE_LIMIT_REACHED"&&/^[A-Z0-9_]{1,100}$/.test(error?.code||"")?` (${error.code})`:"";showError(`Kh\xF4ng th\u1EC3 g\u1EE1 thi\u1EBFt b\u1ECB c\u0169. Vui l\xF2ng ki\u1EC3m tra k\u1EBFt n\u1ED1i v\xE0 th\u1EED l\u1EA1i.${code}`)}finally{delete modal.dataset.replaceInFlight}}))}catch(error){if(this._limitModal===modal&&modal.dataset.activated!=="1"){listEl.innerHTML='<div class="extension-device-limit-empty">Kh\xF4ng t\u1EA3i \u0111\u01B0\u1EE3c danh s\xE1ch thi\u1EBFt b\u1ECB.</div>';showError(error?.message||"Vui l\xF2ng ki\u1EC3m tra k\u1EBFt n\u1ED1i v\xE0 th\u1EED l\u1EA1i.")}}}static _dismissLimitModal(){this._stopLimitHealthCheck();if(this._limitModalEscHandler)document.removeEventListener("keydown",this._limitModalEscHandler);this._limitModalEscHandler=null;this._limitModal?.remove();this._limitModal=null;this._limitModalActivation=null}static _startLimitHealthCheck(modal,checkSlot){this._stopLimitHealthCheck();this._limitHealthTimer=setInterval(()=>{if(this._limitModal!==modal)return this._stopLimitHealthCheck();if(modal.dataset.replaceInFlight==="1")return;checkSlot()},15e3)}static _stopLimitHealthCheck(){if(this._limitHealthTimer)clearInterval(this._limitHealthTimer);this._limitHealthTimer=null}}__publicField(ExtensionDeviceManager,"_initialized",false);__publicField(ExtensionDeviceManager,"_claimPromise",null);__publicField(ExtensionDeviceManager,"_claimScope",null);__publicField(ExtensionDeviceManager,"_sessionEpoch",0);__publicField(ExtensionDeviceManager,"_promptedOwner",null);__publicField(ExtensionDeviceManager,"_limitModal",null);__publicField(ExtensionDeviceManager,"_limitModalActivation",null);__publicField(ExtensionDeviceManager,"_limitModalEscHandler",null);__publicField(ExtensionDeviceManager,"_limitHealthTimer",null);__publicField(ExtensionDeviceManager,"_blockedDeviceOwner",null);__publicField(ExtensionDeviceManager,"_blockedDeviceClaim",null);__publicField(ExtensionDeviceManager,"_lastRecoveryProbeAt",0);__publicField(ExtensionDeviceManager,"_recoveryProbePromise",null);__publicField(ExtensionDeviceManager,"_lastDeviceLimit",0);window.ExtensionDeviceManager=ExtensionDeviceManager;
+        </div>`,
+        )
+        .join("");
+      listEl.querySelectorAll("[data-remove-device]").forEach((button) =>
+        button.addEventListener("click", async () => {
+          const deviceId = button.dataset.removeDevice;
+          if (!deviceId) return;
+          const device = removable.find(
+            (item) => String(item.id) === String(deviceId),
+          );
+          let confirmed = false;
+          modal.dataset.confirmInFlight = "1";
+          try {
+            confirmed = window.customDialog?.confirmDangerous
+              ? await window.customDialog.confirmDangerous(
+                  "Thi\u1EBFt b\u1ECB n\xE0y s\u1EBD b\u1ECB g\u1EE1 v\xE0 extension hi\u1EC7n t\u1EA1i s\u1EBD \u0111\u01B0\u1EE3c k\xEDch ho\u1EA1t thay th\u1EBF.",
+                  {
+                    title: "G\u1EE1 thi\u1EBFt b\u1ECB",
+                    itemName: device?.label || "TobyFlow extension",
+                    confirmText: "G\u1EE1 & k\xEDch ho\u1EA1t",
+                    cancelText: "H\u1EE7y",
+                    zIndex: 10000080,
+                  },
+                )
+              : false;
+          } finally {
+            delete modal.dataset.confirmInFlight;
+          }
+          if (
+            !confirmed ||
+            this._limitModal !== modal ||
+            modal.dataset.activated === "1" ||
+            String(window.authManager?.user?.id || "") !== ownerId
+          )
+            return;
+          modal.dataset.replaceInFlight = "1";
+          const originalButtonContent = button.innerHTML;
+          button.disabled = true;
+          button.textContent = "\u2026";
+          errorEl.hidden = true;
+          try {
+            const result = await window.authManager._apiCall(
+              "DELETE",
+              `extension-devices/${encodeURIComponent(deviceId)}`,
+            );
+            if (this._limitModal !== modal || modal.dataset.activated === "1")
+              return;
+            if (result?.replacement_registered === true) {
+              const claimed = await this.claim({ force: true }).catch(
+                () => null,
+              );
+              if (claimed?.registered === true) {
+                activateCurrentExtension();
+                window.eventBus?.emit?.(
+                  "extension-device:replacement-completed",
+                );
+              } else {
+                button.closest(".extension-device-limit-item")?.remove();
+                showError(
+                  "Thi\u1EBFt b\u1ECB c\u0169 \u0111\xE3 \u0111\u01B0\u1EE3c g\u1EE1, nh\u01B0ng ch\u01B0a x\xE1c nh\u1EADn \u0111\u01B0\u1EE3c tr\u1EA1ng th\xE1i thi\u1EBFt b\u1ECB n\xE0y. H\xE3y m\u1EDF C\xE0i \u0111\u1EB7t \u2192 Thi\u1EBFt b\u1ECB \u0111\u1EC3 th\u1EED l\u1EA1i.",
+                );
+              }
+            } else {
+              button.closest(".extension-device-limit-item")?.remove();
+              if (!listEl.querySelector("[data-remove-device]")) {
+                listEl.innerHTML =
+                  '<div class="extension-device-limit-empty">Kh\xF4ng c\xF2n thi\u1EBFt b\u1ECB c\u0169 n\xE0o \u0111\u1EC3 g\u1EE1. H\xE3y li\xEAn h\u1EC7 h\u1ED7 tr\u1EE3 n\u1EBFu thi\u1EBFt b\u1ECB n\xE0y v\u1EABn ch\u01B0a \u0111\u01B0\u1EE3c k\xEDch ho\u1EA1t.</div>';
+              }
+              showError(
+                result?.replacement_code === "EXTENSION_DEVICE_LIMIT_REACHED"
+                  ? "\u0110\xE3 g\u1EE1 thi\u1EBFt b\u1ECB c\u0169, nh\u01B0ng t\xE0i kho\u1EA3n v\u1EABn h\u1EBFt ch\u1ED7 n\xEAn ch\u01B0a k\xEDch ho\u1EA1t \u0111\u01B0\u1EE3c thi\u1EBFt b\u1ECB n\xE0y. H\xE3y g\u1EE1 th\xEAm thi\u1EBFt b\u1ECB c\u0169 n\u1EBFu c\xF2n; n\u1EBFu kh\xF4ng c\xF2n, h\xE3y li\xEAn h\u1EC7 h\u1ED7 tr\u1EE3."
+                  : "\u0110\xE3 g\u1EE1 thi\u1EBFt b\u1ECB c\u0169, nh\u01B0ng ch\u01B0a k\xEDch ho\u1EA1t \u0111\u01B0\u1EE3c thi\u1EBFt b\u1ECB n\xE0y. H\xE3y m\u1EDF C\xE0i \u0111\u1EB7t \u2192 Thi\u1EBFt b\u1ECB \u0111\u1EC3 ki\u1EC3m tra tr\u1EA1ng th\xE1i.",
+              );
+            }
+          } catch (error) {
+            console.warn("[ExtensionDeviceManager] Remove failed", {
+              code: error?.code || "UNKNOWN",
+              httpStatus: error?.httpStatus || 0,
+            });
+            button.disabled = false;
+            button.innerHTML = originalButtonContent;
+            const code =
+              error?.code !== "EXTENSION_DEVICE_LIMIT_REACHED" &&
+              /^[A-Z0-9_]{1,100}$/.test(error?.code || "")
+                ? ` (${error.code})`
+                : "";
+            showError(
+              `Kh\xF4ng th\u1EC3 g\u1EE1 thi\u1EBFt b\u1ECB c\u0169. Vui l\xF2ng ki\u1EC3m tra k\u1EBFt n\u1ED1i v\xE0 th\u1EED l\u1EA1i.${code}`,
+            );
+          } finally {
+            delete modal.dataset.replaceInFlight;
+          }
+        }),
+      );
+    } catch (error) {
+      if (this._limitModal === modal && modal.dataset.activated !== "1") {
+        listEl.innerHTML =
+          '<div class="extension-device-limit-empty">Kh\xF4ng t\u1EA3i \u0111\u01B0\u1EE3c danh s\xE1ch thi\u1EBFt b\u1ECB.</div>';
+        showError(
+          error?.message ||
+            "Vui l\xF2ng ki\u1EC3m tra k\u1EBFt n\u1ED1i v\xE0 th\u1EED l\u1EA1i.",
+        );
+      }
+    }
+  }
+  static _dismissLimitModal() {
+    this._stopLimitHealthCheck();
+    if (this._limitModalEscHandler)
+      document.removeEventListener("keydown", this._limitModalEscHandler);
+    this._limitModalEscHandler = null;
+    this._limitModal?.remove();
+    this._limitModal = null;
+    this._limitModalActivation = null;
+  }
+  static _startLimitHealthCheck(modal, checkSlot) {
+    this._stopLimitHealthCheck();
+    this._limitHealthTimer = setInterval(() => {
+      if (this._limitModal !== modal) return this._stopLimitHealthCheck();
+      if (modal.dataset.replaceInFlight === "1") return;
+      checkSlot();
+    }, 15e3);
+  }
+  static _stopLimitHealthCheck() {
+    if (this._limitHealthTimer) clearInterval(this._limitHealthTimer);
+    this._limitHealthTimer = null;
+  }
+}
+__publicField(ExtensionDeviceManager, "_initialized", false);
+__publicField(ExtensionDeviceManager, "_claimPromise", null);
+__publicField(ExtensionDeviceManager, "_claimScope", null);
+__publicField(ExtensionDeviceManager, "_sessionEpoch", 0);
+__publicField(ExtensionDeviceManager, "_promptedOwner", null);
+__publicField(ExtensionDeviceManager, "_limitModal", null);
+__publicField(ExtensionDeviceManager, "_limitModalActivation", null);
+__publicField(ExtensionDeviceManager, "_limitModalEscHandler", null);
+__publicField(ExtensionDeviceManager, "_limitHealthTimer", null);
+__publicField(ExtensionDeviceManager, "_blockedDeviceOwner", null);
+__publicField(ExtensionDeviceManager, "_blockedDeviceClaim", null);
+__publicField(ExtensionDeviceManager, "_lastRecoveryProbeAt", 0);
+__publicField(ExtensionDeviceManager, "_recoveryProbePromise", null);
+__publicField(ExtensionDeviceManager, "_lastDeviceLimit", 0);
+window.ExtensionDeviceManager = ExtensionDeviceManager;

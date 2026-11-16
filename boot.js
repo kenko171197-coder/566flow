@@ -1,1 +1,5 @@
-document.addEventListener("DOMContentLoaded",()=>{if(window.SidebarManager){SidebarManager.init()}});
+document.addEventListener("DOMContentLoaded", () => {
+  if (window.SidebarManager) {
+    SidebarManager.init();
+  }
+});

@@ -1,1 +1,168 @@
-var __defProp=Object.defineProperty;var __defNormalProp=(obj,key,value)=>key in obj?__defProp(obj,key,{enumerable:true,configurable:true,writable:true,value}):obj[key]=value;var __publicField=(obj,key,value)=>__defNormalProp(obj,typeof key!=="symbol"?key+"":key,value);class WorkflowSpaceDiagnosticSchema{static identifier(value){return typeof value==="string"&&/^[a-zA-Z0-9_-]{1,100}$/.test(value)&&!["__proto__","constructor","prototype"].includes(value)?value:null}static code(value){return typeof value==="string"&&/^(?:FLOW_|PUBLIC_|BRIDGE_|SPACE_|RPC_|HTTP_|ACCOUNT_|NATIVE_|PROVIDER_|QUEUE_|DOWNLOAD_|SAVE_|NODE_|WORKFLOW_|SINGLE_NODE_|RUN_|NO_|BAD_|INVALID_|UNSUPPORTED|BUSY|EXCEPTION)[A-Z0-9_]{0,90}$/.test(value)?value:null}static sanitize(value){if(!value||!["web","background"].includes(value.source)||!this.stages.includes(value.stage))return null;const contextId=this.identifier(value.contextId),operationId=this.identifier(value.operationId),attemptId=this.identifier(value.attemptId);if(!contextId||!operationId||!attemptId||!Number.isSafeInteger(value.sourceSequence)||value.sourceSequence<1)return null;const out={source:value.source,stage:value.stage,contextId,operationId,attemptId};for(const key of["nodeId","command","nativeDocumentId"]){const id=this.identifier(value[key]);if(id)out[key]=id}const code=this.code(value.code);if(code)out.code=code;for(const key of["sourceSequence","elapsedMs","durationMs","timeoutMs","httpStatus","count","repeats","contentRevision","nativeContexts","nativeSequence"]){if(Number.isSafeInteger(value[key])&&value[key]>=0&&value[key]<=1e9)out[key]=value[key]}for(const key of["ok","accepted","dispatchStarted","ready","tabOpen"])if(typeof value[key]==="boolean")out[key]=value[key];for(const key of["selectedMode","effectiveMode"])if(["web","api","unknown"].includes(value[key]))out[key]=value[key];if(["sent","accepted","rejected","unknown","applied","cancelled","partial"].includes(value.outcome))out.outcome=value.outcome;if(typeof value.version==="string"&&/^\d{1,4}\.\d{1,4}\.\d{1,4}(?:\.\d{1,4})?$/.test(value.version))out.version=value.version;if(Number.isSafeInteger(value.utcMs)&&value.utcMs>0)out.utcMs=value.utcMs;return out}static bytes(event){return new TextEncoder().encode(JSON.stringify(event)).byteLength+1}static bounded(events,now=Date.now()){let dropped=0,bytes=2;const kept=[],seen=new Map;for(let index=events.length-1;index>=0;index--){const event=this.sanitize(events[index]);if(!event||!event.utcMs||event.utcMs<now-this.retentionMs||event.utcMs>now+3e5){dropped++;continue}const identity=`${event.source}:${event.contextId}:${event.sourceSequence}`;if(seen.has(identity)){const previous=seen.get(identity);previous.repeats=Math.min(1e9,(previous.repeats||1)+1);continue}seen.set(identity,event);const size=this.bytes(event);if(kept.length>=this.maxEvents||bytes+size>this.maxBytes){dropped++;continue}bytes+=size;kept.push(event)}bytes=2+kept.reduce((sum,event)=>sum+this.bytes(event),0);while(bytes>this.maxBytes&&kept.length){bytes-=this.bytes(kept.pop());dropped++}return{events:kept.reverse(),dropped,bytes}}}__publicField(WorkflowSpaceDiagnosticSchema,"revision",1);__publicField(WorkflowSpaceDiagnosticSchema,"maxEvents",400);__publicField(WorkflowSpaceDiagnosticSchema,"maxBytes",192*1024);__publicField(WorkflowSpaceDiagnosticSchema,"retentionMs",24*60*60*1e3);__publicField(WorkflowSpaceDiagnosticSchema,"stages",["scope_open","ui_click","rpc_requested","rpc_sent","rpc_received","rpc_ack","rpc_unknown","http_sent","http_ack","http_error","ui_applied","ui_received","timeout","cancel","late_ack","probe"]);globalThis.WorkflowSpaceDiagnosticSchema=WorkflowSpaceDiagnosticSchema;
+var __defProp = Object.defineProperty;
+var __defNormalProp = (obj, key, value) =>
+  key in obj
+    ? __defProp(obj, key, {
+        enumerable: true,
+        configurable: true,
+        writable: true,
+        value,
+      })
+    : (obj[key] = value);
+var __publicField = (obj, key, value) =>
+  __defNormalProp(obj, typeof key !== "symbol" ? key + "" : key, value);
+class WorkflowSpaceDiagnosticSchema {
+  static identifier(value) {
+    return typeof value === "string" &&
+      /^[a-zA-Z0-9_-]{1,100}$/.test(value) &&
+      !["__proto__", "constructor", "prototype"].includes(value)
+      ? value
+      : null;
+  }
+  static code(value) {
+    return typeof value === "string" &&
+      /^(?:FLOW_|PUBLIC_|BRIDGE_|SPACE_|RPC_|HTTP_|ACCOUNT_|NATIVE_|PROVIDER_|QUEUE_|DOWNLOAD_|SAVE_|NODE_|WORKFLOW_|SINGLE_NODE_|RUN_|NO_|BAD_|INVALID_|UNSUPPORTED|BUSY|EXCEPTION)[A-Z0-9_]{0,90}$/.test(
+        value,
+      )
+      ? value
+      : null;
+  }
+  static sanitize(value) {
+    if (
+      !value ||
+      !["web", "background"].includes(value.source) ||
+      !this.stages.includes(value.stage)
+    )
+      return null;
+    const contextId = this.identifier(value.contextId),
+      operationId = this.identifier(value.operationId),
+      attemptId = this.identifier(value.attemptId);
+    if (
+      !contextId ||
+      !operationId ||
+      !attemptId ||
+      !Number.isSafeInteger(value.sourceSequence) ||
+      value.sourceSequence < 1
+    )
+      return null;
+    const out = {
+      source: value.source,
+      stage: value.stage,
+      contextId,
+      operationId,
+      attemptId,
+    };
+    for (const key of ["nodeId", "command", "nativeDocumentId"]) {
+      const id = this.identifier(value[key]);
+      if (id) out[key] = id;
+    }
+    const code = this.code(value.code);
+    if (code) out.code = code;
+    for (const key of [
+      "sourceSequence",
+      "elapsedMs",
+      "durationMs",
+      "timeoutMs",
+      "httpStatus",
+      "count",
+      "repeats",
+      "contentRevision",
+      "nativeContexts",
+      "nativeSequence",
+    ]) {
+      if (
+        Number.isSafeInteger(value[key]) &&
+        value[key] >= 0 &&
+        value[key] <= 1e9
+      )
+        out[key] = value[key];
+    }
+    for (const key of ["ok", "accepted", "dispatchStarted", "ready", "tabOpen"])
+      if (typeof value[key] === "boolean") out[key] = value[key];
+    for (const key of ["selectedMode", "effectiveMode"])
+      if (["web", "api", "unknown"].includes(value[key])) out[key] = value[key];
+    if (
+      [
+        "sent",
+        "accepted",
+        "rejected",
+        "unknown",
+        "applied",
+        "cancelled",
+        "partial",
+      ].includes(value.outcome)
+    )
+      out.outcome = value.outcome;
+    if (
+      typeof value.version === "string" &&
+      /^\d{1,4}\.\d{1,4}\.\d{1,4}(?:\.\d{1,4})?$/.test(value.version)
+    )
+      out.version = value.version;
+    if (Number.isSafeInteger(value.utcMs) && value.utcMs > 0)
+      out.utcMs = value.utcMs;
+    return out;
+  }
+  static bytes(event) {
+    return new TextEncoder().encode(JSON.stringify(event)).byteLength + 1;
+  }
+  static bounded(events, now = Date.now()) {
+    let dropped = 0,
+      bytes = 2;
+    const kept = [],
+      seen = new Map();
+    for (let index = events.length - 1; index >= 0; index--) {
+      const event = this.sanitize(events[index]);
+      if (
+        !event ||
+        !event.utcMs ||
+        event.utcMs < now - this.retentionMs ||
+        event.utcMs > now + 3e5
+      ) {
+        dropped++;
+        continue;
+      }
+      const identity = `${event.source}:${event.contextId}:${event.sourceSequence}`;
+      if (seen.has(identity)) {
+        const previous = seen.get(identity);
+        previous.repeats = Math.min(1e9, (previous.repeats || 1) + 1);
+        continue;
+      }
+      seen.set(identity, event);
+      const size = this.bytes(event);
+      if (kept.length >= this.maxEvents || bytes + size > this.maxBytes) {
+        dropped++;
+        continue;
+      }
+      bytes += size;
+      kept.push(event);
+    }
+    bytes = 2 + kept.reduce((sum, event) => sum + this.bytes(event), 0);
+    while (bytes > this.maxBytes && kept.length) {
+      bytes -= this.bytes(kept.pop());
+      dropped++;
+    }
+    return { events: kept.reverse(), dropped, bytes };
+  }
+}
+__publicField(WorkflowSpaceDiagnosticSchema, "revision", 1);
+__publicField(WorkflowSpaceDiagnosticSchema, "maxEvents", 400);
+__publicField(WorkflowSpaceDiagnosticSchema, "maxBytes", 192 * 1024);
+__publicField(WorkflowSpaceDiagnosticSchema, "retentionMs", 24 * 60 * 60 * 1e3);
+__publicField(WorkflowSpaceDiagnosticSchema, "stages", [
+  "scope_open",
+  "ui_click",
+  "rpc_requested",
+  "rpc_sent",
+  "rpc_received",
+  "rpc_ack",
+  "rpc_unknown",
+  "http_sent",
+  "http_ack",
+  "http_error",
+  "ui_applied",
+  "ui_received",
+  "timeout",
+  "cancel",
+  "late_ack",
+  "probe",
+]);
+globalThis.WorkflowSpaceDiagnosticSchema = WorkflowSpaceDiagnosticSchema;

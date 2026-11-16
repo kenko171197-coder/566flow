@@ -1,1 +1,601 @@
-class MotionProjectRunner{static async run({run,profile,frames,maxWorkers,getVideoMonitorLimit,shouldStop,waitBeforeRetry,needsTranscript,transcribe,needsUpload,upload,needsFlow,generate,finalize,onStage=()=>{},getUploadLimit=null,reviewSubtitle=false}){if(!run||run.state!=="running"||!["parallel","sequential"].includes(run.executionMode)||!profile||profile.revision!==run.profileRevision||!Array.isArray(frames)||!frames.length||run.executionMode==="parallel"&&(!Number.isSafeInteger(maxWorkers)||maxWorkers<1)||[getVideoMonitorLimit,shouldStop,waitBeforeRetry,needsTranscript,transcribe,needsUpload,upload,needsFlow,generate,finalize,onStage].some(fn=>typeof fn!=="function"))throw new Error("MOTION_RUNNER_CONFIG_INVALID");const ordered=[...frames].sort((a,b)=>Number(a.start)-Number(b.start));if(new Set(ordered.map(frame=>frame?.frameId)).size!==ordered.length||ordered.some(frame=>typeof frame?.frameId!=="string"||!frame.frameId||!frame.run_id||!Number.isSafeInteger(frame.input_revision)||frame.input_revision<1||!Number.isFinite(frame.start)||!Number.isFinite(frame.end)||frame.end<=frame.start||frame.stages?.split?.state!=="ready"&&!frame.preparationError))throw new Error("MOTION_RUNNER_FRAME_INVALID");if(run.executionMode==="sequential")return this.runSequential({run,ordered,shouldStop,waitBeforeRetry,needsTranscript,transcribe,needsUpload,upload,needsFlow,generate,finalize,onStage});const prepared=await MotionParallelPreparation.run({frames:ordered,maxWorkers,transcriptMaxRetries:run.transcriptMaxRetries,retryEnabled:run.retryEnabled,needsTranscript,transcribe,needsUpload,upload,shouldStop,waitBeforeRetry,onStage,getUploadLimit:run.continuityEnabled===true?null:getUploadLimit});if(prepared.stopped)return{state:prepared.items.some(item=>item.upload==="needs_review")?"needs_review":"paused",stage:"preparation",items:prepared.items};if(reviewSubtitle)return{state:"paused",stage:"preparation",items:prepared.items,subtitleReview:true};const items=prepared.items,byId=new Map(items.map(item=>[item.frameId,item]));const preparedFrame=frame=>["ready","skipped"].includes(byId.get(frame.frameId).transcript)&&["ready","skipped"].includes(byId.get(frame.frameId).upload);if(run.continuityEnabled===true&&ordered.some(frame=>!preparedFrame(frame)))return{state:items.some(item=>item.upload==="needs_review"||item.transcript==="needs_review")?"needs_review":"failed",stage:"preparation",items,error:items.find(item=>item.uploadError||item.transcriptError)?.uploadError||items.find(item=>item.transcriptError)?.transcriptError||"MOTION_CONTINUITY_PREVIOUS_NOT_READY"};const pending=ordered.filter(frame=>preparedFrame(frame)&&needsFlow(frame));for(const frame of ordered)if(!preparedFrame(frame))byId.get(frame.frameId).flow="skipped";const active=new Set;let halted=false;let failure=null;const flowProgress=(frameId,state,error=null)=>{try{onStage({frameId,stage:"flow",state,error,completedCount:items.filter(item=>["ready","failed","needs_review","skipped"].includes(item.flow)).length,totalCount:ordered.length})}catch(_){}};const start=frame=>{byId.get(frame.frameId).flow="running";flowProgress(frame.frameId,"queued");const task=Promise.resolve().then(()=>generate(frame)).then(result=>{const state=["ready","needs_review","paused"].includes(result?.state)?result.state:"failed";Object.assign(byId.get(frame.frameId),{flow:state,state,error:result?.error||null,flowError:state==="ready"?null:result?.error||"MOTION_FLOW_FAILED"});if(state!=="ready"){failure||(failure={frameId:frame.frameId,state,error:result?.error||null});if(run.continuityEnabled===true)halted=true}flowProgress(frame.frameId,state,result?.error||null)},error=>{const item={frameId:frame.frameId,state:error?.dispatchStarted===false?"failed":"needs_review",error:error?.code||error?.message||"MOTION_FLOW_FAILED"};failure||(failure=item);Object.assign(byId.get(frame.frameId),item,{flow:item.state,flowError:item.error});if(run.continuityEnabled===true)halted=true;flowProgress(frame.frameId,item.state,item.error)}).finally(()=>active.delete(task));active.add(task)};while(pending.length||active.size){if(!halted&&!shouldStop()&&pending.length){let limit;try{limit=await getVideoMonitorLimit()}catch(error){halted=true;failure={state:"failed",error:error?.code||error?.message||"MOTION_FLOW_CONFIG_INVALID"}}if(!halted&&(!Number.isSafeInteger(limit)||limit<1)){halted=true;failure={state:"failed",error:"MOTION_FLOW_CONFIG_INVALID"}}if(!halted&&!shouldStop()){const effectiveLimit=run.continuityEnabled===true?1:limit;while(pending.length&&active.size<effectiveLimit&&!halted&&!shouldStop())start(pending.shift())}}if(active.size)await Promise.race(active);else if(halted||shouldStop()||!pending.length)break}if(active.size)await Promise.all(active);if(halted)return{state:items.some(item=>item.state==="needs_review")?"needs_review":items.some(item=>item.state==="failed")||failure?.state==="failed"?"failed":"paused",stage:"flow",failure,items};if(shouldStop())return{state:"paused",stage:"flow",items};const missing=ordered.find(frame=>!preparedFrame(frame));if(missing)return{state:items.some(item=>item.upload==="needs_review"||item.flow==="needs_review")?"needs_review":"failed",stage:"preparation",items,failure:{frameId:missing.frameId,state:"failed",error:byId.get(missing.frameId).transcriptError||byId.get(missing.frameId).uploadError||"MOTION_PREPARATION_UNVERIFIED"}};if(failure)return{state:items.some(item=>item.state==="needs_review")?"needs_review":"failed",stage:"flow",failure,items};let merged;try{merged=await finalize()}catch(error){return{state:"needs_review",stage:"final",items,error:error?.code||error?.message||"MOTION_FINAL_UNVERIFIED"}}return merged?.state==="ready"?{state:"ready",stage:"final",items,final:merged}:{state:["needs_review","paused"].includes(merged?.state)?merged.state:"failed",stage:"final",items,error:merged?.state==="paused"?null:merged?.error||"MOTION_FINAL_NOT_READY"}}static async runSequential({run,ordered,shouldStop,waitBeforeRetry,needsTranscript,transcribe,needsUpload,upload,needsFlow,generate,finalize,onStage}){if(!Number.isSafeInteger(run.transcriptMaxRetries)||run.transcriptMaxRetries<0||typeof run.retryEnabled!=="boolean")throw new Error("MOTION_RUNNER_CONFIG_INVALID");const items=[];const emit=(frameId,stage,state,error=null)=>{try{onStage({frameId,stage,state,error,totalCount:ordered.length,completedCount:items.filter(item=>stage in item&&!["pending","running"].includes(item[stage])).length})}catch(cause){console.warn("[MotionProjectRunner] stage callback:",cause?.message)}};frames:for(const frame of ordered){if(run.continuityEnabled===true&&items.some(item2=>Object.values(item2).some(value=>["failed","needs_review","sync_pending","persistence_error"].includes(value)))){const prior=items.find(item2=>item2.error||item2.flowError||item2.uploadError||item2.transcriptError);return{state:items.some(item2=>Object.values(item2).includes("needs_review"))?"needs_review":"failed",stage:"flow",items,error:prior?.error||prior?.flowError||prior?.uploadError||prior?.transcriptError||"MOTION_CONTINUITY_PREVIOUS_NOT_READY"}}const item={frameId:frame.frameId};items.push(item);if(frame.preparationError){item.transcript="failed";item.transcriptError=frame.preparationError.code;if(frame.preparationError.stage==="source")item.sourceError=frame.preparationError.code;emit(frame.frameId,frame.preparationError.stage,"failed",frame.preparationError.code);continue}for(const[stage,needed,action]of[["transcript",needsTranscript,transcribe],["upload",needsUpload,upload],["flow",needsFlow,generate]]){if(shouldStop())return{state:"paused",stage,items};if(!needed(frame)){item[stage]="skipped";continue}let result;let retries=0;do{emit(frame.frameId,stage,stage==="flow"?"queued":"running");try{result=await action(frame,{retryCount:retries})}catch(error){result={state:(error?.code||error?.message)==="MOTION_CANCELLED"?"paused":stage==="transcript"||error?.dispatchStarted===false?"failed":"needs_review",error:error?.code||error?.message||"MOTION_STAGE_FAILED",terminal:["MOTION_TRANSCRIPT_RETRY_EXHAUSTED","MOTION_RUN_FENCED","MOTION_RUN_NOT_RUNNING","ACCOUNT_SCOPE_CHANGED"].includes(error?.code||error?.message)}}if(result?.state==="ready"&&stage==="transcript"&&(result.synced===false||result.closePending===true||result.settlementPending===true))result={state:"sync_pending",error:result.closePending?"MOTION_WORKER_CLOSE_PENDING":result.settlementPending?"MOTION_SETTLEMENT_UNCONFIRMED":"MOTION_TRANSCRIPT_SYNC_PENDING"};if(result?.state==="failed"&&result.error==="MOTION_CANCELLED"&&shouldStop())result={...result,state:"paused"};if(result?.state==="paused"&&!shouldStop()&&!result.pauseConfirmed)result={...result,state:"failed"};if(result?.state==="ready")break;if(stage!=="transcript"||result?.state==="paused"||result?.state==="persistence_error"||result?.state==="sync_pending"||result?.terminal||!run.retryEnabled||retries>=run.transcriptMaxRetries||shouldStop())break;retries++;emit(frame.frameId,stage,"retrying",result?.error||null);try{await waitBeforeRetry({frameId:frame.frameId,stage,retryCount:retries})}catch(error){result={state:"failed",error:error?.code||error?.message||"MOTION_RETRY_WAIT_FAILED"};break}if(shouldStop())return{state:"paused",stage,items}}while(!shouldStop());item[stage]=result?.state||"failed";if(item[stage]!=="ready"){if(stage!=="flow")item.flow="skipped";if(stage==="transcript")item.upload="skipped";if(stage==="transcript"&&item[stage]==="sync_pending"){item.transcriptError=result.error||"MOTION_TRANSCRIPT_SYNC_PENDING";emit(frame.frameId,stage,"sync_pending",item.transcriptError);continue frames}if(stage==="transcript"&&item[stage]==="persistence_error"){const recovery={retryPersistence:result.retryPersistence||null};Object.defineProperties(recovery,{pendingTranscript:{enumerable:false,get:()=>result.pendingTranscript||null},worker:{enumerable:false,get:()=>result.worker||null}});Object.defineProperty(item,"transcriptRecovery",{enumerable:false,value:recovery});item.transcript="failed";item.transcriptError=result.error||"MOTION_PREPARATION_UNVERIFIED";emit(frame.frameId,stage,"failed",item.transcriptError);continue frames}const error=result?.error||"MOTION_PREPARATION_UNVERIFIED";emit(frame.frameId,stage,item[stage],error);const state=item[stage]==="needs_review"?stage==="transcript"?"failed":"needs_review":item[stage]==="paused"?"paused":"failed";item[`${stage}Error`]=error;item.error=error;item.state=state;if(state==="paused"&&(shouldStop()||result?.pauseConfirmed))return{state:"paused",stage,items,...result?.pauseConfirmed&&{pauseConfirmed:true,error:result.error}};continue frames}emit(frame.frameId,stage,"ready")}}if(shouldStop())return{state:"paused",stage:"final",items};const failed=items.find(item=>["failed","sync_pending","persistence_error","needs_review"].some(state=>item.transcript===state||item.upload===state||item.flow===state));if(failed)return{state:items.some(item=>item.upload==="needs_review"||item.flow==="needs_review")?"needs_review":"failed",stage:failed.transcriptError||failed.uploadError?"preparation":"flow",items,failure:{frameId:failed.frameId,state:"failed",error:failed.transcriptError||failed.uploadError||failed.flowError||failed.error}};let merged;try{merged=await finalize()}catch(error){return{state:"needs_review",stage:"final",items,error:error?.code||error?.message||"MOTION_FINAL_UNVERIFIED"}}return merged?.state==="ready"?{state:"ready",stage:"final",items,final:merged}:{state:["needs_review","paused"].includes(merged?.state)?merged.state:"failed",stage:"final",items,error:merged?.state==="paused"?null:merged?.error||"MOTION_FINAL_NOT_READY"}}}globalThis.MotionProjectRunner=MotionProjectRunner;
+class MotionProjectRunner {
+  static async run({
+    run,
+    profile,
+    frames,
+    maxWorkers,
+    getVideoMonitorLimit,
+    shouldStop,
+    waitBeforeRetry,
+    needsTranscript,
+    transcribe,
+    needsUpload,
+    upload,
+    needsFlow,
+    generate,
+    finalize,
+    onStage = () => {},
+    getUploadLimit = null,
+    reviewSubtitle = false,
+  }) {
+    if (
+      !run ||
+      run.state !== "running" ||
+      !["parallel", "sequential"].includes(run.executionMode) ||
+      !profile ||
+      profile.revision !== run.profileRevision ||
+      !Array.isArray(frames) ||
+      !frames.length ||
+      (run.executionMode === "parallel" &&
+        (!Number.isSafeInteger(maxWorkers) || maxWorkers < 1)) ||
+      [
+        getVideoMonitorLimit,
+        shouldStop,
+        waitBeforeRetry,
+        needsTranscript,
+        transcribe,
+        needsUpload,
+        upload,
+        needsFlow,
+        generate,
+        finalize,
+        onStage,
+      ].some((fn) => typeof fn !== "function")
+    )
+      throw new Error("MOTION_RUNNER_CONFIG_INVALID");
+    const ordered = [...frames].sort(
+      (a, b) => Number(a.start) - Number(b.start),
+    );
+    if (
+      new Set(ordered.map((frame) => frame?.frameId)).size !== ordered.length ||
+      ordered.some(
+        (frame) =>
+          typeof frame?.frameId !== "string" ||
+          !frame.frameId ||
+          !frame.run_id ||
+          !Number.isSafeInteger(frame.input_revision) ||
+          frame.input_revision < 1 ||
+          !Number.isFinite(frame.start) ||
+          !Number.isFinite(frame.end) ||
+          frame.end <= frame.start ||
+          (frame.stages?.split?.state !== "ready" && !frame.preparationError),
+      )
+    )
+      throw new Error("MOTION_RUNNER_FRAME_INVALID");
+    if (run.executionMode === "sequential")
+      return this.runSequential({
+        run,
+        ordered,
+        shouldStop,
+        waitBeforeRetry,
+        needsTranscript,
+        transcribe,
+        needsUpload,
+        upload,
+        needsFlow,
+        generate,
+        finalize,
+        onStage,
+      });
+    const prepared = await MotionParallelPreparation.run({
+      frames: ordered,
+      maxWorkers,
+      transcriptMaxRetries: run.transcriptMaxRetries,
+      retryEnabled: run.retryEnabled,
+      needsTranscript,
+      transcribe,
+      needsUpload,
+      upload,
+      shouldStop,
+      waitBeforeRetry,
+      onStage,
+      getUploadLimit: run.continuityEnabled === true ? null : getUploadLimit,
+    });
+    if (prepared.stopped)
+      return {
+        state: prepared.items.some((item) => item.upload === "needs_review")
+          ? "needs_review"
+          : "paused",
+        stage: "preparation",
+        items: prepared.items,
+      };
+    if (reviewSubtitle)
+      return {
+        state: "paused",
+        stage: "preparation",
+        items: prepared.items,
+        subtitleReview: true,
+      };
+    const items = prepared.items,
+      byId = new Map(items.map((item) => [item.frameId, item]));
+    const preparedFrame = (frame) =>
+      ["ready", "skipped"].includes(byId.get(frame.frameId).transcript) &&
+      ["ready", "skipped"].includes(byId.get(frame.frameId).upload);
+    if (
+      run.continuityEnabled === true &&
+      ordered.some((frame) => !preparedFrame(frame))
+    )
+      return {
+        state: items.some(
+          (item) =>
+            item.upload === "needs_review" ||
+            item.transcript === "needs_review",
+        )
+          ? "needs_review"
+          : "failed",
+        stage: "preparation",
+        items,
+        error:
+          items.find((item) => item.uploadError || item.transcriptError)
+            ?.uploadError ||
+          items.find((item) => item.transcriptError)?.transcriptError ||
+          "MOTION_CONTINUITY_PREVIOUS_NOT_READY",
+      };
+    const pending = ordered.filter(
+      (frame) => preparedFrame(frame) && needsFlow(frame),
+    );
+    for (const frame of ordered)
+      if (!preparedFrame(frame)) byId.get(frame.frameId).flow = "skipped";
+    const active = new Set();
+    let halted = false;
+    let failure = null;
+    const flowProgress = (frameId, state, error = null) => {
+      try {
+        onStage({
+          frameId,
+          stage: "flow",
+          state,
+          error,
+          completedCount: items.filter((item) =>
+            ["ready", "failed", "needs_review", "skipped"].includes(item.flow),
+          ).length,
+          totalCount: ordered.length,
+        });
+      } catch (_) {}
+    };
+    const start = (frame) => {
+      byId.get(frame.frameId).flow = "running";
+      flowProgress(frame.frameId, "queued");
+      const task = Promise.resolve()
+        .then(() => generate(frame))
+        .then(
+          (result) => {
+            const state = ["ready", "needs_review", "paused"].includes(
+              result?.state,
+            )
+              ? result.state
+              : "failed";
+            Object.assign(byId.get(frame.frameId), {
+              flow: state,
+              state,
+              error: result?.error || null,
+              flowError:
+                state === "ready"
+                  ? null
+                  : result?.error || "MOTION_FLOW_FAILED",
+            });
+            if (state !== "ready") {
+              failure ||
+                (failure = {
+                  frameId: frame.frameId,
+                  state,
+                  error: result?.error || null,
+                });
+              if (run.continuityEnabled === true) halted = true;
+            }
+            flowProgress(frame.frameId, state, result?.error || null);
+          },
+          (error) => {
+            const item = {
+              frameId: frame.frameId,
+              state:
+                error?.dispatchStarted === false ? "failed" : "needs_review",
+              error: error?.code || error?.message || "MOTION_FLOW_FAILED",
+            };
+            failure || (failure = item);
+            Object.assign(byId.get(frame.frameId), item, {
+              flow: item.state,
+              flowError: item.error,
+            });
+            if (run.continuityEnabled === true) halted = true;
+            flowProgress(frame.frameId, item.state, item.error);
+          },
+        )
+        .finally(() => active.delete(task));
+      active.add(task);
+    };
+    while (pending.length || active.size) {
+      if (!halted && !shouldStop() && pending.length) {
+        let limit;
+        try {
+          limit = await getVideoMonitorLimit();
+        } catch (error) {
+          halted = true;
+          failure = {
+            state: "failed",
+            error:
+              error?.code || error?.message || "MOTION_FLOW_CONFIG_INVALID",
+          };
+        }
+        if (!halted && (!Number.isSafeInteger(limit) || limit < 1)) {
+          halted = true;
+          failure = { state: "failed", error: "MOTION_FLOW_CONFIG_INVALID" };
+        }
+        if (!halted && !shouldStop()) {
+          const effectiveLimit = run.continuityEnabled === true ? 1 : limit;
+          while (
+            pending.length &&
+            active.size < effectiveLimit &&
+            !halted &&
+            !shouldStop()
+          )
+            start(pending.shift());
+        }
+      }
+      if (active.size) await Promise.race(active);
+      else if (halted || shouldStop() || !pending.length) break;
+    }
+    if (active.size) await Promise.all(active);
+    if (halted)
+      return {
+        state: items.some((item) => item.state === "needs_review")
+          ? "needs_review"
+          : items.some((item) => item.state === "failed") ||
+              failure?.state === "failed"
+            ? "failed"
+            : "paused",
+        stage: "flow",
+        failure,
+        items,
+      };
+    if (shouldStop()) return { state: "paused", stage: "flow", items };
+    const missing = ordered.find((frame) => !preparedFrame(frame));
+    if (missing)
+      return {
+        state: items.some(
+          (item) =>
+            item.upload === "needs_review" || item.flow === "needs_review",
+        )
+          ? "needs_review"
+          : "failed",
+        stage: "preparation",
+        items,
+        failure: {
+          frameId: missing.frameId,
+          state: "failed",
+          error:
+            byId.get(missing.frameId).transcriptError ||
+            byId.get(missing.frameId).uploadError ||
+            "MOTION_PREPARATION_UNVERIFIED",
+        },
+      };
+    if (failure)
+      return {
+        state: items.some((item) => item.state === "needs_review")
+          ? "needs_review"
+          : "failed",
+        stage: "flow",
+        failure,
+        items,
+      };
+    let merged;
+    try {
+      merged = await finalize();
+    } catch (error) {
+      return {
+        state: "needs_review",
+        stage: "final",
+        items,
+        error: error?.code || error?.message || "MOTION_FINAL_UNVERIFIED",
+      };
+    }
+    return merged?.state === "ready"
+      ? { state: "ready", stage: "final", items, final: merged }
+      : {
+          state: ["needs_review", "paused"].includes(merged?.state)
+            ? merged.state
+            : "failed",
+          stage: "final",
+          items,
+          error:
+            merged?.state === "paused"
+              ? null
+              : merged?.error || "MOTION_FINAL_NOT_READY",
+        };
+  }
+  static async runSequential({
+    run,
+    ordered,
+    shouldStop,
+    waitBeforeRetry,
+    needsTranscript,
+    transcribe,
+    needsUpload,
+    upload,
+    needsFlow,
+    generate,
+    finalize,
+    onStage,
+  }) {
+    if (
+      !Number.isSafeInteger(run.transcriptMaxRetries) ||
+      run.transcriptMaxRetries < 0 ||
+      typeof run.retryEnabled !== "boolean"
+    )
+      throw new Error("MOTION_RUNNER_CONFIG_INVALID");
+    const items = [];
+    const emit = (frameId, stage, state, error = null) => {
+      try {
+        onStage({
+          frameId,
+          stage,
+          state,
+          error,
+          totalCount: ordered.length,
+          completedCount: items.filter(
+            (item) =>
+              stage in item && !["pending", "running"].includes(item[stage]),
+          ).length,
+        });
+      } catch (cause) {
+        console.warn("[MotionProjectRunner] stage callback:", cause?.message);
+      }
+    };
+    frames: for (const frame of ordered) {
+      if (
+        run.continuityEnabled === true &&
+        items.some((item2) =>
+          Object.values(item2).some((value) =>
+            [
+              "failed",
+              "needs_review",
+              "sync_pending",
+              "persistence_error",
+            ].includes(value),
+          ),
+        )
+      ) {
+        const prior = items.find(
+          (item2) =>
+            item2.error ||
+            item2.flowError ||
+            item2.uploadError ||
+            item2.transcriptError,
+        );
+        return {
+          state: items.some((item2) =>
+            Object.values(item2).includes("needs_review"),
+          )
+            ? "needs_review"
+            : "failed",
+          stage: "flow",
+          items,
+          error:
+            prior?.error ||
+            prior?.flowError ||
+            prior?.uploadError ||
+            prior?.transcriptError ||
+            "MOTION_CONTINUITY_PREVIOUS_NOT_READY",
+        };
+      }
+      const item = { frameId: frame.frameId };
+      items.push(item);
+      if (frame.preparationError) {
+        item.transcript = "failed";
+        item.transcriptError = frame.preparationError.code;
+        if (frame.preparationError.stage === "source")
+          item.sourceError = frame.preparationError.code;
+        emit(
+          frame.frameId,
+          frame.preparationError.stage,
+          "failed",
+          frame.preparationError.code,
+        );
+        continue;
+      }
+      for (const [stage, needed, action] of [
+        ["transcript", needsTranscript, transcribe],
+        ["upload", needsUpload, upload],
+        ["flow", needsFlow, generate],
+      ]) {
+        if (shouldStop()) return { state: "paused", stage, items };
+        if (!needed(frame)) {
+          item[stage] = "skipped";
+          continue;
+        }
+        let result;
+        let retries = 0;
+        do {
+          emit(frame.frameId, stage, stage === "flow" ? "queued" : "running");
+          try {
+            result = await action(frame, { retryCount: retries });
+          } catch (error) {
+            result = {
+              state:
+                (error?.code || error?.message) === "MOTION_CANCELLED"
+                  ? "paused"
+                  : stage === "transcript" || error?.dispatchStarted === false
+                    ? "failed"
+                    : "needs_review",
+              error: error?.code || error?.message || "MOTION_STAGE_FAILED",
+              terminal: [
+                "MOTION_TRANSCRIPT_RETRY_EXHAUSTED",
+                "MOTION_RUN_FENCED",
+                "MOTION_RUN_NOT_RUNNING",
+                "ACCOUNT_SCOPE_CHANGED",
+              ].includes(error?.code || error?.message),
+            };
+          }
+          if (
+            result?.state === "ready" &&
+            stage === "transcript" &&
+            (result.synced === false ||
+              result.closePending === true ||
+              result.settlementPending === true)
+          )
+            result = {
+              state: "sync_pending",
+              error: result.closePending
+                ? "MOTION_WORKER_CLOSE_PENDING"
+                : result.settlementPending
+                  ? "MOTION_SETTLEMENT_UNCONFIRMED"
+                  : "MOTION_TRANSCRIPT_SYNC_PENDING",
+            };
+          if (
+            result?.state === "failed" &&
+            result.error === "MOTION_CANCELLED" &&
+            shouldStop()
+          )
+            result = { ...result, state: "paused" };
+          if (
+            result?.state === "paused" &&
+            !shouldStop() &&
+            !result.pauseConfirmed
+          )
+            result = { ...result, state: "failed" };
+          if (result?.state === "ready") break;
+          if (
+            stage !== "transcript" ||
+            result?.state === "paused" ||
+            result?.state === "persistence_error" ||
+            result?.state === "sync_pending" ||
+            result?.terminal ||
+            !run.retryEnabled ||
+            retries >= run.transcriptMaxRetries ||
+            shouldStop()
+          )
+            break;
+          retries++;
+          emit(frame.frameId, stage, "retrying", result?.error || null);
+          try {
+            await waitBeforeRetry({
+              frameId: frame.frameId,
+              stage,
+              retryCount: retries,
+            });
+          } catch (error) {
+            result = {
+              state: "failed",
+              error:
+                error?.code || error?.message || "MOTION_RETRY_WAIT_FAILED",
+            };
+            break;
+          }
+          if (shouldStop()) return { state: "paused", stage, items };
+        } while (!shouldStop());
+        item[stage] = result?.state || "failed";
+        if (item[stage] !== "ready") {
+          if (stage !== "flow") item.flow = "skipped";
+          if (stage === "transcript") item.upload = "skipped";
+          if (stage === "transcript" && item[stage] === "sync_pending") {
+            item.transcriptError =
+              result.error || "MOTION_TRANSCRIPT_SYNC_PENDING";
+            emit(frame.frameId, stage, "sync_pending", item.transcriptError);
+            continue frames;
+          }
+          if (stage === "transcript" && item[stage] === "persistence_error") {
+            const recovery = {
+              retryPersistence: result.retryPersistence || null,
+            };
+            Object.defineProperties(recovery, {
+              pendingTranscript: {
+                enumerable: false,
+                get: () => result.pendingTranscript || null,
+              },
+              worker: { enumerable: false, get: () => result.worker || null },
+            });
+            Object.defineProperty(item, "transcriptRecovery", {
+              enumerable: false,
+              value: recovery,
+            });
+            item.transcript = "failed";
+            item.transcriptError =
+              result.error || "MOTION_PREPARATION_UNVERIFIED";
+            emit(frame.frameId, stage, "failed", item.transcriptError);
+            continue frames;
+          }
+          const error = result?.error || "MOTION_PREPARATION_UNVERIFIED";
+          emit(frame.frameId, stage, item[stage], error);
+          const state =
+            item[stage] === "needs_review"
+              ? stage === "transcript"
+                ? "failed"
+                : "needs_review"
+              : item[stage] === "paused"
+                ? "paused"
+                : "failed";
+          item[`${stage}Error`] = error;
+          item.error = error;
+          item.state = state;
+          if (state === "paused" && (shouldStop() || result?.pauseConfirmed))
+            return {
+              state: "paused",
+              stage,
+              items,
+              ...(result?.pauseConfirmed && {
+                pauseConfirmed: true,
+                error: result.error,
+              }),
+            };
+          continue frames;
+        }
+        emit(frame.frameId, stage, "ready");
+      }
+    }
+    if (shouldStop()) return { state: "paused", stage: "final", items };
+    const failed = items.find((item) =>
+      ["failed", "sync_pending", "persistence_error", "needs_review"].some(
+        (state) =>
+          item.transcript === state ||
+          item.upload === state ||
+          item.flow === state,
+      ),
+    );
+    if (failed)
+      return {
+        state: items.some(
+          (item) =>
+            item.upload === "needs_review" || item.flow === "needs_review",
+        )
+          ? "needs_review"
+          : "failed",
+        stage:
+          failed.transcriptError || failed.uploadError ? "preparation" : "flow",
+        items,
+        failure: {
+          frameId: failed.frameId,
+          state: "failed",
+          error:
+            failed.transcriptError ||
+            failed.uploadError ||
+            failed.flowError ||
+            failed.error,
+        },
+      };
+    let merged;
+    try {
+      merged = await finalize();
+    } catch (error) {
+      return {
+        state: "needs_review",
+        stage: "final",
+        items,
+        error: error?.code || error?.message || "MOTION_FINAL_UNVERIFIED",
+      };
+    }
+    return merged?.state === "ready"
+      ? { state: "ready", stage: "final", items, final: merged }
+      : {
+          state: ["needs_review", "paused"].includes(merged?.state)
+            ? merged.state
+            : "failed",
+          stage: "final",
+          items,
+          error:
+            merged?.state === "paused"
+              ? null
+              : merged?.error || "MOTION_FINAL_NOT_READY",
+        };
+  }
+}
+globalThis.MotionProjectRunner = MotionProjectRunner;

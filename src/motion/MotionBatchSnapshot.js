@@ -1,1 +1,132 @@
-class MotionBatchSnapshot{static async classify({data,userId,flowProjectId,artifactStore}){if(!data||data.flow_project_id!==flowProjectId||!flowProjectId||!userId)throw new Error("MOTION_BATCH_SCOPE_MISMATCH");if(!Array.isArray(data.items)||!Array.isArray(data.final_candidates)||!Number.isSafeInteger(data.disabled_count)||data.disabled_count<0)throw new Error("MOTION_BATCH_SNAPSHOT_INVALID");const records=[...data.items.map(item=>({item,final:false})),...data.final_candidates.map(item=>({item,final:true}))];const ids=new Set;const positions=new Set;for(const{item}of records){if(!item||typeof item.tool_project_id!=="string"||!item.tool_project_id||!Number.isSafeInteger(item.position)||item.position<0||!Number.isSafeInteger(item.revision)||item.revision<1||ids.has(item.tool_project_id)||positions.has(item.position))throw new Error("MOTION_BATCH_SNAPSHOT_INVALID");ids.add(item.tool_project_id);positions.add(item.position)}records.sort((a,b)=>a.item.position-b.item.position);const entries=[];for(const{item,final:hasFinal}of records){let state="eligible";const generationData={source_revision:item.source_revision,requires_resplit:item.requires_resplit,generation_completion:item.generation_completion,frames:Object.fromEntries(Object.entries(item.frames||{}).map(([id,frame])=>[id,{run_id:frame.run_id,input_revision:frame.input_revision,stages:{persist:{state:frame.persist_state,artifact_id:frame.artifact_id}}}]))};if(globalThis.MotionRunJournal?.isGenerationComplete?.(generationData)){const local=await Promise.all(Object.entries(item.frames).map(([frameId,frame])=>artifactStore.get({userId,toolProjectId:item.tool_project_id,sourceRevision:item.source_revision,frameId,kind:"generated_clip",artifactRevision:frame.input_revision})));state=local.every(record=>record?.blob?.size>0&&record.flowProjectId===flowProjectId)?"complete":"final_missing_local"}else if(hasFinal&&item.final&&item.final?.stale!==true){const final=item.final;const frames=item.frames&&typeof item.frames==="object"?item.frames:{};const ids2=Object.keys(frames);const finalIds=Array.isArray(final?.frame_ids)?final.frame_ids:[];const valid=item.requires_resplit!==true&&Number.isSafeInteger(item.source_revision)&&item.source_revision>0&&final?.source_revision===item.source_revision&&Number.isSafeInteger(final?.artifact_revision)&&final.artifact_revision>0&&ids2.length>0&&finalIds.length===ids2.length&&new Set(finalIds).size===ids2.length&&finalIds.every(id=>frames[id]?.persist_state==="ready"&&Number.isSafeInteger(frames[id]?.input_revision)&&frames[id].input_revision>0);if(!valid)state="final_needs_review";else{if(typeof artifactStore?.get!=="function")throw new Error("MOTION_ARTIFACT_STORE_UNAVAILABLE");const artifact=await artifactStore.get({userId,toolProjectId:item.tool_project_id,sourceRevision:item.source_revision,kind:"merged_video",artifactRevision:final.artifact_revision});state=artifact?.blob?.size>0&&artifact.flowProjectId===flowProjectId?"complete":"final_missing_local"}}entries.push({tool_project_id:item.tool_project_id,revision:item.revision,position:item.position,name:item.name||"",state})}return{flowProjectId,disabledCount:data.disabled_count,entries}}}globalThis.MotionBatchSnapshot=MotionBatchSnapshot;
+class MotionBatchSnapshot {
+  static async classify({ data, userId, flowProjectId, artifactStore }) {
+    if (
+      !data ||
+      data.flow_project_id !== flowProjectId ||
+      !flowProjectId ||
+      !userId
+    )
+      throw new Error("MOTION_BATCH_SCOPE_MISMATCH");
+    if (
+      !Array.isArray(data.items) ||
+      !Array.isArray(data.final_candidates) ||
+      !Number.isSafeInteger(data.disabled_count) ||
+      data.disabled_count < 0
+    )
+      throw new Error("MOTION_BATCH_SNAPSHOT_INVALID");
+    const records = [
+      ...data.items.map((item) => ({ item, final: false })),
+      ...data.final_candidates.map((item) => ({ item, final: true })),
+    ];
+    const ids = new Set();
+    const positions = new Set();
+    for (const { item } of records) {
+      if (
+        !item ||
+        typeof item.tool_project_id !== "string" ||
+        !item.tool_project_id ||
+        !Number.isSafeInteger(item.position) ||
+        item.position < 0 ||
+        !Number.isSafeInteger(item.revision) ||
+        item.revision < 1 ||
+        ids.has(item.tool_project_id) ||
+        positions.has(item.position)
+      )
+        throw new Error("MOTION_BATCH_SNAPSHOT_INVALID");
+      ids.add(item.tool_project_id);
+      positions.add(item.position);
+    }
+    records.sort((a, b) => a.item.position - b.item.position);
+    const entries = [];
+    for (const { item, final: hasFinal } of records) {
+      let state = "eligible";
+      const generationData = {
+        source_revision: item.source_revision,
+        requires_resplit: item.requires_resplit,
+        generation_completion: item.generation_completion,
+        frames: Object.fromEntries(
+          Object.entries(item.frames || {}).map(([id, frame]) => [
+            id,
+            {
+              run_id: frame.run_id,
+              input_revision: frame.input_revision,
+              stages: {
+                persist: {
+                  state: frame.persist_state,
+                  artifact_id: frame.artifact_id,
+                },
+              },
+            },
+          ]),
+        ),
+      };
+      if (globalThis.MotionRunJournal?.isGenerationComplete?.(generationData)) {
+        const local = await Promise.all(
+          Object.entries(item.frames).map(([frameId, frame]) =>
+            artifactStore.get({
+              userId,
+              toolProjectId: item.tool_project_id,
+              sourceRevision: item.source_revision,
+              frameId,
+              kind: "generated_clip",
+              artifactRevision: frame.input_revision,
+            }),
+          ),
+        );
+        state = local.every(
+          (record) =>
+            record?.blob?.size > 0 && record.flowProjectId === flowProjectId,
+        )
+          ? "complete"
+          : "final_missing_local";
+      } else if (hasFinal && item.final && item.final?.stale !== true) {
+        const final = item.final;
+        const frames =
+          item.frames && typeof item.frames === "object" ? item.frames : {};
+        const ids2 = Object.keys(frames);
+        const finalIds = Array.isArray(final?.frame_ids) ? final.frame_ids : [];
+        const valid =
+          item.requires_resplit !== true &&
+          Number.isSafeInteger(item.source_revision) &&
+          item.source_revision > 0 &&
+          final?.source_revision === item.source_revision &&
+          Number.isSafeInteger(final?.artifact_revision) &&
+          final.artifact_revision > 0 &&
+          ids2.length > 0 &&
+          finalIds.length === ids2.length &&
+          new Set(finalIds).size === ids2.length &&
+          finalIds.every(
+            (id) =>
+              frames[id]?.persist_state === "ready" &&
+              Number.isSafeInteger(frames[id]?.input_revision) &&
+              frames[id].input_revision > 0,
+          );
+        if (!valid) state = "final_needs_review";
+        else {
+          if (typeof artifactStore?.get !== "function")
+            throw new Error("MOTION_ARTIFACT_STORE_UNAVAILABLE");
+          const artifact = await artifactStore.get({
+            userId,
+            toolProjectId: item.tool_project_id,
+            sourceRevision: item.source_revision,
+            kind: "merged_video",
+            artifactRevision: final.artifact_revision,
+          });
+          state =
+            artifact?.blob?.size > 0 && artifact.flowProjectId === flowProjectId
+              ? "complete"
+              : "final_missing_local";
+        }
+      }
+      entries.push({
+        tool_project_id: item.tool_project_id,
+        revision: item.revision,
+        position: item.position,
+        name: item.name || "",
+        state,
+      });
+    }
+    return { flowProjectId, disabledCount: data.disabled_count, entries };
+  }
+}
+globalThis.MotionBatchSnapshot = MotionBatchSnapshot;

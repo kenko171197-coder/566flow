@@ -1,1 +1,283 @@
-class MotionFullAudioTranscript{static manifest(project){const duration=Number(project?.data_json?.source?.duration);const rows=Object.entries(project?.data_json?.frames||{}).sort((a,b)=>Number(a[1].start)-Number(b[1].start));if(!Number.isFinite(duration)||duration<=0||!rows.length||rows.length>120)throw new Error("FULL_AUDIO_MANIFEST_INVALID");const frames=rows.map(([frame_id,frame],i)=>{if(!/^[A-Za-z0-9_-]{1,80}$/.test(frame_id)||frame.stages?.split?.state!=="ready"||!Number.isFinite(frame.start)||!Number.isFinite(frame.end)||frame.end<=frame.start||(i?Math.abs(frame.start-rows[i-1][1].end)>.0015:frame.start!==0))throw new Error("FULL_AUDIO_MANIFEST_INVALID");return{frame_id,order:i+1,start_seconds:frame.start,end_seconds:frame.end}});if(Math.abs(frames.at(-1).end_seconds-duration)>.0015)throw new Error("FULL_AUDIO_MANIFEST_INVALID");const audio=[{frame_id:"full_source",order:1,file_name:"frame_full_source.wav"}];return{audio_files:audio,duration_seconds:duration,frames}}static parseResponse(text){const raw=String(text||"").trim();const begin="TOBY_MOTION_JSON_BEGIN",end="TOBY_MOTION_JSON_END";const beginMarkers=raw.split(begin).length-1,endMarkers=raw.split(end).length-1;let body=raw;const fence=/^```(?:text|json|plaintext)?\s*\n([\s\S]*?)\n```$/i.exec(body);if(fence)body=fence[1].trim();body=body.replace(/^(?:plaintext|text|json)(?=\s*(?:\{|TOBY_MOTION_JSON_BEGIN))\s*/i,"").trim();const invalidTransport=()=>{const error=new Error("INVALID_TRANSPORT_FRAME");error.validationDiagnostic={operation:"transport_invalid",textLength:raw.length,beginMarkers,endMarkers};throw error};if(!body.startsWith("{")){const first=body.indexOf(begin),last=body.indexOf(end);if(first<0||last<=first||beginMarkers!==1||endMarkers!==1)invalidTransport();const outside=body.slice(0,first)+body.slice(last+end.length);if(/[{}\[\]]/.test(outside))invalidTransport();body=body.slice(first+begin.length,last).trim()}let data;try{data=JSON.parse(body)}catch(_){throw new Error("FULL_AUDIO_RESPONSE_INVALID")}return data}static validate(response,manifest,translate,{requireTimeline=false}={}){const actual=response.motionAudioManifest||manifest.audio_files;if(!Array.isArray(actual)||actual.length!==1||actual[0]?.frame_id!=="full_source"||actual[0]?.order!==1||!/^frame_full_source(?:\s*\(\d+\))?\.wav$/i.test(actual[0]?.file_name||""))throw new Error("MOTION_AUDIO_IDENTITY_UNVERIFIED");const data=this.parseResponse(response.text);if(!data||!["audio_file,frames","audio_file,frames,full_transcript"].includes(Object.keys(data).sort().join(","))||data.audio_file!==actual[0].file_name||Object.hasOwn(data,"full_transcript")&&typeof data.full_transcript!=="string"||!Array.isArray(data.frames)||data.frames.length!==manifest.frames.length)throw new Error("FULL_AUDIO_RESPONSE_INVALID");const fields="detected_language,end_seconds,frame_id,has_speech,order,start_seconds,transcript,translated_text";data.frames.forEach((frame,i)=>{const expected=manifest.frames[i];if(!frame||Object.keys(frame).filter(key=>key!=="speech_timeline").sort().join(",")!==fields||["frame_id","order","start_seconds","end_seconds"].some(key=>frame[key]!==expected[key])||typeof frame.has_speech!=="boolean"||typeof frame.transcript!=="string"||frame.transcript.length>12e3||frame.has_speech!==!!frame.transcript.trim()||typeof frame.translated_text!=="string"||frame.translated_text.length>12e3||typeof frame.detected_language!=="string"||!/^(?:[A-Za-z][A-Za-z0-9-]{0,31})?$/.test(frame.detected_language)||!frame.has_speech&&(frame.translated_text.trim()||frame.detected_language)||!translate&&frame.translated_text!==""||translate&&frame.has_speech&&!frame.translated_text.trim())throw new Error("FULL_AUDIO_FRAME_INVALID");if(requireTimeline||frame.speech_timeline!=null)MotionTranscriptContract.timeline(frame.speech_timeline,{transcript:frame.transcript,translatedText:frame.translated_text,hasSpeech:frame.has_speech,duration:expected.end_seconds-expected.start_seconds,required:requireTimeline})});return data}static async audio({scope,duration,assertScope,signal,shouldStop=()=>false}){const check=async()=>{await assertScope();if(signal?.aborted||shouldStop())throw new Error("MOTION_CANCELLED")};await check();const cached=await MotionArtifactStore.get({...scope,frameId:"project",kind:"source_full_audio"});await check();if(cached?.blob){if(cached.flowProjectId!==scope.flowProjectId||cached.blob.type!=="audio/wav"||!Number.isFinite(cached.duration)||Math.abs(cached.duration-duration)>.1)throw new Error("MOTION_AUDIO_SCOPE_MISMATCH");console.info("[MotionFullAudio]",JSON.stringify({toolProjectId:scope.toolProjectId,sourceRevision:scope.sourceRevision,stage:"audio_cached",duration}));return cached.blob}const source=await MotionArtifactStore.get({...scope,frameId:"project",kind:"source_video"});await check();if(!source?.blob||source.flowProjectId!==scope.flowProjectId)throw new Error("FULL_AUDIO_SOURCE_MISSING");const timeout=globalThis.MotionMergeTask?.timeoutMs?.();if(!Number.isSafeInteger(timeout)||timeout<1)throw new Error("MOTION_MEDIA_TIMEOUT_CONFIG_INVALID");const id=crypto.randomUUID();const blob=await new Promise((resolve,reject)=>{const worker=new Worker(chrome.runtime.getURL("src/core/video-split-worker.js"));let settled=false;const finish=(error,value)=>{if(settled)return;settled=true;clearTimeout(timer);clearInterval(poll);signal?.removeEventListener("abort",stop);worker.onmessage=worker.onerror=null;worker.terminate();error?reject(error):resolve(value)};const stop=()=>finish(new Error("MOTION_CANCELLED"));const timer=setTimeout(()=>finish(new Error("MOTION_SPLIT_TIMEOUT")),timeout);const poll=setInterval(()=>{if(shouldStop())stop()},200);signal?.addEventListener("abort",stop,{once:true});if(signal?.aborted){stop();return}worker.onerror=event=>finish(new Error(event.message||"MOTION_SPLIT_FAILED"));worker.onmessage=({data})=>{if(data?.id!==id)return;if(data.type==="error"){finish(new Error(data.code));return}if(data.type!=="audio")return;if(!(data.blob instanceof Blob)||!data.blob.size||data.blob.type!=="audio/wav"||data.audioState!=="audio_present"||data.start!==0||!Number.isFinite(data.end)||Math.abs(data.end-duration)>.1||!Number.isFinite(data.duration)||Math.abs(data.duration-duration)>.1)finish(new Error("AUDIO_BOUNDARY_MISMATCH"));else finish(null,data.blob)};try{worker.postMessage({type:"extract_full_audio",id,blob:source.blob})}catch(error){finish(error)}});await check();await MotionArtifactStore.put({...scope,frameId:"project",kind:"source_full_audio",blob,duration});await check();console.info("[MotionFullAudio]",JSON.stringify({toolProjectId:scope.toolProjectId,sourceRevision:scope.sourceRevision,stage:"audio_created",duration}));return blob}}globalThis.MotionFullAudioTranscript=MotionFullAudioTranscript;
+class MotionFullAudioTranscript {
+  static manifest(project) {
+    const duration = Number(project?.data_json?.source?.duration);
+    const rows = Object.entries(project?.data_json?.frames || {}).sort(
+      (a, b) => Number(a[1].start) - Number(b[1].start),
+    );
+    if (
+      !Number.isFinite(duration) ||
+      duration <= 0 ||
+      !rows.length ||
+      rows.length > 120
+    )
+      throw new Error("FULL_AUDIO_MANIFEST_INVALID");
+    const frames = rows.map(([frame_id, frame], i) => {
+      if (
+        !/^[A-Za-z0-9_-]{1,80}$/.test(frame_id) ||
+        frame.stages?.split?.state !== "ready" ||
+        !Number.isFinite(frame.start) ||
+        !Number.isFinite(frame.end) ||
+        frame.end <= frame.start ||
+        (i
+          ? Math.abs(frame.start - rows[i - 1][1].end) > 0.0015
+          : frame.start !== 0)
+      )
+        throw new Error("FULL_AUDIO_MANIFEST_INVALID");
+      return {
+        frame_id,
+        order: i + 1,
+        start_seconds: frame.start,
+        end_seconds: frame.end,
+      };
+    });
+    if (Math.abs(frames.at(-1).end_seconds - duration) > 0.0015)
+      throw new Error("FULL_AUDIO_MANIFEST_INVALID");
+    const audio = [
+      { frame_id: "full_source", order: 1, file_name: "frame_full_source.wav" },
+    ];
+    return { audio_files: audio, duration_seconds: duration, frames };
+  }
+  static parseResponse(text) {
+    const raw = String(text || "").trim();
+    const begin = "TOBY_MOTION_JSON_BEGIN",
+      end = "TOBY_MOTION_JSON_END";
+    const beginMarkers = raw.split(begin).length - 1,
+      endMarkers = raw.split(end).length - 1;
+    let body = raw;
+    const fence = /^```(?:text|json|plaintext)?\s*\n([\s\S]*?)\n```$/i.exec(
+      body,
+    );
+    if (fence) body = fence[1].trim();
+    body = body
+      .replace(
+        /^(?:plaintext|text|json)(?=\s*(?:\{|TOBY_MOTION_JSON_BEGIN))\s*/i,
+        "",
+      )
+      .trim();
+    const invalidTransport = () => {
+      const error = new Error("INVALID_TRANSPORT_FRAME");
+      error.validationDiagnostic = {
+        operation: "transport_invalid",
+        textLength: raw.length,
+        beginMarkers,
+        endMarkers,
+      };
+      throw error;
+    };
+    if (!body.startsWith("{")) {
+      const first = body.indexOf(begin),
+        last = body.indexOf(end);
+      if (first < 0 || last <= first || beginMarkers !== 1 || endMarkers !== 1)
+        invalidTransport();
+      const outside = body.slice(0, first) + body.slice(last + end.length);
+      if (/[{}\[\]]/.test(outside)) invalidTransport();
+      body = body.slice(first + begin.length, last).trim();
+    }
+    let data;
+    try {
+      data = JSON.parse(body);
+    } catch (_) {
+      throw new Error("FULL_AUDIO_RESPONSE_INVALID");
+    }
+    return data;
+  }
+  static validate(
+    response,
+    manifest,
+    translate,
+    { requireTimeline = false } = {},
+  ) {
+    const actual = response.motionAudioManifest || manifest.audio_files;
+    if (
+      !Array.isArray(actual) ||
+      actual.length !== 1 ||
+      actual[0]?.frame_id !== "full_source" ||
+      actual[0]?.order !== 1 ||
+      !/^frame_full_source(?:\s*\(\d+\))?\.wav$/i.test(
+        actual[0]?.file_name || "",
+      )
+    )
+      throw new Error("MOTION_AUDIO_IDENTITY_UNVERIFIED");
+    const data = this.parseResponse(response.text);
+    if (
+      !data ||
+      !["audio_file,frames", "audio_file,frames,full_transcript"].includes(
+        Object.keys(data).sort().join(","),
+      ) ||
+      data.audio_file !== actual[0].file_name ||
+      (Object.hasOwn(data, "full_transcript") &&
+        typeof data.full_transcript !== "string") ||
+      !Array.isArray(data.frames) ||
+      data.frames.length !== manifest.frames.length
+    )
+      throw new Error("FULL_AUDIO_RESPONSE_INVALID");
+    const fields =
+      "detected_language,end_seconds,frame_id,has_speech,order,start_seconds,transcript,translated_text";
+    data.frames.forEach((frame, i) => {
+      const expected = manifest.frames[i];
+      if (
+        !frame ||
+        Object.keys(frame)
+          .filter((key) => key !== "speech_timeline")
+          .sort()
+          .join(",") !== fields ||
+        ["frame_id", "order", "start_seconds", "end_seconds"].some(
+          (key) => frame[key] !== expected[key],
+        ) ||
+        typeof frame.has_speech !== "boolean" ||
+        typeof frame.transcript !== "string" ||
+        frame.transcript.length > 12e3 ||
+        frame.has_speech !== !!frame.transcript.trim() ||
+        typeof frame.translated_text !== "string" ||
+        frame.translated_text.length > 12e3 ||
+        typeof frame.detected_language !== "string" ||
+        !/^(?:[A-Za-z][A-Za-z0-9-]{0,31})?$/.test(frame.detected_language) ||
+        (!frame.has_speech &&
+          (frame.translated_text.trim() || frame.detected_language)) ||
+        (!translate && frame.translated_text !== "") ||
+        (translate && frame.has_speech && !frame.translated_text.trim())
+      )
+        throw new Error("FULL_AUDIO_FRAME_INVALID");
+      if (requireTimeline || frame.speech_timeline != null)
+        MotionTranscriptContract.timeline(frame.speech_timeline, {
+          transcript: frame.transcript,
+          translatedText: frame.translated_text,
+          hasSpeech: frame.has_speech,
+          duration: expected.end_seconds - expected.start_seconds,
+          required: requireTimeline,
+        });
+    });
+    return data;
+  }
+  static async audio({
+    scope,
+    duration,
+    assertScope,
+    signal,
+    shouldStop = () => false,
+  }) {
+    const check = async () => {
+      await assertScope();
+      if (signal?.aborted || shouldStop()) throw new Error("MOTION_CANCELLED");
+    };
+    await check();
+    const cached = await MotionArtifactStore.get({
+      ...scope,
+      frameId: "project",
+      kind: "source_full_audio",
+    });
+    await check();
+    if (cached?.blob) {
+      if (
+        cached.flowProjectId !== scope.flowProjectId ||
+        cached.blob.type !== "audio/wav" ||
+        !Number.isFinite(cached.duration) ||
+        Math.abs(cached.duration - duration) > 0.1
+      )
+        throw new Error("MOTION_AUDIO_SCOPE_MISMATCH");
+      console.info(
+        "[MotionFullAudio]",
+        JSON.stringify({
+          toolProjectId: scope.toolProjectId,
+          sourceRevision: scope.sourceRevision,
+          stage: "audio_cached",
+          duration,
+        }),
+      );
+      return cached.blob;
+    }
+    const source = await MotionArtifactStore.get({
+      ...scope,
+      frameId: "project",
+      kind: "source_video",
+    });
+    await check();
+    if (!source?.blob || source.flowProjectId !== scope.flowProjectId)
+      throw new Error("FULL_AUDIO_SOURCE_MISSING");
+    const timeout = globalThis.MotionMergeTask?.timeoutMs?.();
+    if (!Number.isSafeInteger(timeout) || timeout < 1)
+      throw new Error("MOTION_MEDIA_TIMEOUT_CONFIG_INVALID");
+    const id = crypto.randomUUID();
+    const blob = await new Promise((resolve, reject) => {
+      const worker = new Worker(
+        chrome.runtime.getURL("src/core/video-split-worker.js"),
+      );
+      let settled = false;
+      const finish = (error, value) => {
+        if (settled) return;
+        settled = true;
+        clearTimeout(timer);
+        clearInterval(poll);
+        signal?.removeEventListener("abort", stop);
+        worker.onmessage = worker.onerror = null;
+        worker.terminate();
+        error ? reject(error) : resolve(value);
+      };
+      const stop = () => finish(new Error("MOTION_CANCELLED"));
+      const timer = setTimeout(
+        () => finish(new Error("MOTION_SPLIT_TIMEOUT")),
+        timeout,
+      );
+      const poll = setInterval(() => {
+        if (shouldStop()) stop();
+      }, 200);
+      signal?.addEventListener("abort", stop, { once: true });
+      if (signal?.aborted) {
+        stop();
+        return;
+      }
+      worker.onerror = (event) =>
+        finish(new Error(event.message || "MOTION_SPLIT_FAILED"));
+      worker.onmessage = ({ data }) => {
+        if (data?.id !== id) return;
+        if (data.type === "error") {
+          finish(new Error(data.code));
+          return;
+        }
+        if (data.type !== "audio") return;
+        if (
+          !(data.blob instanceof Blob) ||
+          !data.blob.size ||
+          data.blob.type !== "audio/wav" ||
+          data.audioState !== "audio_present" ||
+          data.start !== 0 ||
+          !Number.isFinite(data.end) ||
+          Math.abs(data.end - duration) > 0.1 ||
+          !Number.isFinite(data.duration) ||
+          Math.abs(data.duration - duration) > 0.1
+        )
+          finish(new Error("AUDIO_BOUNDARY_MISMATCH"));
+        else finish(null, data.blob);
+      };
+      try {
+        worker.postMessage({
+          type: "extract_full_audio",
+          id,
+          blob: source.blob,
+        });
+      } catch (error) {
+        finish(error);
+      }
+    });
+    await check();
+    await MotionArtifactStore.put({
+      ...scope,
+      frameId: "project",
+      kind: "source_full_audio",
+      blob,
+      duration,
+    });
+    await check();
+    console.info(
+      "[MotionFullAudio]",
+      JSON.stringify({
+        toolProjectId: scope.toolProjectId,
+        sourceRevision: scope.sourceRevision,
+        stage: "audio_created",
+        duration,
+      }),
+    );
+    return blob;
+  }
+}
+globalThis.MotionFullAudioTranscript = MotionFullAudioTranscript;

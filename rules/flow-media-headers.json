@@ -13,11 +13,7 @@
     },
     "condition": {
       "urlFilter": "||flow.google.com/asb/",
-      "resourceTypes": [
-        "image",
-        "media",
-        "xmlhttprequest"
-      ]
+      "resourceTypes": ["image", "media", "xmlhttprequest"]
     }
   }
 ]

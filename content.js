@@ -8214,13 +8214,11 @@ if (location.origin !== "https://flow.google.com") {
       _closeFlowAdvancedMenu2();
       return fail("V2_UPLOAD_BUTTON_NOT_FOUND", "find_upload_button", {
         tabSelected,
-        candidates: btns
-          .slice(0, 8)
-          .map((b) => ({
-            icon: iconOf(b),
-            text: (b.textContent || "").trim().substring(0, 80),
-            role: b.getAttribute("role") || null,
-          })),
+        candidates: btns.slice(0, 8).map((b) => ({
+          icon: iconOf(b),
+          text: (b.textContent || "").trim().substring(0, 80),
+          role: b.getAttribute("role") || null,
+        })),
       });
     }
     const trapOwner = crypto.randomUUID();

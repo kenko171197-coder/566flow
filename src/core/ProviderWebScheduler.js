@@ -1,1 +1,3924 @@
-var __defProp=Object.defineProperty;var __defNormalProp=(obj,key,value)=>key in obj?__defProp(obj,key,{enumerable:true,configurable:true,writable:true,value}):obj[key]=value;var __publicField=(obj,key,value)=>__defNormalProp(obj,typeof key!=="symbol"?key+"":key,value);class ProviderWebScheduler{static async acquireDomTurn(){if(globalThis.navigator?.locks?.request){let grant,rejectGrant;const granted=new Promise((resolve,reject)=>{grant=resolve;rejectGrant=reject});let finish;const held=new Promise(resolve=>{finish=resolve});const task=globalThis.navigator.locks.request("tobyflow-provider-web-dom",async lock=>{if(!lock)throw new Error("PROVIDER_DOM_LOCK_UNAVAILABLE");let done2=false;grant(()=>{if(!done2){done2=true;finish()}});await held});Promise.resolve(task).catch(rejectGrant);return granted}const previous=this._workerSubmitTurn||Promise.resolve();let release;this._workerSubmitTurn=new Promise(resolve=>{release=resolve});await previous;let done=false;return()=>{if(!done){done=true;release()}}}static async pruneExpiredOwnedRuns(userId){if(!userId||String(window.authManager?.getUser?.()?.id)!==String(userId)||!window.ProviderWebQueueStore?.listOwnedRunsForGc)return 0;if(this._ownedGcPromise)return this._ownedGcPromise;if(String(this._lastOwnedGcUserId)===String(userId)&&Date.now()-this._lastOwnedGcAt<36e5)return 0;this._ownedGcPromise=(async()=>{const runs=await window.ProviderWebQueueStore.listOwnedRunsForGc(userId);let deleted=0;for(const run of runs){if(String(window.authManager?.getUser?.()?.id)!==String(userId))break;const owner=run.source==="workflow"?{workflowId:run.workflowId,nodeId:run.nodeId}:{mcpJobId:run.mcpJobId,runnerId:run.runnerId};try{if(await window.ProviderWebQueueStore.pruneOwnedRun(run.id,userId,owner))deleted++}catch(error){const level=(error?.code||error?.message)==="PROVIDER_OWNER_REVIEW_REQUIRED"?"info":"warn";console[level]("[ProviderWebScheduler] Owned run GC retained:",run.id,error?.message||error)}}this._lastOwnedGcAt=Date.now();this._lastOwnedGcUserId=String(userId);return deleted})().finally(()=>{this._ownedGcPromise=null});return this._ownedGcPromise}static async _serializeGeminiNativeDownload(task){const previous=this._geminiNativeDownloadTurn;let release;this._geminiNativeDownloadTurn=new Promise(resolve=>{release=resolve});await previous.catch(()=>{});try{return await task()}finally{release()}}static _wakeSlotWaiter(){const index=this._slotWaiters.findIndex(waiter2=>waiter2.provider!==this._lastSlotProvider);const[waiter]=this._slotWaiters.splice(index<0?0:index,1);waiter?.wake()}static _admissionFor(provider,source="batch"){const surface=source==="workflow"?"workflow":source==="mcp_direct"?"mcp_direct":null;const live=surface?window.ExecutionConfig.getProviderWebSurface(surface,provider):window.ExecutionConfig.getProviderWebWorkers(provider);if(surface&&live.surfaceEnabled!==true)throw new Error("PROVIDER_WEB_PAUSED_BY_CONFIG");return live}static async _slot(maximum,userId,shouldCancel=()=>false,provider="muse",source="batch"){while(true){if(shouldCancel())throw new Error("PROVIDER_WORKER_SLOT_CANCELLED");const admission=this._slotAdmission.catch(()=>{}).then(async()=>{if(shouldCancel())throw new Error("PROVIDER_WORKER_SLOT_CANCELLED");let live;try{live=this._admissionFor(provider,source)}catch(_){throw new Error("PROVIDER_WEB_PAUSED_BY_CONFIG")}if(live.parallelEnabled===false||!live.enabledProviders.includes(provider))throw new Error("PROVIDER_WEB_PAUSED_BY_CONFIG");maximum=Math.min(maximum,live.maxConcurrentWorkers);const existing=await this._rpc("providerWorker:list",{userId});if(!existing.success)throw new Error(existing.error||"PROVIDER_WORKER_LIST_UNAVAILABLE");const profileCount=Number.isSafeInteger(existing.totalCount)&&existing.totalCount>=existing.workers.length?existing.totalCount:existing.workers.length;this._busyWorkers=profileCount+this._pendingOpens;if(this._busyWorkers<maximum){this._pendingOpens++;this._busyWorkers++;this._lastSlotProvider=provider;return true}const knownActive=Number.isSafeInteger(existing.activeCount)&&existing.activeCount>0&&existing.activeCount<=profileCount;if(!knownActive&&!this._pendingOpens&&existing.workers.every(worker=>!this._activeWorkerIds.has(worker.workerId)))throw new Error(profileCount>existing.workers.length?"PROVIDER_WORKER_CAP_HELD_BY_OTHER_ACCOUNT":"PROVIDER_WORKER_CAP_HELD_FOR_REVIEW");return false});this._slotAdmission=admission.catch(()=>{});if(await admission)break;await new Promise(resolve=>{const wake=()=>{clearTimeout(timer);resolve()};const waiter={provider,wake};const timer=setTimeout(()=>{const index=this._slotWaiters.indexOf(waiter);if(index>=0)this._slotWaiters.splice(index,1);resolve()},2e3);this._slotWaiters.push(waiter)})}let opened=false;const release=()=>{if(!opened)this._pendingOpens=Math.max(0,this._pendingOpens-1);this._wakeSlotWaiter()};release.opened=workerId=>{if(opened)return;opened=true;this._pendingOpens=Math.max(0,this._pendingOpens-1);this._activeWorkerIds.add(workerId)};release.closed=workerId=>{this._activeWorkerIds.delete(workerId);this._wakeSlotWaiter()};return release}static async _rpc(action,args={}){return new Promise((resolve,reject)=>chrome.runtime.sendMessage({action,...args},response=>{if(chrome.runtime.lastError)return reject(new Error(chrome.runtime.lastError.message));resolve(response||{success:false,error:"NO_RESPONSE"})}))}static async _openWorkerWithCapacityWait(args,shouldStop,getAdmission,provider,wait=()=>new Promise(resolve=>setTimeout(resolve,2e3))){while(!shouldStop()){let limits;try{limits=getAdmission()}catch(_){return{success:false,error:"PROVIDER_WEB_PAUSED_BY_CONFIG"}}if(limits?.parallelEnabled!==true||!limits.enabledProviders?.includes(provider)){return{success:false,error:"PROVIDER_WEB_PAUSED_BY_CONFIG"}}const opened=await this._rpc("providerWorker:create",{...args,layoutCount:limits.maxConcurrentWorkers});if(opened?.success||opened?.error!=="WORKER_CAPACITY_FULL")return opened;await wait()}return{success:false,error:"PROVIDER_WORKER_SLOT_CANCELLED"}}static async prepareMainWindowLayout(runId,windowId=null){const sourceWindowId=Number.isInteger(windowId)?windowId:await chrome.windows.getCurrent().then(win=>win?.id).catch(()=>null);if(!Number.isInteger(sourceWindowId))return{success:false,adjusted:false,error:"MAIN_WINDOW_UNAVAILABLE"};const layout=await this._rpc("providerWorker:prepareMainLayout",{runId,windowId:sourceWindowId,screenLeft:window.screen?.availLeft,screenTop:window.screen?.availTop,screenWidth:window.screen?.availWidth,screenHeight:window.screen?.availHeight});return{...layout,windowId:sourceWindowId}}static async restoreMainWindowLayout(runId,windowId){if(!Number.isInteger(windowId))return{success:true,restored:false};return this._rpc("providerWorker:restoreMainLayout",{runId,windowId})}static async _closeOwnedWorker(worker){let response=null;for(let attempt=0;attempt<2;attempt++){try{response=await this._rpc("providerWorker:close",worker)}catch(error){response={success:false,error:error?.message||"WORKER_CLOSE_RPC_FAILED"}}if(response?.success||response?.error==="WORKER_OWNER_MISMATCH")break;if(attempt===0)await new Promise(resolve=>setTimeout(resolve,150))}return response||{success:false,error:"WORKER_CLOSE_NO_RESPONSE"}}static async _api(path,data){const payload=path==="settlement"||path==="provider-web/reserve"?{...data,request_nonce:crypto.randomUUID()}:data;const response=await window.ExecutionGate._apiCall("POST",`execution/${path}`,payload,3e4);if(response?.success===false)throw new Error(response.error?.code||"PROVIDER_WEB_SERVER_DENIED");return response?.data||response}static async _hashId(value){if(value==null)return null;const bytes=await crypto.subtle.digest("SHA-256",new TextEncoder().encode(String(value)));return[...new Uint8Array(bytes).slice(0,8)].map(byte=>byte.toString(16).padStart(2,"0")).join("")}static async _historyDiagnostics(snapshot){const{run,items}=snapshot;const failed=items.filter(item=>!["COMPLETED","QUEUED"].includes(item.state));const failures=await Promise.all(failed.slice(0,20).map(async item=>{const attempt=item.attemptId&&await window.ProviderWebQueueStore.getAttempt(item.attemptId);const retrySubmitCount=Number.isInteger(item.retrySubmitCount)?item.retrySubmitCount:Number.isInteger(snapshot.run.retryCount)?snapshot.run.retryCount:0;const reason=/^[A-Za-z0-9_:./-]{1,120}$/.test(item.error||"")?item.error:null;return{promptIndex:item.promptIndex,state:item.state,mode:"web",retrySubmitCount,...reason&&{reason},operationIdAvailable:false,stages:attempt?[{event:"provider_web_attempt",sinceItemMs:Math.max(0,attempt.createdAt-snapshot.run.createdAt),attempt:await this._hashId(attempt.id),workerHash:await this._hashId(attempt.workerId),tabHash:await this._hashId(attempt.tabId),submitStage:attempt.submitStage,clickGranted:!!attempt.clickGrantedAt,receiptStage:attempt.receiptStage,sendObserved:!!attempt.sendObservedAt,retryPending:item.retryPending===true,verifiedTextOnly:attempt.verifiedTextOnly===true,downloadState:item.downloadState,...Number.isSafeInteger(attempt.startupElapsedMs)&&{startupElapsedMs:attempt.startupElapsedMs},...Number.isSafeInteger(attempt.startupTimeoutMs)&&{startupTimeoutMs:attempt.startupTimeoutMs},...attempt.tabStatus&&{tabStatus:attempt.tabStatus},...attempt.tabLocation&&{tabLocation:attempt.tabLocation},...attempt.transportReason&&{transportReason:attempt.transportReason},...attempt.workerCheckOutcome&&{workerCheckOutcome:attempt.workerCheckOutcome},...attempt.editorStage&&{editorStage:attempt.editorStage},...attempt.exceptionOrigin&&{exceptionOrigin:attempt.exceptionOrigin},...attempt.exceptionStage&&{exceptionStage:attempt.exceptionStage},...attempt.mediaFetchCode&&{mediaFetchCode:attempt.mediaFetchCode},...Number.isInteger(attempt.mediaFetchStatus)&&{mediaFetchStatus:attempt.mediaFetchStatus},...attempt.receiptReason&&{receiptReason:attempt.receiptReason},...attempt.intentError&&{intentError:attempt.intentError},...attempt.monitor&&{monitor:attempt.monitor}}]:[]}}));const count=state=>items.filter(item=>item.state===state).length;const cancelledReasonCounts=new Map;for(const item of items){if(item.state!=="CANCELLED")continue;const reason=/^[A-Z0-9_]{1,100}$/.test(item.error||"")?item.error:"UNKNOWN";cancelledReasonCounts.set(reason,(cancelledReasonCounts.get(reason)||0)+1)}return{version:3,runContext:{surface:run.source==="gentab_direct"?"gen":"batch_list",batchId:run.batchId||null,batchName:run.batchName||null,runId:run.id,runAction:run.runAction||(run.source==="gentab_direct"?"GEN_TAB_RUN":"BATCH_LIST_RUN"),stopSource:run.stopSource||null,parentRunId:run.parentRunId||null,...Array.isArray(run.originalIndexes)&&run.originalIndexes.length===items.length&&run.originalIndexes.every(index=>Number.isInteger(index)&&index>=0&&index<=999)?{originalPromptIndexes:[...run.originalIndexes]}:{},retryCount:Number.isSafeInteger(run.retryCount)?run.retryCount:0,...Number.isSafeInteger(run.peakWorkerWindows)?{peakWorkerWindows:run.peakWorkerWindows}:{}},summary:{total:items.length,completed:count("COMPLETED"),failed:count("FAILED"),partial:count("PARTIAL_FAIL"),cancelled:count("CANCELLED"),unfinished:items.length-["COMPLETED","FAILED","PARTIAL_FAIL","CANCELLED"].reduce((sum,state)=>sum+count(state),0)},cancelledReasons:[...cancelledReasonCounts].map(([reason,count2])=>({reason,count:count2})),failedPromptCount:failed.length,omittedFailedPrompts:Math.max(0,failed.length-failures.length),firstDecision:null,firstError:null,droppedEvents:0,events:[],failures}}static async _historyPayload(snapshot,status){const{run,items}=snapshot;if(!["gentab_direct","batch"].includes(run.source))throw new Error("PROVIDER_HISTORY_OWNER_MISMATCH");const allowed=new Set(["QUEUED","PREPARING","SUBMITTING","MONITORING","COMPLETED","PARTIAL_FAIL","FAILED","CANCELLED","NEEDS_REVIEW"]);return{run_id:run.id,project_id:run.projectId,source:run.source==="gentab_direct"?"gen":"batch_list",media_type:run.settingsSnapshot.mediaType==="video"?"Video":"Image",model:String(run.settingsSnapshot.model||""),ratio:String(run.settingsSnapshot.ratio||""),status,duration_ms:Math.max(0,Date.now()-run.createdAt),diagnostics:await this._historyDiagnostics(snapshot),items:items.map(item=>({promptIndex:item.promptIndex,prompt:item.prompt,quantity:item.quantity,state:allowed.has(item.state)?item.state:"NEEDS_REVIEW",resultIdentities:(item.resultReceipts||[]).map(receipt=>receipt.identity),error:/^[A-Za-z0-9_:./-]{1,120}$/.test(item.error||"")?item.error:null}))}}static async publishPending(userId,{force=false,runId=null}={}){const key=`${String(userId)}:${runId||"*"}`;if(this._publishingUsers.has(key))return this._publishingUsers.get(key);const request=this._publishPending(userId,{force,runId}).finally(()=>this._publishingUsers.delete(key));this._publishingUsers.set(key,request);return request}static _historyWirePayload(payload){if(!Array.isArray(payload?.diagnostics?.failures))return payload;return{...payload,diagnostics:{...payload.diagnostics,failures:payload.diagnostics.failures.map(failure=>!Array.isArray(failure.stages)?failure:{...failure,stages:failure.stages.map(stage=>{if(!stage.mediaFetchCode)return stage;const code=String(stage.mediaFetchCode).replace(/^MEDIA_FETCH_([1-5][0-9]{2})$/,"HTTP_$1");return{...stage,mediaFetchCode:/^(?:HTTP_[1-5][0-9]{2}|READ_ERROR|FETCH_EXCEPTION|FETCH_FAILED|SEND_FAILED|NO_RESPONSE|EXCEPTION|MISSING_PARAMS|EMPTY_BASE64|OTHER)$/.test(code)?code:"OTHER"}})})}}}static async _publishPending(userId,{force=false,runId=null}={}){const pending=(await window.ProviderWebQueueStore.pendingOutbox(userId)).filter(entry=>!runId||entry.runId===runId);for(const entry of pending){const retryKey=`${entry.runId}:${entry.version}`;if(!force&&(this._historyPublishFailures.get(retryKey)?.nextAt||0)>Date.now())continue;try{const response=await window.ExecutionGate._apiCall("POST","history/provider-web",{...this._historyWirePayload(entry.payload),version:entry.version},3e4);const receipt=response?.data||response;if(response?.success===false||!Number.isInteger(Number(receipt?.history_id)))throw new Error(response?.error?.code||"PROVIDER_HISTORY_ACK_MISSING");await window.ProviderWebQueueStore.acknowledgeOutbox(entry.runId,entry.version,Number(receipt.history_id));this._historyPublishFailures.delete(retryKey)}catch(error){const previous=this._historyPublishFailures.get(retryKey);const failures=(previous?.failures||0)+1;const waitMs=error?.httpStatus===422?3e5:Math.min(6e4,5e3*2**Math.min(failures-1,4));this._historyPublishFailures.set(retryKey,{failures,nextAt:Date.now()+waitMs});console.warn("[ProviderWebScheduler] History outbox pending:",JSON.stringify({runId:entry.runId,version:entry.version,code:error?.code||null,httpStatus:error?.httpStatus||null,diagnosticsShape:Array.isArray(entry.payload?.diagnostics)?"array":typeof entry.payload?.diagnostics,diagnosticsKeys:entry.payload?.diagnostics&&typeof entry.payload.diagnostics==="object"?Object.keys(entry.payload.diagnostics):[],retryAfterMs:waitMs,fields:error?.details&&typeof error.details==="object"?Object.keys(error.details):[],message:error?.message||String(error)}))}}}static _publishHistoryInBackground(userId,{afterPending=false}={}){const pending=afterPending?this._publishingUsers.get(`${String(userId)}:*`):null;const publication=pending?pending.catch(()=>{}).then(()=>this.publishPending(userId)):this.publishPending(userId);publication.catch(error=>console.warn("[ProviderWebScheduler] History publication deferred:",error?.message||error))}static async _recordHistory(runId,status,{waitForPublish=true}={}){const snapshot=await window.ProviderWebQueueStore.getRun(runId);if(!snapshot?.reservation||!["gentab_direct","batch"].includes(snapshot.run?.source))return;await window.ProviderWebQueueStore.putOutbox(runId,await this._historyPayload(snapshot,status));if(waitForPublish)await this.publishPending(snapshot.run.userId);else this._publishHistoryInBackground(snapshot.run.userId,{afterPending:true})}static async _runStage(runId,stage,action){const startedAt=Date.now();let success=false;try{const result=await action();success=true;return result}finally{console.info("[ProviderWebScheduler] run_stage",JSON.stringify({runId,stage,elapsedMs:Date.now()-startedAt,success}))}}static async _config(provider,settingsSnapshot=null,source="batch"){await window.ExecutionConfig.getConfig(true);const config=this._admissionFor(provider,source);if(config.parallelEnabled===false||!config.enabledProviders.includes(provider))throw new Error("PROVIDER_WEB_NOT_ROLLED_OUT");if(settingsSnapshot)await this._promptConfig(provider,settingsSnapshot);return config}static async _promptConfig(provider,settingsSnapshot){if(provider!=="muse"){const{mediaType,model,ratio,deleteAfterGen}=settingsSnapshot;if(provider==="chatgpt"&&mediaType!=="image")throw new Error("UNSUPPORTED_MEDIA_TYPE");if(deleteAfterGen&&!["chatgpt","gemini"].includes(provider))throw new Error("WORKER_DELETE_UNSUPPORTED");const adapter2=window.ProviderRegistry?.get?.(provider);if(!adapter2||adapter2.key!==provider)throw new Error("PROVIDER_ADAPTER_NOT_READY");if(!window.ModelRegistry?.findModel?.(provider,model))throw new Error("MODEL_CONFIG_MISSING");let ratios=window.ProviderConfigManager?.safeGetRatiosSync?.(provider,mediaType);if(!ratios?.length&&window.ProviderConfigManager?.getRatios)ratios=await window.ProviderConfigManager.getRatios(provider,mediaType);if(!Array.isArray(ratios)||!ratios.some(entry=>entry.value===ratio||entry.ui_name===ratio))throw new Error("RATIO_CONFIG_MISSING");if(provider==="gemini"&&!(mediaType==="image"?adapter2.capabilities?.supportsImageMode:adapter2.capabilities?.supportsVideo))throw new Error("PROVIDER_MEDIA_DISABLED");return}const adapter=window.ProviderRegistry?.get?.("muse");if(!adapter||adapter.key!=="muse")throw new Error("MUSE_ADAPTER_NOT_READY");const settings={mode:settingsSnapshot.mediaType,ratio:settingsSnapshot.ratio};if(!adapter._composePrompt("",settings).ok){await window.ProviderConfigManager?.fetchPrivateConfigs?.(true);const prepared=adapter._composePrompt("",settings);if(!prepared.ok)throw new Error(prepared.error)}}static async _lease(userId){if(this._leaseTimer&&this._leaseUserId!==String(userId)){clearInterval(this._leaseTimer);this._leaseTimer=null;for(const active of this._activeRuns.values())if(active.run.userId!==String(userId))active.paused=true}let lease;try{lease=await window.ProviderWebQueueStore.acquireLease(userId,this._ownerId,3e4)}catch(error){if(error?.message!=="PROVIDER_RECONCILE_REQUIRED")throw error;lease=await window.ProviderWebQueueStore.acquireLease(userId,this._ownerId,3e4,true);const reviewed=[];try{const staleRuns=await window.ProviderWebQueueStore.listRunningRuns(userId);for(const run of staleRuns){const result=await window.ProviderWebQueueStore.reconcileRun(run.id);if(result.review>0)reviewed.push(run.id)}}catch(reconcileError){await window.ProviderWebQueueStore.releaseLease(userId,this._ownerId,lease.epoch).catch(()=>{});throw reconcileError}for(const runId of reviewed)await this._recordHistory(runId,"needs_review").catch(historyError=>console.warn("[ProviderWebScheduler] Recovered history:",historyError?.message||historyError))}this._leaseUserId=String(userId);if(!this._leaseTimer)this._leaseTimer=setInterval(()=>{if(this._leaseRenewal)return;const renewal=window.ProviderWebQueueStore.acquireLease(userId,this._ownerId,3e4).catch(error=>{for(const active of this._activeRuns.values())active.paused=true;console.warn("[ProviderWebScheduler] Lease lost:",error?.message||error)}).finally(()=>{if(this._leaseRenewal===renewal)this._leaseRenewal=null});this._leaseRenewal=renewal},1e4);this._leaseHolders.set(String(userId),(this._leaseHolders.get(String(userId))||0)+1);return lease}static async _releaseLease(userId,lease){const key=String(userId);const count=(this._leaseHolders.get(key)||1)-1;if(count>0){this._leaseHolders.set(key,count);return}this._leaseHolders.delete(key);if(this._leaseUserId===key){clearInterval(this._leaseTimer);this._leaseTimer=null;this._leaseUserId=null}if(this._leaseRenewal)await this._leaseRenewal;await window.ProviderWebQueueStore.releaseLease(key,this._ownerId,lease.epoch)}static async createDirect({userId,projectId,provider="muse",settingsSnapshot,prompts,refAssets=[]}){if(!Array.isArray(prompts)||!prompts.length)throw new Error("PROVIDER_RUN_ITEMS_REQUIRED");const id=crypto.randomUUID();await window.ProviderWebQueueStore.createRun({id,userId,projectId,provider,source:"gentab_direct",settingsSnapshot,prompts,refAssets});return id}static _reservationRequest(data,ownerCredentials=null){const{run,items}=data;const mediaType=run.settingsSnapshot.mediaType;const refKeys=new Set(items.flatMap(item=>item.refKeys||[]));const source=run.source==="gentab_direct"?"gen":run.source==="batch"?"batch_list":run.source==="mcp_direct"?"mcp":"workflow";if(run.provider==="muse"&&run.settingsSnapshot.chain?.enabled){window.MuseVideoContinuity.validate(run.settingsSnapshot,items)}const request={run_id:run.id,provider:run.provider,project_id:run.projectId,source,prompt_count:items.length,media_type:mediaType,ref_count:refKeys.size+(run.provider==="muse"&&run.settingsSnapshot.chain?.enabled?1:0)};if(source==="workflow"){if(ownerCredentials?.workflowId!==run.workflowId||ownerCredentials?.nodeId!==run.nodeId||!ownerCredentials?.parentWorkflowToken)throw new Error("PROVIDER_WORKFLOW_OWNER_INVALID");request.workflow_id=run.workflowId;request.node_id=run.nodeId;request.parent_workflow_token=ownerCredentials.parentWorkflowToken}else if(source==="mcp"){if(ownerCredentials?.mcpJobId!==run.mcpJobId||ownerCredentials?.runnerId!==run.runnerId)throw new Error("PROVIDER_MCP_OWNER_INVALID");request.mcp_job_id=run.mcpJobId;request.runner_id=run.runnerId}return request}static async _reserve(data,lease,ownerCredentials=null,ownerBindingVerified=false){const{run,reservation}=data;if(reservation){if(reservation.ownerId!==this._ownerId||reservation.epoch!==lease.epoch)throw new Error("PROVIDER_RESERVATION_OWNER_MISMATCH");if(!["workflow","mcp_direct"].includes(run.source)||ownerBindingVerified)return reservation}if(String(window.authManager?.getUser?.()?.id)!==run.userId)throw new Error("PROVIDER_RUN_ACCOUNT_CHANGED");const request=this._reservationRequest(data,ownerCredentials);let gate;try{gate=await this._api("provider-web/reserve",request)}catch(error){if(!/TIMEOUT|NETWORK|CONNECTION|NO_RESPONSE/i.test(error?.code||error?.message||""))throw error;gate=await this._api("provider-web/reserve",request)}if(reservation){if(gate?.execution_token!==reservation.token)throw new Error("PROVIDER_RESERVATION_OWNER_MISMATCH");if(gate.token_status!=="active"||Number(gate.expires_in)<=0)throw new Error("PROVIDER_RESERVATION_NOT_ACTIVE");return reservation}if(!gate?.execution_token||gate.token_status!=="active"||Number(gate.expires_in)<=0)throw new Error("PROVIDER_RESERVATION_NOT_ACTIVE");return window.ProviderWebQueueStore.reserve(run.id,{token:gate.execution_token,expiresAt:Date.now()+Number(gate.expires_in)*1e3,ownerId:this._ownerId,epoch:lease.epoch})}static async _verifyOwnedServerBinding(snapshot,ownerCredentials){if(snapshot.run.source==="workflow"&&!ownerCredentials?.parentWorkflowToken){if(ownerCredentials?.workflowId!==snapshot.run.workflowId||ownerCredentials?.nodeId!==snapshot.run.nodeId||!snapshot.reservation?.token)throw new Error("PROVIDER_WORKFLOW_OWNER_INVALID");const observed=await this._api("settlement",{token:snapshot.reservation.token});const binding=observed?.provider_web;if(binding?.run_id!==snapshot.run.id||binding.source!=="workflow"||binding.workflow_id!==snapshot.run.workflowId||binding.node_id!==snapshot.run.nodeId)throw new Error("PROVIDER_RESERVATION_OWNER_MISMATCH");return observed}const request=this._reservationRequest(snapshot,ownerCredentials);const gate=await this._api("provider-web/reserve",request);if(gate?.execution_token!==snapshot.reservation?.token)throw new Error("PROVIDER_RESERVATION_OWNER_MISMATCH");return gate}static async _refs(run,item,shouldStop=()=>false){const refs=[];for(const key of item.refKeys||[]){const asset=await window.ProviderWebQueueStore.getAsset(run.userId,run.projectId,key,run.ownerScope);if(!asset||asset.runId!==run.id&&asset.batchId!==run.batchId)throw new Error("PROVIDER_REF_ASSET_MISSING");const dataUrl=await new Promise((resolve,reject)=>{const reader=new FileReader;reader.onload=()=>resolve(reader.result);reader.onerror=()=>reject(reader.error);reader.readAsDataURL(asset.blob)});refs.push({base64:String(dataUrl).replace(/^data:[^,]+,/,""),name:asset.name,type:asset.type})}return run.provider==="muse"&&window.MuseVideoContinuity?.enabled(run.settingsSnapshot)?window.MuseVideoContinuity.refs(run,item,refs,shouldStop):refs}static async _storeMuseVideo(run,attempt,url,assetKey,index){const transferId=crypto.randomUUID(),chunkIds=[];const scope={id:assetKey,userId:run.userId,projectId:run.projectId,ownerScope:run.ownerScope,runId:run.id};const read=async(stage,offset=0)=>{const result=await this._rpc("muse:readVideoChunk",{tabId:attempt.tabId,attemptId:attempt.id,transferId,url,stage,offset});if(!result?.success)throw new Error(result?.error||"MUSE_VIDEO_CHUNK_READ_FAILED");return result};try{const opened=await read("open");if(!Number.isSafeInteger(opened.size)||opened.size<=0||!Number.isSafeInteger(opened.chunkBytes)||opened.chunkBytes<=0||!/^video\/[a-z0-9.+-]+$/i.test(opened.mime||""))throw new Error("MUSE_VIDEO_CHUNK_METADATA_INVALID");let offset=0;while(offset<opened.size){const chunk=await read("read",offset);const nextOffset=Math.min(offset+opened.chunkBytes,opened.size);if(chunk.offset!==offset||chunk.nextOffset!==nextOffset||chunk.size!==opened.size||chunk.mime!==opened.mime||chunk.done!==(nextOffset===opened.size)||typeof chunk.dataUrl!=="string"||chunk.dataUrl.length>Math.ceil(opened.chunkBytes/3)*4+128||!/^data:video\/[a-z0-9.+-]+;base64,/i.test(chunk.dataUrl))throw new Error("MUSE_VIDEO_CHUNK_INVALID");const blob=await(await fetch(chunk.dataUrl)).blob();if(blob.type!==opened.mime||blob.size!==nextOffset-offset)throw new Error("MUSE_VIDEO_CHUNK_SIZE_MISMATCH");const id=`${assetKey}:chunk:${transferId}:${offset}`;chunkIds.push(id);await window.ProviderWebQueueStore.putAsset({...scope,id,blob,name:"video-chunk",type:blob.type});offset=nextOffset}return await window.ProviderWebQueueStore.commitAssetChunks({...scope,chunkIds,size:opened.size,type:opened.mime,name:`${index+1}.mp4`})}finally{await read("close").catch(()=>{});if(chunkIds.length)await window.ProviderWebQueueStore.deleteAssetChunks({...scope,chunkIds}).catch(error=>console.warn("[ProviderWebScheduler] Video chunk cleanup:",error?.message))}}static async _receipt(run,item,attempt,result){if(run.provider!=="muse")return this._mediaReceipt(run,item,attempt,result);const reject=reason=>{if(result&&typeof result==="object")result.receiptFailureReason=reason;return null};if(!result?.success)return reject("result_unsuccessful");if(result.tabId!==attempt.tabId)return reject("tab_mismatch");if(!Array.isArray(result.mediaUrls)||!result.mediaUrls.length)return reject("missing_media_urls");const output=[];for(let index=0;index<result.mediaUrls.length;index++){const url=result.mediaUrls[index];const media=result.fetchedMedia?.find(entry=>entry.url===url);if(result.mediaType==="image"&&!media?.base64)return reject("image_bytes_missing");const assetKey=`${attempt.id}:result:${index}`;let blob;if(result.mediaType==="image"){blob=await(await fetch(media.base64)).blob()}else if(result.mediaType==="video"){await this._storeMuseVideo(run,attempt,url,assetKey,index)}else return reject("media_type_invalid");if(result.mediaType==="image"){if(!blob?.size)return reject("empty_media_bytes");const extension={"image/webp":"webp","image/png":"png","image/avif":"avif","image/gif":"gif"}[blob.type]||"jpg";await window.ProviderWebQueueStore.putAsset({id:assetKey,userId:run.userId,projectId:run.projectId,ownerScope:run.ownerScope,runId:run.id,blob,name:`${index+1}.${extension}`,type:blob.type})}let posterAssetKey=null;if(result.mediaType==="video"){const poster=media?.poster;if(typeof poster==="string"&&/^data:image\/[a-z0-9.+-]+;base64,/i.test(poster)){try{const posterBlob=await(await fetch(poster)).blob();if(posterBlob.size&&/^image\//i.test(posterBlob.type)){posterAssetKey=`${assetKey}:poster`;await window.ProviderWebQueueStore.putAsset({id:posterAssetKey,userId:run.userId,projectId:run.projectId,ownerScope:run.ownerScope,runId:run.id,blob:posterBlob,name:`${index+1}-poster.jpg`,type:posterBlob.type})}}catch(error){console.warn("[ProviderWebScheduler] Muse poster:",error?.message||error)}}}output.push({identity:`${attempt.id}:${index}`,assetKey,posterAssetKey,mediaType:result.mediaType,tabId:attempt.tabId,index})}return output}static async _mediaReceipt(run,item,attempt,result){const reject=reason=>{if(result&&typeof result==="object")result.receiptFailureReason=reason;console.warn("[ProviderWebScheduler] media_receipt_unverified",JSON.stringify({runId:run.id,promptIndex:item.promptIndex,provider:run.provider,reason,submitStage:attempt.submitStage||null,sendObserved:!!attempt.sendObservedAt,turnIdAvailable:!!result?.turnId,imageLineage:result?.imageLineage||null,imageCount:Array.isArray(result?.imageUrls)?result.imageUrls.length:null,...reason==="media_fetch_failed"&&result?.mediaFetchDiagnostic&&{mediaFetchDiagnostic:result.mediaFetchDiagnostic},...run.provider==="chatgpt"&&result?.reason==="SEND_NOT_CONFIRMED"&&result?.diagnostic&&{submitDiagnostic:result.diagnostic}}));return null};if(!result?.success||result.tabId!==attempt.tabId)return reject("result_or_tab_mismatch");let entries;if(run.provider==="chatgpt"){if(!Array.isArray(result.imageUrls)||!result.imageUrls.length)return reject("missing_images");const baselineLineage=result.imageLineage==="worker_new_chat_baseline_delta"&&attempt.submitStage==="dispatch_intent"&&!!attempt.sendObservedAt;if(!result.turnId&&!baselineLineage)return reject("missing_verified_lineage");entries=result.imageUrls.map((url,index)=>({url,identity:`${result.turnId||"baseline"}:${index}`,mediaType:"image"}))}else if(run.provider==="gemini"){if(!Array.isArray(result.results)||!result.results.length)return reject("missing_media");entries=result.results.map(entry=>({url:entry.url,identity:entry.fingerprint,mediaType:result.mediaType}));if(entries.some(entry=>!entry.identity||!["image","video"].includes(entry.mediaType)))return reject("missing_media_identity")}else return reject("unsupported_provider");const pendingAssets=[];const posterAssets=[];const receipts=[];for(let index=0;index<entries.length;index++){const entry=entries[index];let dataUrl=/^data:(image|video)\/[a-z0-9.+-]+;base64,/i.test(entry.url||"")?entry.url:null;let materializedBlob=null;if(!dataUrl){let response;for(let read=0;read<(run.provider==="chatgpt"?2:1);read++){const owner=await this._rpc("providerWorker:verify",{workerId:attempt.workerId,epoch:attempt.epoch,userId:run.userId,tabId:attempt.tabId});if(!owner?.success||owner.worker?.tabId!==attempt.tabId)return reject("worker_owner_lost");response=run.provider==="chatgpt"?await window.MessageBridge.chatGPTFetchImage(entry.url,attempt.tabId):await window.MessageBridge.geminiFetchMedia(entry.url,attempt.tabId,void 0,{mediaType:entry.mediaType,fingerprint:entry.identity});if(response?.success&&(response.base64||response.blob))break;const code=String(response?.error||(response?.success?"EMPTY_BASE64":"NO_RESPONSE"));if(read||!/^(?:HTTP_5[0-9]{2}|READ_ERROR|FETCH_EXCEPTION|FETCH_FAILED|SEND_FAILED|NO_RESPONSE|EXCEPTION)$/.test(code))break;await new Promise(resolve=>setTimeout(resolve,250))}if(!response?.success||!response.base64&&!response.blob){const rawCode=String(response?.error||(response?.success?"EMPTY_BASE64":"NO_RESPONSE"));const code=rawCode==="Failed to fetch"?"FETCH_FAILED":rawCode;const mediaHttpStatus=/^MEDIA_FETCH_([1-5][0-9]{2})$/.exec(code);const status=response?.status??(mediaHttpStatus?Number(mediaHttpStatus[1]):null);result.mediaFetchDiagnostic={code:/^(?:HTTP_[1-5][0-9]{2}|READ_ERROR|FETCH_EXCEPTION|FETCH_FAILED|SEND_FAILED|NO_RESPONSE|EXCEPTION|MISSING_PARAMS|EMPTY_BASE64|INVALID_(?:MEDIA_URL|FETCH_ARGUMENTS|MEDIA_CHUNK_ARGUMENTS)|MEDIA_(?:FETCH_[1-5][0-9]{2}|FETCH_FAILED|FETCH_TIMEOUT|BYTES_INVALID|READ_FAILED|TRANSFER_EXISTS|PAYLOAD_TOO_LARGE|CHUNK_(?:METADATA_INVALID|INVALID|POSITION_INVALID|SIZE_MISMATCH)))$/.test(code)?code:"OTHER",...Number.isInteger(status)&&status>=100&&status<=599?{status}:{}};const source=response?.sourceDiagnostic;if(code==="INVALID_MEDIA_URL"&&source&&typeof source==="object"){result.mediaFetchDiagnostic.sourceDiagnostic={reason:["url_invalid","config_unavailable","allowlist_missing","allowlist_invalid","protocol_rejected","host_rejected"].includes(source.reason)?source.reason:"other",stage:["open","read","bounded"].includes(source.stage)?source.stage:null,protocol:["https","http","blob","data"].includes(source.protocol)?source.protocol:"other",configAvailable:source.configAvailable===true,allowedHostCount:Number.isSafeInteger(source.allowedHostCount)&&source.allowedHostCount>=0?source.allowedHostCount:null,hostAllowed:source.hostAllowed===true}}return reject("media_fetch_failed")}dataUrl=response.base64;materializedBlob=response.blob||null}if(!materializedBlob&&!new RegExp(`^data:${entry.mediaType}/[a-z0-9.+-]+;base64,`,"i").test(dataUrl))return reject("media_mime_invalid");const blob=materializedBlob||await(await fetch(dataUrl)).blob();if(!blob.size||!blob.type.startsWith(`${entry.mediaType}/`))return reject("media_bytes_invalid");const assetKey=`${attempt.id}:result:${index}`;const ext=entry.mediaType==="video"?"mp4":{"image/webp":"webp","image/png":"png","image/avif":"avif","image/gif":"gif"}[blob.type]||"jpg";pendingAssets.push({id:assetKey,userId:run.userId,projectId:run.projectId,ownerScope:run.ownerScope,runId:run.id,blob,name:`${index+1}.${ext}`,type:blob.type});let posterAssetKey=null;if(run.provider==="gemini"&&entry.mediaType==="video"){try{const posterData=await window.ImmediateUploader?._portableVideoThumbnail?.(blob,200,{representativeFrame:true});if(/^data:image\/[a-z0-9.+-]+;base64,/i.test(posterData||"")){const posterBlob=await(await fetch(posterData)).blob();if(posterBlob.size&&posterBlob.type.startsWith("image/")){posterAssetKey=`${assetKey}:poster`;posterAssets.push({receiptIndex:index,asset:{id:posterAssetKey,userId:run.userId,projectId:run.projectId,ownerScope:run.ownerScope,runId:run.id,blob:posterBlob,name:`${index+1}-poster.jpg`,type:posterBlob.type}})}}}catch(error){console.warn("[ProviderWebScheduler] Gemini video poster unavailable:",error?.message||error)}}receipts.push({identity:`${attempt.id}:${entry.identity}`,assetKey,mediaType:entry.mediaType,tabId:attempt.tabId,index})}for(const asset of pendingAssets)await window.ProviderWebQueueStore.putAsset(asset);for(const{receiptIndex,asset}of posterAssets){try{await window.ProviderWebQueueStore.putAsset(asset);receipts[receiptIndex].posterAssetKey=asset.id;receipts[receiptIndex].posterFrameVersion=2}catch(error){console.warn("[ProviderWebScheduler] Gemini video poster storage unavailable:",error?.message||error)}}return receipts}static async _submitWorker(run,item,attempt,workerContext,refs,shouldStop){const adapter=window.ProviderRegistry?.get?.(run.provider);if(!adapter||adapter.key!==run.provider)throw new Error("PROVIDER_ADAPTER_NOT_READY");const settings={...run.settingsSnapshot,...item.settingsOverride||{}};if(run.provider==="muse")return adapter.submit({prompt:item.prompt,refs,settings:{mode:settings.mediaType,ratio:settings.ratio,model:settings.model,newChat:true,autoDownload:false,source:run.source},workerContext,shouldStop});if(settings.deleteAfterGen&&!["chatgpt","gemini"].includes(run.provider))throw new Error("WORKER_DELETE_UNSUPPORTED");if(run.provider==="chatgpt"){if(settings.mediaType!=="image")throw new Error("UNSUPPORTED_MEDIA_TYPE");return adapter.submit({prompt:item.prompt,refFileIds:refs,settings:{ratio:settings.ratio,model:settings.model,source:run.source},workerContext,shouldStop})}if(run.provider==="gemini")return adapter.submit({prompt:item.prompt,mediaType:settings.mediaType,model:settings.model,ratio:settings.ratio,refs,runId:attempt.id,settings:{...settings,source:run.source},workerContext,shouldStop});throw new Error("PROVIDER_WORKER_UNSUPPORTED")}static async _submitWorkerWithActivation(run,item,attempt,workerContext,refs,shouldStop){const previousTurn=this._workerSubmitTurn||Promise.resolve();let releaseTurn;this._workerSubmitTurn=new Promise(resolve=>{releaseTurn=resolve});this._submitTurnByAttempt||(this._submitTurnByAttempt=new Map);this._submitTurnByAttempt.set(attempt.id,this._workerSubmitTurn);await previousTurn;let task=null;let workerActivated=false;try{if(shouldStop?.())return{success:false,error:"CANCELLED"};if(["chatgpt","muse","gemini"].includes(run.provider)){const readyStartedAt=Date.now();const ready=run.provider==="muse"?await window.MuseSession.ensureReady({workerContext,waitForComposer:true,silent:true}):await(run.provider==="chatgpt"?window.ChatGPTSession:window.GeminiSession).ensureReady({workerContext,waitForEditorMs:await window.ExecutionConfig.getProviderStartupTimeoutMs(run.provider)});if(shouldStop?.())return{success:false,error:"CANCELLED"};if(!ready?.ready||ready.tabId!==workerContext.tabId)return{success:false,error:ready?.error||"EDITOR_NOT_FOUND",diagnostic:ready?.diagnostic||null};console.info("[ProviderWebScheduler] worker_editor_ready",JSON.stringify({provider:run.provider,promptIndex:item.promptIndex,tabId:workerContext.tabId,beforeWindowFocus:false,elapsedMs:Date.now()-readyStartedAt,...run.provider==="chatgpt"&&{proof:"hydrated_composer"}}))}const activated={success:true,focused:false};if(!activated?.success)throw new Error(activated?.error||"WORKER_ACTIVATION_FAILED");workerActivated=true;console.info("[ProviderWebScheduler] worker_activation",JSON.stringify({provider:run.provider,promptIndex:item.promptIndex,stage:"deferred_to_composer",windowFocused:activated.focused!==false}));const activatedAt=Date.now();let earlyRestored=false;task=this._submitWorker(run,item,attempt,workerContext,refs,shouldStop);let finished=false;const settled=task.then(()=>{finished=true},()=>{finished=true});while(!finished){const current=await window.ProviderWebQueueStore.getAttempt(attempt.id).catch(()=>null);if(current?.sendObservedAt)break;if(run.source==="workflow"&&activated.focused===true&&!earlyRestored&&current?.submitStage==="pre_submit"&&Date.now()-activatedAt>=1e3){earlyRestored=true;const restored=await this._rpc("providerWorker:restoreFocus",workerContext).catch(error=>({success:false,error:error?.message||"FOCUS_RESTORE_FAILED"}));console.info("[ProviderWebScheduler] worker_input_focus",JSON.stringify({provider:run.provider,promptIndex:item.promptIndex,stage:"early_restore",restored:restored?.restored===true,reason:restored?.reason||restored?.error||null}));if(!restored?.success)console.warn("[ProviderWebScheduler] worker_focus_restore_failed",restored?.error||"FOCUS_RESTORE_FAILED")}await Promise.race([settled,new Promise(resolve=>setTimeout(resolve,150))])}}finally{if(workerActivated){const restored=await this._rpc("providerWorker:restoreFocus",workerContext).catch(error=>({success:false,error:error?.message||"FOCUS_RESTORE_FAILED"}));if(!restored?.success)console.warn("[ProviderWebScheduler] worker_focus_restore_failed",restored?.error||"FOCUS_RESTORE_FAILED")}releaseTurn();this._submitTurnByAttempt.delete(attempt.id)}return task}static _verifiedTextOnly(provider,error,confirmed){return confirmed===true&&(provider==="chatgpt"&&error==="TEXT_ONLY"||provider==="gemini"&&error==="GEMINI_TEXT_ONLY_RESULT")}static async _downloadWorkerReceipts(run,item,attempt,result,receipts,settings){for(const receipt of receipts){const asset=await window.ProviderWebQueueStore.getAsset(run.userId,run.projectId,receipt.assetKey,run.ownerScope);if(!asset?.blob?.size)return{success:false,error:"PROVIDER_RESULT_ASSET_MISSING"};const video=receipt.mediaType==="video";const ext=video?{"video/mp4":"mp4","video/webm":"webm","video/ogg":"ogv"}[asset.blob.type]:run.provider==="gemini"?"png":"jpg";if(!ext)return{success:false,error:"PROVIDER_RESULT_FORMAT_UNKNOWN"};const filename=window.DownloadHelper.buildFilename({template:settings.template,project:settings.project||window._currentProjectName||"flow",prompt:item.prompt,index:item.promptIndex+1+receipt.index,taskName:run.settingsSnapshot.downloadSubFolder||"",folder:settings.folder,ext});let downloaded=null;if(run.provider==="gemini"){const watermarkEnabled=video?run.settingsSnapshot.geminiRemoveWatermarkVideo:run.settingsSnapshot.geminiRemoveWatermark;const shouldRemove=watermarkEnabled===false?false:watermarkEnabled===true?window.featureGate?.shouldRemoveWatermark?.(receipt.mediaType,{ignoreUserSetting:true})===true:window.WatermarkClient?.enabled?.(receipt.mediaType)===true;const native=video?window.MessageBridge?.geminiDownloadVideoNative:window.MessageBridge?.geminiDownloadImageNative;const fingerprint=result.results?.[receipt.index]?.fingerprint;if(native&&fingerprint&&(!video||!shouldRemove)){downloaded=await this._serializeGeminiNativeDownload(async()=>{const owner=await this._rpc("providerWorker:verify",{workerId:attempt.workerId,epoch:attempt.epoch,userId:run.userId,tabId:attempt.tabId}).catch(()=>({success:false}));if(!owner?.success||owner.worker?.tabId!==attempt.tabId)return{success:false,error:"PROVIDER_WORKER_OWNER_LOST"};try{return await native.call(window.MessageBridge,{tabId:attempt.tabId,fingerprint,filename,removeWatermark:shouldRemove})}catch(error){return{success:false,error:error?.message||"GEMINI_NATIVE_DOWNLOAD_FAILED"}}});if(!downloaded?.success)return downloaded||{success:false,error:"GEMINI_NATIVE_DOWNLOAD_FAILED"};continue}if(downloaded?.success)continue;if(video){downloaded=await window.DownloadHelper.downloadStoredProviderVideo({blob:asset.blob,filename,waitForComplete:true,watermarkEnabled})}else{downloaded=await window.DownloadHelper.downloadStoredProviderImage({blob:asset.blob,filename,waitForComplete:true,watermarkEnabled})}}else if(video){const url=URL.createObjectURL(asset.blob);try{downloaded=await this._rpc("chromeDownload",{url,filename,waitForComplete:true})}finally{URL.revokeObjectURL(url)}}else{const dataUrl=await new Promise((resolve,reject)=>{const reader=new FileReader;reader.onload=()=>resolve(reader.result);reader.onerror=()=>reject(reader.error||new Error("PROVIDER_RESULT_READ_FAILED"));reader.readAsDataURL(asset.blob)});downloaded=await window.DownloadHelper.downloadImageAsJpeg({dataUrl,filename,waitForComplete:true})}if(!downloaded?.success)return{success:false,error:downloaded?.error||"PROVIDER_RESULT_DOWNLOAD_FAILED"}}return{success:true}}static async _workOne(active,worker,item,onClaim=()=>{}){const{run,lease}=active;const attemptId=crypto.randomUUID();const attempt=await window.ProviderWebQueueStore.claim(run.id,item.promptIndex,{attemptId,workerId:worker.workerId,tabId:worker.tabId,epoch:lease.epoch,ownerId:this._ownerId});onClaim(attemptId);window.eventBus?.emit?.("provider_web:changed",{runId:run.id,projectId:run.projectId});const workerContext={workerId:worker.workerId,epoch:lease.epoch,userId:run.userId,tabId:worker.tabId,workerAttempt:{attemptId}};if(worker.openedAtNewChat===true&&!worker.initialChatConsumed)workerContext.initialNewChat=true;const tracker={trackerProvider:run.provider,isRunning:true,total:active.itemCount,completed:0,elapsed:Date.now()-run.createdAt,jobs:[{id:run.id,owner:"prompts",label:`${run.provider} Gen`,status:"running",total:active.itemCount,completed:0,failed:0,startedAt:run.createdAt,items:[{id:item.id,promptIndex:item.promptIndex,promptText:item.prompt,state:"SUBMITTING",retryCount:0,submittedAt:null,completedAt:null}]}]};await this._rpc("providerWorker:trackerUpdate",{...workerContext,data:tracker}).catch(error=>console.warn("[ProviderWebScheduler] Tracker:",error?.message||error));if(run.source==="gentab_direct")window.eventBus?.emit?.("execution:tracker_update",{owner:"prompts",label:`${run.provider} Gen`,phase:"prompt_submitting",current:item.promptIndex+1,total:active.itemCount,promptText:item.prompt,provider:run.provider});let workerStage="refs";try{const refs=await this._refs(run,item,()=>active.stop===true);workerStage="submit_activation";const result=await this._submitWorkerWithActivation(run,item,attempt,workerContext,refs,()=>active.stop===true);workerStage="attempt_read";const actual=await window.ProviderWebQueueStore.getAttempt(attemptId);if(actual?.submitStage!=="dispatch_intent"){const diagnostic=result?.diagnostic;const transportMessage=result?.error==="SEND_FAILED"?String(result.message||""):"";const transportReason=/receiving end does not exist/i.test(transportMessage)?"receiver_missing":/message port closed|channel closed/i.test(transportMessage)?"channel_closed":transportMessage?"other":null;let workerCheckOutcome=null;let tabState=diagnostic?.tabState||null;if(result?.error==="SEND_FAILED"){let timer;const checked=await Promise.race([this._rpc("providerWorker:verify",workerContext).catch(()=>({success:false,error:"PROBE_UNAVAILABLE"})),new Promise(resolve=>{timer=setTimeout(()=>resolve({success:false,error:"PROBE_UNAVAILABLE"}),2e3)})]);clearTimeout(timer);workerCheckOutcome=checked?.success?"verified":["WORKER_TAB_LOST","WORKER_TAB_LOADING","WORKER_OWNER_MISMATCH"].includes(checked?.error)?checked.error.toLowerCase():"probe_unavailable";tabState=checked?.tabState||tabState}console.warn("[ProviderWebScheduler] worker_pre_submit_failed",JSON.stringify({runId:run.id,promptIndex:item.promptIndex,workerId:worker.workerId,error:result?.error||"PRE_SUBMIT_FAILED",submitStage:actual?.submitStage||null,reason:result?.reason||null,transportReason,diagnostic:diagnostic&&typeof diagnostic==="object"?{elapsedMs:Number.isFinite(diagnostic.elapsedMs)?diagnostic.elapsedMs:null,timeoutMs:Number.isFinite(diagnostic.timeoutMs)?diagnostic.timeoutMs:null,checks:Number.isFinite(diagnostic.checks)?diagnostic.checks:null,tabState:diagnostic.tabState&&typeof diagnostic.tabState==="object"?{status:diagnostic.tabState.status||null,location:diagnostic.tabState.location||null}:null}:null}));await window.ProviderWebQueueStore.settleAttempt(attemptId,{state:active.stop&&actual?.submitStage==="pre_submit"?"CANCELLED":"FAILED",error:active.stop&&actual?.submitStage==="pre_submit"?"USER_CANCELLED":result?.error||"PRE_SUBMIT_FAILED",preSubmitDiagnostic:{...diagnostic&&typeof diagnostic==="object"?diagnostic:{},transportReason,workerCheckOutcome,tabState},intentDiagnostic:result?.error==="PROVIDER_WEB_INTENT_UNAVAILABLE"?result?.diagnostic||null:null});if(!active.stop&&active.retryLimit>(Number(run.source==="mcp_direct"?item.retrySubmitCount:run.retryCount)||0)&&window.ProviderWebQueueStore.setRetryPending)await window.ProviderWebQueueStore.setRetryPending(attemptId,result?.error||"PRE_SUBMIT_FAILED").catch(error=>console.warn("[ProviderWebScheduler] Retry status:",error?.message||error));return}console.info("[ProviderWebScheduler] worker_result",JSON.stringify({runId:run.id,promptIndex:item.promptIndex,provider:run.provider,success:result?.success===true,error:result?.error||null,reason:result?.reason||null,...run.provider==="chatgpt"&&result?.error==="COMPOSER_DIRTY"&&result?.diagnostic&&{composerDiagnostic:result.diagnostic},submitStage:actual.submitStage,sendObserved:!!actual.sendObservedAt,turnIdAvailable:!!result?.turnId,imageLineage:result?.imageLineage||null,imageCount:Array.isArray(result?.imageUrls)?result.imageUrls.length:null,...["chatgpt","gemini"].includes(run.provider)&&{deleteAfterGen:run.settingsSnapshot.deleteAfterGen===true,conversationUrlAvailable:typeof result?.conversationUrl==="string"},...run.provider==="gemini"&&{modelSelection:result?.modelSelection||null}}));if(result?.success===true){const returned=await this._rpc("providerWorker:returnToSourceIfWorkerFocused",workerContext).catch(error=>({success:false,error:error?.message||"WORKER_RESULT_FOCUS_RETURN_FAILED"}));console.info("[ProviderWebScheduler] worker_result_focus",JSON.stringify({runId:run.id,promptIndex:item.promptIndex,provider:run.provider,restored:returned?.restored===true,reason:returned?.reason||returned?.error||null}))}const receipts=await this._receipt(run,item,actual,result);if(receipts?.length){await window.ProviderWebQueueStore.settleAttempt(attemptId,{state:receipts.length>=item.quantity?"COMPLETED":"PARTIAL_FAIL",resultReceipts:receipts,tabId:attempt.tabId,epoch:attempt.epoch});let downloadSucceeded=true;if((!run.ownerScope||run.source==="mcp_direct"&&run.provider==="muse"&&run.settingsSnapshot.deleteAfterGen)&&run.settingsSnapshot.autoDownload&&window.featureGate?.canUse?.("auto_download")===true){await window.ProviderWebQueueStore.setDownloadState(item.id,"downloading");window.eventBus?.emit?.("provider_web:changed",{runId:run.id,projectId:run.projectId});try{const downloadSettings=await window.DownloadHelper.getSettings();const downloaded=await this._downloadWorkerReceipts(run,item,attempt,result,receipts,downloadSettings);await window.ProviderWebQueueStore.setDownloadState(item.id,downloaded?.success?"completed":"failed",downloaded?.error||null);downloadSucceeded=downloaded?.success===true;if(run.provider==="muse"&&downloaded?.success&&run.settingsSnapshot.deleteAfterGen&&receipts.length>=item.quantity&&!active.stop){try{const cleanup=await window.MuseSession.deleteCurrentConversation({workerContext});if(cleanup?.success!==true)console.warn("[ProviderWebScheduler] Muse cleanup:",cleanup?.error||"DELETE_UNVERIFIED")}catch(cleanupError){console.warn("[ProviderWebScheduler] Muse cleanup:",cleanupError?.message||cleanupError)}}}catch(error){downloadSucceeded=false;await window.ProviderWebQueueStore.setDownloadState(item.id,"failed",error?.message||"PROVIDER_RESULT_DOWNLOAD_FAILED")}}if(!run.ownerScope&&run.provider==="chatgpt"){const cleanupReason=run.settingsSnapshot.deleteAfterGen!==true?"setting_disabled":receipts.length<item.quantity?"incomplete_results":!downloadSucceeded?"download_failed":active.stop?"run_stopped":typeof result.conversationUrl!=="string"?"conversation_url_unavailable":null;console.info("[ProviderWebScheduler] chatgpt_cleanup_decision",JSON.stringify({runId:run.id,promptIndex:item.promptIndex,enabled:run.settingsSnapshot.deleteAfterGen===true,receiptCount:receipts.length,expectedCount:item.quantity,downloadSucceeded,reason:cleanupReason||"attempt"}));if(!cleanupReason){try{const owner=await this._rpc("providerWorker:verify",{workerId:attempt.workerId,epoch:attempt.epoch,userId:run.userId,tabId:attempt.tabId});if(owner?.success&&owner.worker?.tabId===attempt.tabId){const cleanup=await this._rpc("chatgpt:deleteConversationWithReloadFallback",{tabId:attempt.tabId,expectedConversationUrl:result.conversationUrl,focusWindow:false});console.info("[ProviderWebScheduler] chatgpt_cleanup_outcome",JSON.stringify({runId:run.id,promptIndex:item.promptIndex,success:cleanup?.success===true,error:cleanup?.error||null,reloaded:cleanup?.reloaded===true}))}else{console.warn("[ProviderWebScheduler] chatgpt_cleanup_skipped","worker_owner_lost")}}catch(error){console.warn("[ProviderWebScheduler] chatgpt_cleanup_failed",error?.message||"DELETE_UNVERIFIED")}}}if(!run.ownerScope&&run.provider==="gemini"){const cleanupReason=run.settingsSnapshot.deleteAfterGen!==true?"setting_disabled":receipts.length<item.quantity?"incomplete_results":!downloadSucceeded?"download_failed":active.stop?"run_stopped":typeof result.conversationUrl!=="string"?"conversation_url_unavailable":null;console.info("[ProviderWebScheduler] gemini_cleanup_decision",JSON.stringify({runId:run.id,promptIndex:item.promptIndex,enabled:run.settingsSnapshot.deleteAfterGen===true,receiptCount:receipts.length,expectedCount:item.quantity,downloadSucceeded,reason:cleanupReason||"attempt"}));if(!cleanupReason){try{const owner=await this._rpc("providerWorker:verify",{workerId:attempt.workerId,epoch:attempt.epoch,userId:run.userId,tabId:attempt.tabId});if(owner?.success&&owner.worker?.tabId===attempt.tabId){const cleanup=await window.GeminiSession.deleteCurrentConversation({workerContext,expectedConversationUrl:result.conversationUrl});console.info("[ProviderWebScheduler] gemini_cleanup_outcome",JSON.stringify({runId:run.id,promptIndex:item.promptIndex,success:cleanup?.success===true,error:cleanup?.error||null}))}else{console.warn("[ProviderWebScheduler] gemini_cleanup_skipped","worker_owner_lost")}}catch(error){console.warn("[ProviderWebScheduler] gemini_cleanup_failed",error?.message||"DELETE_UNVERIFIED")}}}}else{const verifiedTextOnly=this._verifiedTextOnly(run.provider,result?.error,result?.textOnlyConfirmed);const failureCode=result?.error||"PROVIDER_RESULT_UNVERIFIED";const mediaReadUnconfirmed=run.provider==="gemini"&&result?.success===true&&result.receiptFailureReason==="media_fetch_failed";await window.ProviderWebQueueStore.settleAttempt(attemptId,{state:mediaReadUnconfirmed?"NEEDS_REVIEW":"FAILED",error:failureCode,verifiedTextOnly,deliveryErrorObserved:run.provider==="muse"&&failureCode==="MUSE_DELIVERY_UNCONFIRMED"&&result?.deliveryErrorObserved===true,...failureCode==="EXCEPTION"&&{exceptionDiagnostic:result?.diagnostic||null},...(["muse","chatgpt"].includes(run.provider)&&failureCode==="TIMEOUT"||run.provider==="gemini"&&["STARTUP_TIMEOUT","GENERATION_STALLED","ABSOLUTE_TIMEOUT"].includes(failureCode))&&{monitorDiagnostic:result?.diagnostic||null},...failureCode==="PROVIDER_RESULT_UNVERIFIED"&&{receiptDiagnostic:result?.receiptFailureReason||null,mediaFetchDiagnostic:result?.mediaFetchDiagnostic||null},...failureCode==="PROVIDER_WEB_INTENT_UNAVAILABLE"&&{intentDiagnostic:result?.diagnostic||null}});if(!active.stop&&!mediaReadUnconfirmed&&active.retryLimit>(Number(run.source==="mcp_direct"?item.retrySubmitCount:run.retryCount)||0)&&window.ProviderWebQueueStore.setRetryPending)await window.ProviderWebQueueStore.setRetryPending(attemptId,failureCode).catch(error=>console.warn("[ProviderWebScheduler] Retry status:",error?.message||error))}return{conversationUrl:typeof result?.conversationUrl==="string"?result.conversationUrl:null}}catch(error){const actual=await window.ProviderWebQueueStore.getAttempt(attemptId);console.warn("[ProviderWebScheduler] worker_attempt_exception",JSON.stringify({runId:run.id,promptIndex:item.promptIndex,workerId:worker.workerId,error:error?.message||"PROVIDER_WORKER_FAILED",submitStage:actual?.submitStage||null}));const verifiedTextOnly=actual?.submitStage==="dispatch_intent"&&this._verifiedTextOnly(run.provider,error?.code,error?.textOnlyConfirmed);const errorCode=verifiedTextOnly?error.code:error?.message||"PROVIDER_WORKER_FAILED";const preSubmitDiagnostic=actual?.submitStage==="pre_submit"&&errorCode==="EXCEPTION"?{exceptionOrigin:"worker_scheduler",exceptionStage:workerStage}:null;await window.ProviderWebQueueStore.settleAttempt(attemptId,{state:active.stop&&actual?.submitStage==="pre_submit"?"CANCELLED":"FAILED",error:active.stop&&actual?.submitStage==="pre_submit"?"USER_CANCELLED":errorCode,verifiedTextOnly,...preSubmitDiagnostic&&{preSubmitDiagnostic},...run.provider==="gemini"&&["STARTUP_TIMEOUT","GENERATION_STALLED","ABSOLUTE_TIMEOUT"].includes(errorCode)?{monitorDiagnostic:error?.monitorDiagnostic||null}:{}});if(!active.stop&&!(run.provider==="muse"&&run.settingsSnapshot.chain?.enabled&&workerStage==="refs")&&active.retryLimit>(Number(run.source==="mcp_direct"?item.retrySubmitCount:run.retryCount)||0)&&window.ProviderWebQueueStore.setRetryPending)await window.ProviderWebQueueStore.setRetryPending(attemptId,errorCode).catch(retryError=>console.warn("[ProviderWebScheduler] Retry status:",retryError?.message||retryError))}finally{await this._rpc("providerWorker:trackerUpdate",{...workerContext,data:{trackerProvider:run.provider,isRunning:false,jobs:[]}}).catch(()=>{});window.eventBus?.emit?.("provider_web:changed",{runId:run.id,projectId:run.projectId})}}static async _waitForWorkerSubmit(attemptId,workerTask,active){let finished=false;const startedAt=Date.now();let releaseReason="task_finished";workerTask.finally(()=>{finished=true});while(!finished&&!active.stop&&!active.paused){const attempt=await window.ProviderWebQueueStore.getAttempt(attemptId).catch(()=>null);if(attempt?.sendObservedAt){releaseReason="send_observed";break}await Promise.race([workerTask,new Promise(resolve=>setTimeout(resolve,150))])}if(active.stop)releaseReason="stopped";else if(active.paused)releaseReason="paused";const submitTurn=this._submitTurnByAttempt?.get(attemptId);if(submitTurn)await submitTurn;console.info("[ProviderWebScheduler] worker_startup_gate",JSON.stringify({runId:active.run.id,elapsedMs:Date.now()-startedAt,releaseReason}))}static async _createRecoverableRetry(snapshot,retryCount){const{run,items}=snapshot;const failed=items.filter(item=>!item.hidden&&["FAILED","PARTIAL_FAIL"].includes(item.state)&&item.attemptId);const attempts=await Promise.all(failed.map(item=>window.ProviderWebQueueStore.getAttempt(item.attemptId)));const candidates=failed.filter((item,index)=>attempts[index]&&window.ProviderWebQueueStore._retrySafeAttempt(item,attempts[index],true));if(!candidates.length)return null;const originalIndexes=candidates.map(item=>run.manualRegen?run.originalIndexes?.[item.promptIndex]:item.promptIndex);if(originalIndexes.some(index=>!Number.isInteger(index)))throw new Error("PROVIDER_RETRY_INDEX_UNAVAILABLE");const assets=new Map;const refKeys=[...new Set(candidates.flatMap(item=>item.refKeys||[]))];const sourceAssets=await Promise.all(refKeys.map(key=>window.ProviderWebQueueStore.getAsset(run.userId,run.projectId,key,run.ownerScope)));for(let index=0;index<refKeys.length;index++){const asset=sourceAssets[index];if(!asset?.blob)throw new Error("PROVIDER_RETRY_REF_UNAVAILABLE");assets.set(refKeys[index],{id:crypto.randomUUID(),blob:asset.blob,name:asset.name,type:asset.type})}const id=crypto.randomUUID();const args={id,userId:run.userId,projectId:run.projectId,settingsSnapshot:run.settingsSnapshot,originalIndexes,retryCount,runAction:"AUTO_RETRY",batchName:run.batchName||null,prompts:candidates.map(item=>({text:item.prompt,quantity:item.quantity,refKeys:(item.refKeys||[]).map(key=>assets.get(key).id),settingsOverride:item.settingsOverride||{}})),refAssets:[...assets.values()]};if(run.mcpParentRunId)await window.ProviderWebQueueStore.createMcpManualRun({...args,parentRunId:run.mcpParentRunId});else if(run.source==="gentab_direct")await window.ProviderWebQueueStore.createDirectManualRun({...args,parentRunId:run.manualRegen?run.parentRunId:run.id});else await window.ProviderWebQueueStore.createManualRun({...args,batchId:run.batchId});window.eventBus?.emit?.("provider_web:changed",{runId:id,projectId:run.projectId});console.info("[ProviderWebScheduler] recoverable_retry",JSON.stringify({fromRunId:run.id,runId:id,retryCount,promptIndexes:originalIndexes,reasons:candidates.map(item=>item.error)}));return id}static async run(runId){const apiBatch=await window.ProviderWebQueueStore.getRun(runId);if(window.MuseApiBatchRunner?.applies(apiBatch?.run)||window.MuseApiBatchRunner?.intended(apiBatch?.run)&&apiBatch.run.museApiStarted)return window.MuseApiBatchRunner.run(runId);const initial=await window.ProviderWebQueueStore.getRun(runId);if(!["batch","gentab_direct"].includes(initial?.run?.source))throw new Error("PROVIDER_RUN_OWNER_MISMATCH");if(this._runCalls.has(runId))throw new Error("PROVIDER_RUN_ALREADY_ACTIVE");this._runCalls.add(runId);const geminiAccountTabId=window.GeminiSession?._tabId??null;let currentRunId=runId;const visited=new Set;const retainedMainLayouts=[];let finalOutcome=null;try{while(true){visited.add(currentRunId);const outcome=await this._runOnce(currentRunId,{geminiAccountTabId,managedRun:true,retainMainLayout:layout=>retainedMainLayouts.push(layout)});finalOutcome=outcome;if(!["failed","partial","needs_review"].includes(outcome.status)||this._pendingStops.has(runId))return outcome;const snapshot=await window.ProviderWebQueueStore.getRun(currentRunId);if(!["SETTLED","RUNNING"].includes(snapshot?.run?.status))return outcome;let maxRetries;try{maxRetries=Number((await window.ExecutionConfig.getConfig())?.workflow?.max_retries)}catch(_){return outcome}if(!Number.isSafeInteger(maxRetries)||maxRetries<0)return outcome;const retryCount=Number(snapshot.run.retryCount)||0;if(retryCount>=maxRetries)return outcome;let nextRunId;try{nextRunId=await this._createRecoverableRetry(snapshot,retryCount+1)}catch(error){console.warn("[ProviderWebScheduler] recoverable_retry_unavailable",error?.message||error);return outcome}if(!nextRunId)return outcome;this._retryChildren.set(runId,nextRunId);if(this._pendingPauses.delete(currentRunId))this._pendingPauses.add(nextRunId);if(initial.run.source==="gentab_direct")window.eventBus?.emit?.("execution:tracker_update",{owner:"prompts",label:`${initial.run.provider} Gen`,phase:"retry",current:0,total:initial.items.length,promptText:"",provider:initial.run.provider,retryInfo:{attempt:retryCount+1,maxRetries}});if(this._pendingStops.has(runId))this._pendingStops.add(nextRunId);currentRunId=nextRunId}}finally{for(const layout of retainedMainLayouts.reverse()){try{const restored=await this.restoreMainWindowLayout(layout.runId,layout.windowId);console.info("[ProviderWebScheduler] main_worker_layout_restore",JSON.stringify({runId:layout.runId,...restored}))}catch(error){console.warn("[ProviderWebScheduler] main worker layout restore failed:",error?.message||error)}}this._retryChildren.delete(runId);this._runCalls.delete(runId);for(const id of visited)this._pendingPauses.delete(id);if(window.ProviderWebQueueStore.clearRetryPending)await Promise.allSettled([...visited].map(id=>window.ProviderWebQueueStore.clearRetryPending(id)));window.eventBus?.emit?.("provider_web:changed",{runId});if(initial.run.source==="gentab_direct")window.eventBus?.emit?.("execution:tracker_update",{owner:"prompts",label:`${initial.run.provider} Gen`,phase:finalOutcome?.status==="stopped"||this._pendingStops.has(runId)?"stopped":finalOutcome?.status==="paused"?"paused":finalOutcome?.status==="success"?"completed":"error",current:initial.items.length,total:initial.items.length,promptText:"",provider:initial.run.provider,retryInfo:null})}}static async createOwned({userId,provider,source,settingsSnapshot,prompts,refAssets=[],owner,batchName=null}){if(String(window.authManager?.getUser?.()?.id)!==String(userId))throw new Error("PROVIDER_RUN_ACCOUNT_CHANGED");if(!["workflow","mcp_direct"].includes(source)||!owner||typeof owner!=="object")throw new Error("PROVIDER_RUN_OWNER_MISMATCH");const id=crypto.randomUUID();const assetIds=new Map(refAssets.map((asset,index)=>[asset.id,`${id}:ref:${index}`]));if(assetIds.size!==refAssets.length||prompts.some(prompt=>(prompt.refKeys||[]).some(key=>!assetIds.has(key))))throw new Error("PROVIDER_RUN_ASSET_MISSING");const ownedAssets=refAssets.map(asset=>({...asset,id:assetIds.get(asset.id)}));const ownedPrompts=prompts.map(prompt=>({...prompt,refKeys:(prompt.refKeys||[]).map(key=>assetIds.get(key))}));await window.ProviderWebQueueStore.createRun({id,userId,projectId:null,provider,source,settingsSnapshot,prompts:ownedPrompts,refAssets:ownedAssets,batchName:source==="mcp_direct"?batchName:null,...source==="workflow"?{workflowId:owner.workflowId,nodeId:owner.nodeId}:{mcpJobId:owner.mcpJobId,runnerId:owner.runnerId}});return id}static async runOwned(runId,userId,owner,{onVerified=null,retainMainLayout=null}={}){if(String(window.authManager?.getUser?.()?.id)!==String(userId))throw new Error("PROVIDER_RUN_ACCOUNT_CHANGED");if(this._ownedRunCalls.has(runId))throw new Error("PROVIDER_RUN_ALREADY_ACTIVE");this._ownedRunCalls.add(runId);try{const snapshot=await window.ProviderWebQueueStore.getOwnedRun(runId,userId,owner);if(!snapshot||!["workflow","mcp_direct"].includes(snapshot.run.source))throw new Error("PROVIDER_RUN_OWNER_MISMATCH");if(onVerified&&(snapshot.run.source!=="workflow"||!["muse","chatgpt","gemini"].includes(snapshot.run.provider)||snapshot.run.settingsSnapshot?.deleteAfterGen!==true||snapshot.items.length!==1))throw new Error("PROVIDER_OWNER_CALLBACK_INVALID");return await this._runOnce(runId,{ownerCredentials:owner,geminiAccountTabId:window.GeminiSession?._tabId??null,onVerified,retainMainLayout})}finally{this._ownedRunCalls.delete(runId)}}static async stopOwned(runId,userId,owner,stopSource=null){if(String(window.authManager?.getUser?.()?.id)!==String(userId))throw new Error("PROVIDER_RUN_ACCOUNT_CHANGED");const snapshot=await window.ProviderWebQueueStore.getOwnedRun(runId,userId,owner);if(!snapshot||!["workflow","mcp_direct"].includes(snapshot.run.source))throw new Error("PROVIDER_RUN_OWNER_MISMATCH");return this.stop(runId,stopSource)}static async settleOwned(runId,userId,owner,status,successfulCount=null){if(String(window.authManager?.getUser?.()?.id)!==String(userId))throw new Error("PROVIDER_RUN_ACCOUNT_CHANGED");if(!["success","partial","failed"].includes(status))throw new Error("PROVIDER_OWNER_SETTLEMENT_INVALID");const snapshot=await window.ProviderWebQueueStore.getOwnedRun(runId,userId,owner);if(!snapshot||!["workflow","mcp_direct"].includes(snapshot.run.source)||!snapshot.reservation?.token)throw new Error("PROVIDER_RUN_OWNER_MISMATCH");if(status==="partial"&&(!Number.isSafeInteger(successfulCount)||successfulCount<0||successfulCount>snapshot.items.length))throw new Error("PROVIDER_OWNER_SETTLEMENT_INVALID");if(snapshot.reservation.state==="settled"){const receipt=snapshot.reservation.receipt;if(!receipt||receipt.status!==status||status==="partial"&&receipt.successful_count!==successfulCount)throw new Error("PROVIDER_OWNER_SETTLEMENT_CONFLICT");await this._verifyOwnedServerBinding(snapshot,owner);await window.ProviderWebQueueStore.markOwnerCheckpointed(runId,userId,owner);return receipt}const lease=await this._lease(userId);try{await this._verifyOwnedServerBinding(snapshot,owner);await window.ProviderWebQueueStore.markOwnerCheckpointed(runId,userId,owner);const observed=await this._api("settlement",{token:snapshot.reservation.token});if(observed?.provider_web?.run_id!==runId)throw new Error("PROVIDER_RESERVATION_OWNER_MISMATCH");const lateWorkflowCheckpoint=observed.token_status==="expired"&&snapshot.run.source==="workflow"&&status==="success"&&(snapshot.run.ownerCheckpointStatus==="success"||!!snapshot.run.ownerDiscardedAt)&&snapshot.items.length===1&&snapshot.items[0].state==="COMPLETED"&&snapshot.items[0].resultReceipts?.some(receipt2=>receipt2?.identity&&receipt2?.assetKey)&&observed.provider_web?.dispatch_intent_count===1;if(observed.token_status==="active"||lateWorkflowCheckpoint)await this._api("complete",{token:snapshot.reservation.token,status,...status==="partial"?{result_data:{successful_count:successfulCount}}:{}});const confirmed=observed.token_status==="active"||lateWorkflowCheckpoint?await this._api("settlement",{token:snapshot.reservation.token}):observed;if(confirmed?.provider_web?.run_id!==runId)throw new Error("PROVIDER_RESERVATION_OWNER_MISMATCH");const receipt=confirmed.settlement;if(!receipt){const terminalStatus=confirmed.token_status;const intentCount=confirmed.provider_web?.dispatch_intent_count;const unsubmittedItem=snapshot.items[0];const unsubmittedAttempt=unsubmittedItem?.attemptId?await window.ProviderWebQueueStore.getAttempt(unsubmittedItem.attemptId):null;const unsubmittedFailure=snapshot.run.source==="workflow"&&status==="failed"&&snapshot.run.ownerCheckpointStatus==="failed"&&snapshot.items.length===1&&!unsubmittedItem.resultReceipts?.length&&(unsubmittedItem.state==="CANCELLED"&&unsubmittedItem.error==="WORKER_UI_ONLY"&&!unsubmittedItem.attemptId||unsubmittedItem.state==="CANCELLED"&&unsubmittedItem.error==="USER_CANCELLED"&&unsubmittedAttempt?.itemId===unsubmittedItem.id&&unsubmittedAttempt.submitStage==="pre_submit"&&!unsubmittedAttempt.intentRequestedAt&&!unsubmittedAttempt.clickGrantedAt&&!unsubmittedAttempt.sendObservedAt||unsubmittedItem.state==="FAILED"&&unsubmittedAttempt?.itemId===unsubmittedItem.id&&unsubmittedAttempt.submitStage==="pre_submit"&&!unsubmittedAttempt.intentRequestedAt&&!unsubmittedAttempt.clickGrantedAt&&!unsubmittedAttempt.sendObservedAt);if(unsubmittedFailure&&["expired","revoked","used"].includes(terminalStatus)&&intentCount===0&&window.ProviderWebQueueStore.closeOwnedUnsubmitted){await window.ProviderWebQueueStore.closeOwnedUnsubmitted(runId,userId,owner,this._ownerId,lease.epoch,snapshot.reservation.token,terminalStatus,intentCount);console.info("[ProviderWebScheduler] Closed terminal unsubmitted failure",JSON.stringify({runId,tokenStatus:terminalStatus,intentCount}));return{terminal_unsubmitted:true,token_status:terminalStatus}}const confirmedDeliveryFailure=snapshot.run.source==="workflow"&&snapshot.run.provider==="muse"&&status==="failed"&&snapshot.run.ownerCheckpointStatus==="failed"&&snapshot.items.length===1&&unsubmittedItem.state==="FAILED"&&unsubmittedItem.error==="MUSE_DELIVERY_UNCONFIRMED"&&!unsubmittedItem.resultReceipts?.length&&unsubmittedAttempt?.itemId===unsubmittedItem.id&&unsubmittedAttempt.submitStage==="dispatch_intent"&&!!unsubmittedAttempt.clickGrantedAt&&unsubmittedAttempt.deliveryErrorObserved===true;if(confirmedDeliveryFailure&&["expired","revoked","used"].includes(terminalStatus)&&intentCount===1&&window.ProviderWebQueueStore.closeOwnedConfirmedDelivery){await window.ProviderWebQueueStore.closeOwnedConfirmedDelivery(runId,userId,owner,this._ownerId,lease.epoch,snapshot.reservation.token,terminalStatus,intentCount);console.info("[ProviderWebScheduler] Closed terminal Muse delivery failure",JSON.stringify({runId,tokenStatus:terminalStatus,intentCount}));return{terminal_delivery_failure:true,token_status:terminalStatus}}const reviewedReset=snapshot.run.source==="workflow"&&status==="failed"&&snapshot.run.ownerCheckpointStatus==="failed"&&!!snapshot.run.ownerReviewDiscardedAt&&snapshot.items.length===1&&["NEEDS_REVIEW","FAILED"].includes(snapshot.items[0].state)&&!snapshot.items[0].resultReceipts?.length;if(reviewedReset&&["expired","revoked","used"].includes(terminalStatus)&&intentCount===1&&window.ProviderWebQueueStore.closeOwnedReviewedReset){await window.ProviderWebQueueStore.closeOwnedReviewedReset(runId,userId,owner,this._ownerId,lease.epoch,snapshot.reservation.token,terminalStatus,intentCount);console.info("[ProviderWebScheduler] Closed terminal reviewed reset",JSON.stringify({runId,tokenStatus:terminalStatus,intentCount}));return{terminal_review_discard:true,token_status:terminalStatus}}console.warn("[ProviderWebScheduler] Owner settlement missing receipt",JSON.stringify({runId,source:snapshot.run.source,tokenStatus:terminalStatus,intentCount:Number.isInteger(intentCount)?intentCount:null,itemState:snapshot.items[0]?.state||null,itemError:snapshot.items[0]?.error||null,hasAttempt:!!snapshot.items[0]?.attemptId,attemptStage:unsubmittedAttempt?.submitStage||null,intentRequested:!!unsubmittedAttempt?.intentRequestedAt,clickGranted:!!unsubmittedAttempt?.clickGrantedAt,sendObserved:!!unsubmittedAttempt?.sendObservedAt,checkpointStatus:snapshot.run.ownerCheckpointStatus||null}));throw new Error("PROVIDER_OWNER_SETTLEMENT_UNCONFIRMED")}if(receipt.status!==status||status==="partial"&&receipt.successful_count!==successfulCount)throw new Error("PROVIDER_OWNER_SETTLEMENT_CONFLICT");await window.ProviderWebQueueStore.saveRecoveredSettlement(runId,this._ownerId,lease.epoch,snapshot.reservation.token,receipt);return receipt}finally{await this._releaseLease(userId,lease)}}static async _runOnce(runId,{geminiAccountTabId=null,ownerCredentials=null,onVerified=null,retainMainLayout=null,managedRun=false}={}){if(this._activeRuns.has(runId))throw new Error("PROVIDER_RUN_ALREADY_ACTIVE");let data=await window.ProviderWebQueueStore.getRun(runId);const owned=["workflow","mcp_direct"].includes(data?.run?.source);if(!data?.run||owned&&!ownerCredentials||!["batch","gentab_direct","workflow","mcp_direct"].includes(data.run.source)||!["muse","chatgpt","gemini"].includes(data.run.provider)||!["QUEUED","RUNNING"].includes(data.run.status))throw new Error("PROVIDER_RUN_NOT_READY");if(data.run.source==="workflow"&&!ownerCredentials?.parentWorkflowToken)throw new Error("PROVIDER_WORKFLOW_RECOVERY_DISPATCH_BLOCKED");const resumed=data.run.status==="RUNNING";if(!resumed)await this._runStage(runId,"config",()=>this._config(data.run.provider,null,data.run.source));const configuredRetryLimit=Number(window.ExecutionConfig.getWorkflowConfig?.()?.max_retries);const retryLimit=data.run.source==="mcp_direct"&&window.featureGate?.canUse?.("retry_on_fail")===true?configuredRetryLimit:owned?0:configuredRetryLimit;if(managedRun)this._publishHistoryInBackground(data.run.userId);else await this.publishPending(data.run.userId);const lease=await this._runStage(runId,"lease",()=>this._lease(data.run.userId));try{let ownerBindingVerified=false;if(resumed){if(owned&&data.reservation?.token)ownerBindingVerified=!!await this._verifyOwnedServerBinding(data,ownerCredentials);await window.ProviderWebQueueStore.reconcileRun(runId);data=await window.ProviderWebQueueStore.getRun(runId);if(!data?.reservation?.token)throw new Error("PROVIDER_RESERVATION_MISSING");const settlement=await this._api("settlement",{token:data.reservation.token});if(settlement?.provider_web?.run_id!==runId)throw new Error("PROVIDER_RESERVATION_OWNER_MISMATCH");if(settlement.token_status!=="active"){if(settlement.settlement)await window.ProviderWebQueueStore.saveRecoveredSettlement(runId,this._ownerId,lease.epoch,data.reservation.token,settlement.settlement);const recoveredStatus=["success","partial","failed"].includes(settlement.settlement?.status)?settlement.settlement.status:settlement.settlement?.status==="cancelled"?"stopped":"needs_review";await this._recordHistory(runId,recoveredStatus,{waitForPublish:!managedRun});return{status:recoveredStatus,runId,items:data.items,receipt:settlement.settlement||null}}if(data.items.some(item=>item.state==="NEEDS_REVIEW")){await this._recordHistory(runId,"needs_review",{waitForPublish:!managedRun});return{status:"needs_review",runId,items:data.items}}await window.ProviderWebQueueStore.adoptReservation(runId,{ownerId:this._ownerId,epoch:lease.epoch});data=await window.ProviderWebQueueStore.getRun(runId)}if(resumed&&data.items.some(item=>item.state==="QUEUED"))await window.ExecutionConfig.getConfig(true);if(data.items.some(item=>item.state==="QUEUED"))await this._runStage(runId,"prompt_config",()=>this._promptConfig(data.run.provider,data.run.settingsSnapshot));const reservation=await this._runStage(runId,"reserve",()=>this._reserve(data,lease,ownerCredentials,resumed&&ownerBindingVerified));const selectedItems=data.run.selectedPromptIndex===null||data.run.selectedPromptIndex===void 0?data.items:data.items.filter(item=>item.promptIndex===data.run.selectedPromptIndex);if(!selectedItems.length)throw new Error("PROVIDER_ITEM_SELECTION_INVALID");const dispatchItems=owned?selectedItems.filter(item=>item.state==="QUEUED"):selectedItems;const sourceWindowId=typeof chrome==="undefined"||!chrome.windows?.getCurrent?null:await chrome.windows.getCurrent().then(win=>win?.id).catch(()=>null);const sourceSurface=data.run.source==="workflow"?"workflow":"sidebar";const screenTop=Number.isSafeInteger(window.screen?.availTop)?window.screen.availTop:null;const screenLeft=Number.isSafeInteger(window.screen?.availLeft)?window.screen.availLeft:null;const screenWidth=Number.isSafeInteger(window.screen?.availWidth)&&window.screen.availWidth>100?window.screen.availWidth:null;const screenHeight=Number.isSafeInteger(window.screen?.availHeight)&&window.screen.availHeight>100?window.screen.availHeight:null;let mainLayout=null;if(data.run.source!=="workflow"&&dispatchItems.length>0&&Number.isInteger(sourceWindowId)){try{const limits=this._admissionFor(data.run.provider,data.run.source);if(limits.parallelEnabled===true){const layout=await this.prepareMainWindowLayout(runId,sourceWindowId);if(layout?.success&&layout.adjusted){mainLayout=layout;if(typeof retainMainLayout==="function")retainMainLayout({runId,...layout})}console.info("[ProviderWebScheduler] main_worker_layout",JSON.stringify({runId,source:data.run.source,provider:data.run.provider,...layout}))}}catch(error){console.warn("[ProviderWebScheduler] main worker layout failed:",error?.message||error)}}const active={run:data.run,lease,reservation,retryLimit:Number.isSafeInteger(retryLimit)?retryLimit:0,stop:this._pendingStops.delete(runId),paused:this._pendingPauses.has(runId),workers:[],closedWorkers:new Set,itemCount:dispatchItems.length,openedWindowCount:0,sourceWindowId,screenLeft,screenWidth,screenTop,screenHeight,geminiAccountTabId};this._activeRuns.set(runId,active);this._pausedRuns.delete(runId);if(data.run.source==="gentab_direct")window.eventBus?.emit?.("execution:tracker_update",{owner:"prompts",label:`${data.run.provider} Gen`,phase:"started",current:0,total:data.items.length,promptText:data.items[0]?.prompt||"",provider:data.run.provider,retryInfo:null});try{let next=0;const process=async onClaim=>{const releaseSlot=await this._slot(this._admissionFor(data.run.provider,data.run.source).maxConcurrentWorkers,data.run.userId,()=>active.stop||active.paused,data.run.provider,data.run.source);const workerId=crypto.randomUUID();let lastPromptIndex=null;let openedAt=null;let exitReason=null;try{if(active.stop||active.paused||next>=dispatchItems.length)return;if(reservation.expiresAt<=Date.now()){active.paused=true;return}const workerLimits=this._admissionFor(data.run.provider,data.run.source);if(workerLimits.parallelEnabled===false){active.paused=true;exitReason="provider_disabled";return}if(active.stop||active.paused)return;const opened=await this._openWorkerWithCapacityWait({workerId,epoch:lease.epoch,userId:data.run.userId,provider:data.run.provider,runId,sourceWindowId:active.sourceWindowId,sourceSurface,screenLeft:active.screenLeft,screenWidth:active.screenWidth,screenTop:active.screenTop,screenHeight:active.screenHeight,layoutCount:workerLimits.maxConcurrentWorkers,promptIndex:dispatchItems[next]?.promptIndex,...data.run.provider==="gemini"&&{accountTabId:active.geminiAccountTabId}},()=>active.stop||active.paused||next>=dispatchItems.length||reservation.expiresAt<=Date.now(),()=>this._admissionFor(data.run.provider,data.run.source),data.run.provider);if(opened?.error==="PROVIDER_WORKER_SLOT_CANCELLED"){if(reservation.expiresAt<=Date.now())active.paused=true;return}if(opened?.error==="PROVIDER_WEB_PAUSED_BY_CONFIG"){active.paused=true;exitReason="provider_disabled";return}if(!opened.success)throw new Error(opened.error||"PROVIDER_WORKER_CREATE_FAILED");const worker=opened.worker;active.workers.push(worker);releaseSlot.opened(workerId);const peak=active.workers.length;await window.ProviderWebQueueStore.recordPeakWorkerWindows?.(runId,peak)?.catch(error=>console.warn("[ProviderWebScheduler] Worker peak history:",error?.message||error));openedAt=Date.now();if(!worker.reusedTab)active.openedWindowCount++;console.info("[ProviderWebScheduler] worker_window",JSON.stringify({event:worker.reusedTab?"reused_tab":"opened",runId,openInRun:active.workers.length,openedTotal:active.openedWindowCount,configuredLimit:workerLimits.configuredMaxConcurrentWorkers??workerLimits.maxConcurrentWorkers,effectiveLimit:workerLimits.maxConcurrentWorkers,parallelEnabled:workerLimits.parallelEnabled??null,promptCount:data.items.length,dispatchCount:dispatchItems.length,selectedPromptIndex:data.run.selectedPromptIndex??null}));while(!active.stop&&!active.paused&&next<dispatchItems.length){let live;try{live=this._admissionFor(data.run.provider,data.run.source)}catch(_){active.paused=true;exitReason="config_unavailable";break}if(live.parallelEnabled===false||!live.enabledProviders.includes(data.run.provider)){active.paused=true;exitReason="provider_disabled";break}if(active.workers.findIndex(record=>record.workerId===workerId)>=live.maxConcurrentWorkers){exitReason="cap_reduced";break}const item=dispatchItems[next++];if(item.state!=="QUEUED")continue;if(reservation.expiresAt<=Date.now()){active.paused=true;exitReason="reservation_expired";break}lastPromptIndex=item.promptIndex;if(worker.promptIndex!==item.promptIndex){const placement=await this._rpc("providerWorker:assignPrompt",{workerId,epoch:lease.epoch,userId:data.run.userId,tabId:worker.tabId,promptIndex:item.promptIndex}).catch(error=>({success:false,error:error?.message||"ASSIGN_PROMPT_FAILED"}));if(placement?.success)worker.promptIndex=item.promptIndex;else console.warn("[ProviderWebScheduler] worker layout:",placement?.error||"ASSIGN_PROMPT_FAILED")}const generated=await this._workOne(active,worker,item,onClaim);worker.initialChatConsumed=true;const latest=await window.ProviderWebQueueStore.getRun(runId);const settled=latest?.items.find(entry=>entry.promptIndex===item.promptIndex);if(settled?.state!=="COMPLETED"){if(data.run.provider==="muse"&&window.MuseVideoContinuity?.enabled(data.run.settingsSnapshot))active.paused=true;exitReason="item_not_completed";break}if(onVerified&&!active.stop)await onVerified({workerId:worker.workerId,epoch:worker.epoch,userId:worker.userId,tabId:worker.tabId,conversationUrl:generated?.conversationUrl||null})}}finally{const worker=active.workers.find(record=>record.workerId===workerId);let closeOutcome=null;try{if(worker)closeOutcome=active.closedWorkers.has(workerId)?{success:true,alreadyClosed:true}:await this._closeOwnedWorker(worker);if(worker&&!closeOutcome?.success)console.warn("[ProviderWebScheduler] worker_close_failed",{runId,workerId,error:closeOutcome?.error||"WORKER_CLOSE_UNKNOWN"})}finally{releaseSlot();if(worker)releaseSlot.closed(workerId);if(worker)active.workers=active.workers.filter(record=>record.workerId!==workerId)}const listed=await this._rpc("providerWorker:list",{userId:data.run.userId}).catch(()=>null);if(listed?.success)this._busyWorkers=(Number.isSafeInteger(listed.totalCount)?listed.totalCount:listed.workers.length)+this._pendingOpens;if(worker)console.info("[ProviderWebScheduler] worker_window",JSON.stringify({event:!closeOutcome?.success?"close_failed":closeOutcome.released?"released_tab":closeOutcome.detached?"detached":closeOutcome.alreadyClosed?"already_closed":"closed",runId,openInRun:active.workers.length,openedTotal:active.openedWindowCount,lastPromptIndex,lifetimeMs:openedAt===null?null:Date.now()-openedAt,exitReason:exitReason||(active.stop?"stopped":active.paused?"paused":next>=dispatchItems.length?"queue_consumed":"worker_error"),registryOpen:listed?.success?listed.workers.length:null,closeError:closeOutcome?.success?closeOutcome?.reason||null:closeOutcome?.error||"WORKER_CLOSE_UNKNOWN"}))}};const pending=new Set;let workerError=null;const startWorker=()=>{const previousStartup=this._startupGate;let releaseStartup;this._startupGate=new Promise(resolve=>{releaseStartup=resolve});let admit;const claimed=new Promise(resolve=>{admit=resolve});const task=previousStartup.then(()=>process(attemptId=>admit(attemptId))).catch(error=>{workerError||(workerError=error)}).finally(()=>{admit(null);pending.delete(task)});pending.add(task);return{task,claimed,releaseStartup}};while(!active.stop&&!active.paused&&!workerError&&next<dispatchItems.length){let live;try{live=this._admissionFor(data.run.provider,data.run.source)}catch(_){active.paused=true;break}if(live.parallelEnabled===false||!live.enabledProviders.includes(data.run.provider)){active.paused=true;break}const chained=data.run.provider==="muse"&&window.MuseVideoContinuity?.enabled(data.run.settingsSnapshot);const target=Math.min(chained?1:live.maxConcurrentWorkers,dispatchItems.length-next+pending.size);if(pending.size<target){const{task,claimed,releaseStartup}=startWorker();try{const attemptId=await claimed;if(attemptId)await this._waitForWorkerSubmit(attemptId,task,active)}finally{releaseStartup()}continue}if(!pending.size)break;await Promise.race([Promise.race(pending),new Promise(resolve=>setTimeout(resolve,1e3))])}await Promise.allSettled([...pending]);console.info("[ProviderWebScheduler] worker_dispatch_end",JSON.stringify({runId,dispatchCursor:next,dispatchCount:dispatchItems.length,selectedPromptIndex:data.run.selectedPromptIndex??null,stopped:active.stop,paused:active.paused,workerError:workerError?.message||null}));if(["PROVIDER_WEB_PAUSED_BY_CONFIG","PROVIDER_WORKER_CAP_HELD_FOR_REVIEW","PROVIDER_WORKER_CAP_HELD_BY_OTHER_ACCOUNT","PROVIDER_WORKER_SLOT_CANCELLED"].includes(workerError?.message)&&!active.stop)active.paused=true;if(active.stop||workerError&&!active.paused)await window.ProviderWebQueueStore.cancelUnclaimed(runId,active.stop?"USER_CANCELLED":workerError?.message||"WORKER_START_FAILED",data.run.selectedPromptIndex);let final=await window.ProviderWebQueueStore.getRun(runId);if(final.items.some(item=>["PREPARING","SUBMITTING","MONITORING"].includes(item.state))){const reconciliation=await window.ProviderWebQueueStore.reconcileRun(runId);final=await window.ProviderWebQueueStore.getRun(runId);console.warn("[ProviderWebScheduler] closed_worker_state_reconciled",JSON.stringify({runId,reviewCount:reconciliation?.review??null}))}const hasQueued=final.items.some(item=>item.state==="QUEUED");if(final.items.some(item=>item.state==="NEEDS_REVIEW")||hasQueued&&(data.run.selectedPromptIndex===null||data.run.selectedPromptIndex===void 0||active.paused||final.items.find(item=>item.promptIndex===data.run.selectedPromptIndex)?.state==="QUEUED")){active.review=final.items.some(item=>item.state==="NEEDS_REVIEW");if(active.paused&&!active.review&&!active.stop)this._pausedRuns.add(runId);if(active.review||!active.paused)await this._recordHistory(runId,"needs_review",{waitForPublish:!managedRun});return{status:active.review?"needs_review":active.paused?"paused":"needs_review",runId,items:final.items}}const completed=final.items.filter(item=>item.state==="COMPLETED").length;const hasPartialResult=final.items.some(item=>item.state==="PARTIAL_FAIL"&&item.resultReceipts?.length>0);const status=completed===final.items.length?"success":completed>0||hasPartialResult?"partial":"failed";if(owned)return{status,runId,items:final.items,executionToken:reservation.token,needsOwnerSettlement:true};const receipt=await this._runStage(runId,"complete",()=>this._api("complete",{token:reservation.token,status,result_data:{successful_count:completed}}));await window.ProviderWebQueueStore.saveSettlement(runId,this._ownerId,lease.epoch,receipt);active.completed=status==="success";const displayStatus=active.stop&&final.items.some(item=>item.state==="CANCELLED"&&item.error==="USER_CANCELLED")?"stopped":status;await this._runStage(runId,"history",()=>this._recordHistory(runId,displayStatus,{waitForPublish:!managedRun}));return{status:displayStatus,runId,items:final.items,receipt}}finally{if(mainLayout&&typeof retainMainLayout!=="function"){try{const restored=await this.restoreMainWindowLayout(runId,mainLayout.windowId);console.info("[ProviderWebScheduler] main_worker_layout_restore",JSON.stringify({runId,...restored}))}catch(error){console.warn("[ProviderWebScheduler] main worker layout restore failed:",error?.message||error)}}this._activeRuns.delete(runId);window.eventBus?.emit?.("provider_web:changed",{runId,projectId:data.run.projectId});if(!managedRun&&data.run.source==="gentab_direct")window.eventBus?.emit?.("execution:tracker_update",{owner:"prompts",label:`${data.run.provider} Gen`,phase:active.stop?"stopped":active.paused?"paused":active.completed?"completed":"error",current:data.items.length,total:data.items.length,promptText:"",provider:data.run.provider})}}finally{await this._releaseLease(data.run.userId,lease).catch(error=>console.warn("[ProviderWebScheduler] Lease release:",error?.message||error))}}static _managedRoot(runId){if(this._runCalls.has(runId))return runId;for(const[root,child]of this._retryChildren)if(child===runId&&this._runCalls.has(root))return root;return null}static getRunControlState(runId){const api=window.MuseApiBatchRunner?.control(runId);if(api)return api;const id=this._retryChildren.get(runId)||runId;const active=this._activeRuns.get(id);return{active:!!active||this._managedRoot(runId)!==null,paused:active?active.paused:this._pausedRuns.has(id)||this._pendingPauses.has(id),stopping:!!active?.stop}}static pause(runId){if(window.MuseApiBatchRunner?.control(runId))return window.MuseApiBatchRunner.pause(runId);const id=this._retryChildren.get(runId)||runId;if(this._managedRoot(runId)!==null)this._pendingPauses.add(id);const run=this._activeRuns.get(id);if(run)run.paused=true}static async stop(runId,stopSource=null){if(window.MuseApiBatchRunner?.control(runId))return window.MuseApiBatchRunner.stop(runId);const apiRun=window.MuseApiBatchRunner&&!this._activeRuns.has(runId)?await window.ProviderWebQueueStore.getRun(runId):null;if(window.MuseApiBatchRunner?.intended(apiRun?.run)&&(apiRun.run.museApiStarted||window.MuseApiBatchRunner.applies(apiRun.run)))return window.MuseApiBatchRunner.stop(runId);const root=this._managedRoot(runId);if(root!==null)this._pendingStops.add(root);const activeRunId=this._retryChildren.get(runId)||runId;this._pausedRuns.delete(activeRunId);if(activeRunId!==runId)this._pendingStops.add(runId);const run=this._activeRuns.get(activeRunId);if(!run){this._pendingStops.add(runId);this._pendingStops.add(activeRunId);if(stopSource)await window.ProviderWebQueueStore.markStopSource(activeRunId,stopSource).catch(error=>console.warn("[ProviderWebScheduler] Stop source not persisted:",error?.message||error));return}if(run.stop){if(stopSource)await window.ProviderWebQueueStore.markStopSource(activeRunId,stopSource).catch(error=>console.warn("[ProviderWebScheduler] Stop source not persisted:",error?.message||error));return}run.stop=true;if(stopSource)await window.ProviderWebQueueStore.markStopSource(activeRunId,stopSource).catch(error=>console.warn("[ProviderWebScheduler] Stop source not persisted:",error?.message||error));await Promise.allSettled([...run.workers].map(async worker=>{let timer;try{const abort=worker.provider==="muse"?window.MuseSession.abort({workerContext:{workerId:worker.workerId,epoch:worker.epoch,userId:worker.userId,tabId:worker.tabId}}):new Promise(resolve=>chrome.tabs.sendMessage(worker.tabId,{action:`${worker.provider}:abort`},response=>resolve(chrome.runtime.lastError?null:response)));await Promise.race([abort,new Promise(resolve=>{timer=setTimeout(resolve,1500)})])}finally{clearTimeout(timer);const closed=await this._closeOwnedWorker(worker);if(closed?.success)run.closedWorkers.add(worker.workerId);else console.warn("[ProviderWebScheduler] worker_close_failed",{runId,workerId:worker.workerId,error:closed?.error||"WORKER_CLOSE_UNKNOWN"})}}))}static forgetStop(runId){window.MuseApiBatchRunner?.forgetStop(runId);this._pendingStops.delete(runId)}}__publicField(ProviderWebScheduler,"_ownerId",crypto.randomUUID());__publicField(ProviderWebScheduler,"_activeRuns",new Map);__publicField(ProviderWebScheduler,"_pausedRuns",new Set);__publicField(ProviderWebScheduler,"_runCalls",new Set);__publicField(ProviderWebScheduler,"_pendingPauses",new Set);__publicField(ProviderWebScheduler,"_ownedRunCalls",new Set);__publicField(ProviderWebScheduler,"_pendingStops",new Set);__publicField(ProviderWebScheduler,"_retryChildren",new Map);__publicField(ProviderWebScheduler,"_leaseTimer",null);__publicField(ProviderWebScheduler,"_leaseRenewal",null);__publicField(ProviderWebScheduler,"_leaseUserId",null);__publicField(ProviderWebScheduler,"_leaseHolders",new Map);__publicField(ProviderWebScheduler,"_busyWorkers",0);__publicField(ProviderWebScheduler,"_pendingOpens",0);__publicField(ProviderWebScheduler,"_activeWorkerIds",new Set);__publicField(ProviderWebScheduler,"_slotWaiters",[]);__publicField(ProviderWebScheduler,"_lastSlotProvider",null);__publicField(ProviderWebScheduler,"_slotAdmission",Promise.resolve());__publicField(ProviderWebScheduler,"_startupGate",Promise.resolve());__publicField(ProviderWebScheduler,"_publishingUsers",new Map);__publicField(ProviderWebScheduler,"_historyPublishFailures",new Map);__publicField(ProviderWebScheduler,"_geminiNativeDownloadTurn",Promise.resolve());__publicField(ProviderWebScheduler,"_ownedGcPromise",null);__publicField(ProviderWebScheduler,"_lastOwnedGcAt",0);__publicField(ProviderWebScheduler,"_lastOwnedGcUserId",null);window.ProviderWebScheduler=ProviderWebScheduler;
+var __defProp = Object.defineProperty;
+var __defNormalProp = (obj, key, value) =>
+  key in obj
+    ? __defProp(obj, key, {
+        enumerable: true,
+        configurable: true,
+        writable: true,
+        value,
+      })
+    : (obj[key] = value);
+var __publicField = (obj, key, value) =>
+  __defNormalProp(obj, typeof key !== "symbol" ? key + "" : key, value);
+class ProviderWebScheduler {
+  static async acquireDomTurn() {
+    if (globalThis.navigator?.locks?.request) {
+      let grant, rejectGrant;
+      const granted = new Promise((resolve, reject) => {
+        grant = resolve;
+        rejectGrant = reject;
+      });
+      let finish;
+      const held = new Promise((resolve) => {
+        finish = resolve;
+      });
+      const task = globalThis.navigator.locks.request(
+        "tobyflow-provider-web-dom",
+        async (lock) => {
+          if (!lock) throw new Error("PROVIDER_DOM_LOCK_UNAVAILABLE");
+          let done2 = false;
+          grant(() => {
+            if (!done2) {
+              done2 = true;
+              finish();
+            }
+          });
+          await held;
+        },
+      );
+      Promise.resolve(task).catch(rejectGrant);
+      return granted;
+    }
+    const previous = this._workerSubmitTurn || Promise.resolve();
+    let release;
+    this._workerSubmitTurn = new Promise((resolve) => {
+      release = resolve;
+    });
+    await previous;
+    let done = false;
+    return () => {
+      if (!done) {
+        done = true;
+        release();
+      }
+    };
+  }
+  static async pruneExpiredOwnedRuns(userId) {
+    if (
+      !userId ||
+      String(window.authManager?.getUser?.()?.id) !== String(userId) ||
+      !window.ProviderWebQueueStore?.listOwnedRunsForGc
+    )
+      return 0;
+    if (this._ownedGcPromise) return this._ownedGcPromise;
+    if (
+      String(this._lastOwnedGcUserId) === String(userId) &&
+      Date.now() - this._lastOwnedGcAt < 36e5
+    )
+      return 0;
+    this._ownedGcPromise = (async () => {
+      const runs =
+        await window.ProviderWebQueueStore.listOwnedRunsForGc(userId);
+      let deleted = 0;
+      for (const run of runs) {
+        if (String(window.authManager?.getUser?.()?.id) !== String(userId))
+          break;
+        const owner =
+          run.source === "workflow"
+            ? { workflowId: run.workflowId, nodeId: run.nodeId }
+            : { mcpJobId: run.mcpJobId, runnerId: run.runnerId };
+        try {
+          if (
+            await window.ProviderWebQueueStore.pruneOwnedRun(
+              run.id,
+              userId,
+              owner,
+            )
+          )
+            deleted++;
+        } catch (error) {
+          const level =
+            (error?.code || error?.message) === "PROVIDER_OWNER_REVIEW_REQUIRED"
+              ? "info"
+              : "warn";
+          console[level](
+            "[ProviderWebScheduler] Owned run GC retained:",
+            run.id,
+            error?.message || error,
+          );
+        }
+      }
+      this._lastOwnedGcAt = Date.now();
+      this._lastOwnedGcUserId = String(userId);
+      return deleted;
+    })().finally(() => {
+      this._ownedGcPromise = null;
+    });
+    return this._ownedGcPromise;
+  }
+  static async _serializeGeminiNativeDownload(task) {
+    const previous = this._geminiNativeDownloadTurn;
+    let release;
+    this._geminiNativeDownloadTurn = new Promise((resolve) => {
+      release = resolve;
+    });
+    await previous.catch(() => {});
+    try {
+      return await task();
+    } finally {
+      release();
+    }
+  }
+  static _wakeSlotWaiter() {
+    const index = this._slotWaiters.findIndex(
+      (waiter2) => waiter2.provider !== this._lastSlotProvider,
+    );
+    const [waiter] = this._slotWaiters.splice(index < 0 ? 0 : index, 1);
+    waiter?.wake();
+  }
+  static _admissionFor(provider, source = "batch") {
+    const surface =
+      source === "workflow"
+        ? "workflow"
+        : source === "mcp_direct"
+          ? "mcp_direct"
+          : null;
+    const live = surface
+      ? window.ExecutionConfig.getProviderWebSurface(surface, provider)
+      : window.ExecutionConfig.getProviderWebWorkers(provider);
+    if (surface && live.surfaceEnabled !== true)
+      throw new Error("PROVIDER_WEB_PAUSED_BY_CONFIG");
+    return live;
+  }
+  static async _slot(
+    maximum,
+    userId,
+    shouldCancel = () => false,
+    provider = "muse",
+    source = "batch",
+  ) {
+    while (true) {
+      if (shouldCancel()) throw new Error("PROVIDER_WORKER_SLOT_CANCELLED");
+      const admission = this._slotAdmission
+        .catch(() => {})
+        .then(async () => {
+          if (shouldCancel()) throw new Error("PROVIDER_WORKER_SLOT_CANCELLED");
+          let live;
+          try {
+            live = this._admissionFor(provider, source);
+          } catch (_) {
+            throw new Error("PROVIDER_WEB_PAUSED_BY_CONFIG");
+          }
+          if (
+            live.parallelEnabled === false ||
+            !live.enabledProviders.includes(provider)
+          )
+            throw new Error("PROVIDER_WEB_PAUSED_BY_CONFIG");
+          maximum = Math.min(maximum, live.maxConcurrentWorkers);
+          const existing = await this._rpc("providerWorker:list", { userId });
+          if (!existing.success)
+            throw new Error(
+              existing.error || "PROVIDER_WORKER_LIST_UNAVAILABLE",
+            );
+          const profileCount =
+            Number.isSafeInteger(existing.totalCount) &&
+            existing.totalCount >= existing.workers.length
+              ? existing.totalCount
+              : existing.workers.length;
+          this._busyWorkers = profileCount + this._pendingOpens;
+          if (this._busyWorkers < maximum) {
+            this._pendingOpens++;
+            this._busyWorkers++;
+            this._lastSlotProvider = provider;
+            return true;
+          }
+          const knownActive =
+            Number.isSafeInteger(existing.activeCount) &&
+            existing.activeCount > 0 &&
+            existing.activeCount <= profileCount;
+          if (
+            !knownActive &&
+            !this._pendingOpens &&
+            existing.workers.every(
+              (worker) => !this._activeWorkerIds.has(worker.workerId),
+            )
+          )
+            throw new Error(
+              profileCount > existing.workers.length
+                ? "PROVIDER_WORKER_CAP_HELD_BY_OTHER_ACCOUNT"
+                : "PROVIDER_WORKER_CAP_HELD_FOR_REVIEW",
+            );
+          return false;
+        });
+      this._slotAdmission = admission.catch(() => {});
+      if (await admission) break;
+      await new Promise((resolve) => {
+        const wake = () => {
+          clearTimeout(timer);
+          resolve();
+        };
+        const waiter = { provider, wake };
+        const timer = setTimeout(() => {
+          const index = this._slotWaiters.indexOf(waiter);
+          if (index >= 0) this._slotWaiters.splice(index, 1);
+          resolve();
+        }, 2e3);
+        this._slotWaiters.push(waiter);
+      });
+    }
+    let opened = false;
+    const release = () => {
+      if (!opened) this._pendingOpens = Math.max(0, this._pendingOpens - 1);
+      this._wakeSlotWaiter();
+    };
+    release.opened = (workerId) => {
+      if (opened) return;
+      opened = true;
+      this._pendingOpens = Math.max(0, this._pendingOpens - 1);
+      this._activeWorkerIds.add(workerId);
+    };
+    release.closed = (workerId) => {
+      this._activeWorkerIds.delete(workerId);
+      this._wakeSlotWaiter();
+    };
+    return release;
+  }
+  static async _rpc(action, args = {}) {
+    return new Promise((resolve, reject) =>
+      chrome.runtime.sendMessage({ action, ...args }, (response) => {
+        if (chrome.runtime.lastError)
+          return reject(new Error(chrome.runtime.lastError.message));
+        resolve(response || { success: false, error: "NO_RESPONSE" });
+      }),
+    );
+  }
+  static async _openWorkerWithCapacityWait(
+    args,
+    shouldStop,
+    getAdmission,
+    provider,
+    wait = () => new Promise((resolve) => setTimeout(resolve, 2e3)),
+  ) {
+    while (!shouldStop()) {
+      let limits;
+      try {
+        limits = getAdmission();
+      } catch (_) {
+        return { success: false, error: "PROVIDER_WEB_PAUSED_BY_CONFIG" };
+      }
+      if (
+        limits?.parallelEnabled !== true ||
+        !limits.enabledProviders?.includes(provider)
+      ) {
+        return { success: false, error: "PROVIDER_WEB_PAUSED_BY_CONFIG" };
+      }
+      const opened = await this._rpc("providerWorker:create", {
+        ...args,
+        layoutCount: limits.maxConcurrentWorkers,
+      });
+      if (opened?.success || opened?.error !== "WORKER_CAPACITY_FULL")
+        return opened;
+      await wait();
+    }
+    return { success: false, error: "PROVIDER_WORKER_SLOT_CANCELLED" };
+  }
+  static async prepareMainWindowLayout(runId, windowId = null) {
+    const sourceWindowId = Number.isInteger(windowId)
+      ? windowId
+      : await chrome.windows
+          .getCurrent()
+          .then((win) => win?.id)
+          .catch(() => null);
+    if (!Number.isInteger(sourceWindowId))
+      return {
+        success: false,
+        adjusted: false,
+        error: "MAIN_WINDOW_UNAVAILABLE",
+      };
+    const layout = await this._rpc("providerWorker:prepareMainLayout", {
+      runId,
+      windowId: sourceWindowId,
+      screenLeft: window.screen?.availLeft,
+      screenTop: window.screen?.availTop,
+      screenWidth: window.screen?.availWidth,
+      screenHeight: window.screen?.availHeight,
+    });
+    return { ...layout, windowId: sourceWindowId };
+  }
+  static async restoreMainWindowLayout(runId, windowId) {
+    if (!Number.isInteger(windowId)) return { success: true, restored: false };
+    return this._rpc("providerWorker:restoreMainLayout", { runId, windowId });
+  }
+  static async _closeOwnedWorker(worker) {
+    let response = null;
+    for (let attempt = 0; attempt < 2; attempt++) {
+      try {
+        response = await this._rpc("providerWorker:close", worker);
+      } catch (error) {
+        response = {
+          success: false,
+          error: error?.message || "WORKER_CLOSE_RPC_FAILED",
+        };
+      }
+      if (response?.success || response?.error === "WORKER_OWNER_MISMATCH")
+        break;
+      if (attempt === 0)
+        await new Promise((resolve) => setTimeout(resolve, 150));
+    }
+    return response || { success: false, error: "WORKER_CLOSE_NO_RESPONSE" };
+  }
+  static async _api(path, data) {
+    const payload =
+      path === "settlement" || path === "provider-web/reserve"
+        ? { ...data, request_nonce: crypto.randomUUID() }
+        : data;
+    const response = await window.ExecutionGate._apiCall(
+      "POST",
+      `execution/${path}`,
+      payload,
+      3e4,
+    );
+    if (response?.success === false)
+      throw new Error(response.error?.code || "PROVIDER_WEB_SERVER_DENIED");
+    return response?.data || response;
+  }
+  static async _hashId(value) {
+    if (value == null) return null;
+    const bytes = await crypto.subtle.digest(
+      "SHA-256",
+      new TextEncoder().encode(String(value)),
+    );
+    return [...new Uint8Array(bytes).slice(0, 8)]
+      .map((byte) => byte.toString(16).padStart(2, "0"))
+      .join("");
+  }
+  static async _historyDiagnostics(snapshot) {
+    const { run, items } = snapshot;
+    const failed = items.filter(
+      (item) => !["COMPLETED", "QUEUED"].includes(item.state),
+    );
+    const failures = await Promise.all(
+      failed.slice(0, 20).map(async (item) => {
+        const attempt =
+          item.attemptId &&
+          (await window.ProviderWebQueueStore.getAttempt(item.attemptId));
+        const retrySubmitCount = Number.isInteger(item.retrySubmitCount)
+          ? item.retrySubmitCount
+          : Number.isInteger(snapshot.run.retryCount)
+            ? snapshot.run.retryCount
+            : 0;
+        const reason = /^[A-Za-z0-9_:./-]{1,120}$/.test(item.error || "")
+          ? item.error
+          : null;
+        return {
+          promptIndex: item.promptIndex,
+          state: item.state,
+          mode: "web",
+          retrySubmitCount,
+          ...(reason && { reason }),
+          operationIdAvailable: false,
+          stages: attempt
+            ? [
+                {
+                  event: "provider_web_attempt",
+                  sinceItemMs: Math.max(
+                    0,
+                    attempt.createdAt - snapshot.run.createdAt,
+                  ),
+                  attempt: await this._hashId(attempt.id),
+                  workerHash: await this._hashId(attempt.workerId),
+                  tabHash: await this._hashId(attempt.tabId),
+                  submitStage: attempt.submitStage,
+                  clickGranted: !!attempt.clickGrantedAt,
+                  receiptStage: attempt.receiptStage,
+                  sendObserved: !!attempt.sendObservedAt,
+                  retryPending: item.retryPending === true,
+                  verifiedTextOnly: attempt.verifiedTextOnly === true,
+                  downloadState: item.downloadState,
+                  ...(Number.isSafeInteger(attempt.startupElapsedMs) && {
+                    startupElapsedMs: attempt.startupElapsedMs,
+                  }),
+                  ...(Number.isSafeInteger(attempt.startupTimeoutMs) && {
+                    startupTimeoutMs: attempt.startupTimeoutMs,
+                  }),
+                  ...(attempt.tabStatus && { tabStatus: attempt.tabStatus }),
+                  ...(attempt.tabLocation && {
+                    tabLocation: attempt.tabLocation,
+                  }),
+                  ...(attempt.transportReason && {
+                    transportReason: attempt.transportReason,
+                  }),
+                  ...(attempt.workerCheckOutcome && {
+                    workerCheckOutcome: attempt.workerCheckOutcome,
+                  }),
+                  ...(attempt.editorStage && {
+                    editorStage: attempt.editorStage,
+                  }),
+                  ...(attempt.exceptionOrigin && {
+                    exceptionOrigin: attempt.exceptionOrigin,
+                  }),
+                  ...(attempt.exceptionStage && {
+                    exceptionStage: attempt.exceptionStage,
+                  }),
+                  ...(attempt.mediaFetchCode && {
+                    mediaFetchCode: attempt.mediaFetchCode,
+                  }),
+                  ...(Number.isInteger(attempt.mediaFetchStatus) && {
+                    mediaFetchStatus: attempt.mediaFetchStatus,
+                  }),
+                  ...(attempt.receiptReason && {
+                    receiptReason: attempt.receiptReason,
+                  }),
+                  ...(attempt.intentError && {
+                    intentError: attempt.intentError,
+                  }),
+                  ...(attempt.monitor && { monitor: attempt.monitor }),
+                },
+              ]
+            : [],
+        };
+      }),
+    );
+    const count = (state) =>
+      items.filter((item) => item.state === state).length;
+    const cancelledReasonCounts = new Map();
+    for (const item of items) {
+      if (item.state !== "CANCELLED") continue;
+      const reason = /^[A-Z0-9_]{1,100}$/.test(item.error || "")
+        ? item.error
+        : "UNKNOWN";
+      cancelledReasonCounts.set(
+        reason,
+        (cancelledReasonCounts.get(reason) || 0) + 1,
+      );
+    }
+    return {
+      version: 3,
+      runContext: {
+        surface: run.source === "gentab_direct" ? "gen" : "batch_list",
+        batchId: run.batchId || null,
+        batchName: run.batchName || null,
+        runId: run.id,
+        runAction:
+          run.runAction ||
+          (run.source === "gentab_direct" ? "GEN_TAB_RUN" : "BATCH_LIST_RUN"),
+        stopSource: run.stopSource || null,
+        parentRunId: run.parentRunId || null,
+        ...(Array.isArray(run.originalIndexes) &&
+        run.originalIndexes.length === items.length &&
+        run.originalIndexes.every(
+          (index) => Number.isInteger(index) && index >= 0 && index <= 999,
+        )
+          ? { originalPromptIndexes: [...run.originalIndexes] }
+          : {}),
+        retryCount: Number.isSafeInteger(run.retryCount) ? run.retryCount : 0,
+        ...(Number.isSafeInteger(run.peakWorkerWindows)
+          ? { peakWorkerWindows: run.peakWorkerWindows }
+          : {}),
+      },
+      summary: {
+        total: items.length,
+        completed: count("COMPLETED"),
+        failed: count("FAILED"),
+        partial: count("PARTIAL_FAIL"),
+        cancelled: count("CANCELLED"),
+        unfinished:
+          items.length -
+          ["COMPLETED", "FAILED", "PARTIAL_FAIL", "CANCELLED"].reduce(
+            (sum, state) => sum + count(state),
+            0,
+          ),
+      },
+      cancelledReasons: [...cancelledReasonCounts].map(([reason, count2]) => ({
+        reason,
+        count: count2,
+      })),
+      failedPromptCount: failed.length,
+      omittedFailedPrompts: Math.max(0, failed.length - failures.length),
+      firstDecision: null,
+      firstError: null,
+      droppedEvents: 0,
+      events: [],
+      failures,
+    };
+  }
+  static async _historyPayload(snapshot, status) {
+    const { run, items } = snapshot;
+    if (!["gentab_direct", "batch"].includes(run.source))
+      throw new Error("PROVIDER_HISTORY_OWNER_MISMATCH");
+    const allowed = new Set([
+      "QUEUED",
+      "PREPARING",
+      "SUBMITTING",
+      "MONITORING",
+      "COMPLETED",
+      "PARTIAL_FAIL",
+      "FAILED",
+      "CANCELLED",
+      "NEEDS_REVIEW",
+    ]);
+    return {
+      run_id: run.id,
+      project_id: run.projectId,
+      source: run.source === "gentab_direct" ? "gen" : "batch_list",
+      media_type:
+        run.settingsSnapshot.mediaType === "video" ? "Video" : "Image",
+      model: String(run.settingsSnapshot.model || ""),
+      ratio: String(run.settingsSnapshot.ratio || ""),
+      status,
+      duration_ms: Math.max(0, Date.now() - run.createdAt),
+      diagnostics: await this._historyDiagnostics(snapshot),
+      items: items.map((item) => ({
+        promptIndex: item.promptIndex,
+        prompt: item.prompt,
+        quantity: item.quantity,
+        state: allowed.has(item.state) ? item.state : "NEEDS_REVIEW",
+        resultIdentities: (item.resultReceipts || []).map(
+          (receipt) => receipt.identity,
+        ),
+        error: /^[A-Za-z0-9_:./-]{1,120}$/.test(item.error || "")
+          ? item.error
+          : null,
+      })),
+    };
+  }
+  static async publishPending(userId, { force = false, runId = null } = {}) {
+    const key = `${String(userId)}:${runId || "*"}`;
+    if (this._publishingUsers.has(key)) return this._publishingUsers.get(key);
+    const request = this._publishPending(userId, { force, runId }).finally(() =>
+      this._publishingUsers.delete(key),
+    );
+    this._publishingUsers.set(key, request);
+    return request;
+  }
+  static _historyWirePayload(payload) {
+    if (!Array.isArray(payload?.diagnostics?.failures)) return payload;
+    return {
+      ...payload,
+      diagnostics: {
+        ...payload.diagnostics,
+        failures: payload.diagnostics.failures.map((failure) =>
+          !Array.isArray(failure.stages)
+            ? failure
+            : {
+                ...failure,
+                stages: failure.stages.map((stage) => {
+                  if (!stage.mediaFetchCode) return stage;
+                  const code = String(stage.mediaFetchCode).replace(
+                    /^MEDIA_FETCH_([1-5][0-9]{2})$/,
+                    "HTTP_$1",
+                  );
+                  return {
+                    ...stage,
+                    mediaFetchCode:
+                      /^(?:HTTP_[1-5][0-9]{2}|READ_ERROR|FETCH_EXCEPTION|FETCH_FAILED|SEND_FAILED|NO_RESPONSE|EXCEPTION|MISSING_PARAMS|EMPTY_BASE64|OTHER)$/.test(
+                        code,
+                      )
+                        ? code
+                        : "OTHER",
+                  };
+                }),
+              },
+        ),
+      },
+    };
+  }
+  static async _publishPending(userId, { force = false, runId = null } = {}) {
+    const pending = (
+      await window.ProviderWebQueueStore.pendingOutbox(userId)
+    ).filter((entry) => !runId || entry.runId === runId);
+    for (const entry of pending) {
+      const retryKey = `${entry.runId}:${entry.version}`;
+      if (
+        !force &&
+        (this._historyPublishFailures.get(retryKey)?.nextAt || 0) > Date.now()
+      )
+        continue;
+      try {
+        const response = await window.ExecutionGate._apiCall(
+          "POST",
+          "history/provider-web",
+          {
+            ...this._historyWirePayload(entry.payload),
+            version: entry.version,
+          },
+          3e4,
+        );
+        const receipt = response?.data || response;
+        if (
+          response?.success === false ||
+          !Number.isInteger(Number(receipt?.history_id))
+        )
+          throw new Error(
+            response?.error?.code || "PROVIDER_HISTORY_ACK_MISSING",
+          );
+        await window.ProviderWebQueueStore.acknowledgeOutbox(
+          entry.runId,
+          entry.version,
+          Number(receipt.history_id),
+        );
+        this._historyPublishFailures.delete(retryKey);
+      } catch (error) {
+        const previous = this._historyPublishFailures.get(retryKey);
+        const failures = (previous?.failures || 0) + 1;
+        const waitMs =
+          error?.httpStatus === 422
+            ? 3e5
+            : Math.min(6e4, 5e3 * 2 ** Math.min(failures - 1, 4));
+        this._historyPublishFailures.set(retryKey, {
+          failures,
+          nextAt: Date.now() + waitMs,
+        });
+        console.warn(
+          "[ProviderWebScheduler] History outbox pending:",
+          JSON.stringify({
+            runId: entry.runId,
+            version: entry.version,
+            code: error?.code || null,
+            httpStatus: error?.httpStatus || null,
+            diagnosticsShape: Array.isArray(entry.payload?.diagnostics)
+              ? "array"
+              : typeof entry.payload?.diagnostics,
+            diagnosticsKeys:
+              entry.payload?.diagnostics &&
+              typeof entry.payload.diagnostics === "object"
+                ? Object.keys(entry.payload.diagnostics)
+                : [],
+            retryAfterMs: waitMs,
+            fields:
+              error?.details && typeof error.details === "object"
+                ? Object.keys(error.details)
+                : [],
+            message: error?.message || String(error),
+          }),
+        );
+      }
+    }
+  }
+  static _publishHistoryInBackground(userId, { afterPending = false } = {}) {
+    const pending = afterPending
+      ? this._publishingUsers.get(`${String(userId)}:*`)
+      : null;
+    const publication = pending
+      ? pending.catch(() => {}).then(() => this.publishPending(userId))
+      : this.publishPending(userId);
+    publication.catch((error) =>
+      console.warn(
+        "[ProviderWebScheduler] History publication deferred:",
+        error?.message || error,
+      ),
+    );
+  }
+  static async _recordHistory(runId, status, { waitForPublish = true } = {}) {
+    const snapshot = await window.ProviderWebQueueStore.getRun(runId);
+    if (
+      !snapshot?.reservation ||
+      !["gentab_direct", "batch"].includes(snapshot.run?.source)
+    )
+      return;
+    await window.ProviderWebQueueStore.putOutbox(
+      runId,
+      await this._historyPayload(snapshot, status),
+    );
+    if (waitForPublish) await this.publishPending(snapshot.run.userId);
+    else
+      this._publishHistoryInBackground(snapshot.run.userId, {
+        afterPending: true,
+      });
+  }
+  static async _runStage(runId, stage, action) {
+    const startedAt = Date.now();
+    let success = false;
+    try {
+      const result = await action();
+      success = true;
+      return result;
+    } finally {
+      console.info(
+        "[ProviderWebScheduler] run_stage",
+        JSON.stringify({
+          runId,
+          stage,
+          elapsedMs: Date.now() - startedAt,
+          success,
+        }),
+      );
+    }
+  }
+  static async _config(provider, settingsSnapshot = null, source = "batch") {
+    await window.ExecutionConfig.getConfig(true);
+    const config = this._admissionFor(provider, source);
+    if (
+      config.parallelEnabled === false ||
+      !config.enabledProviders.includes(provider)
+    )
+      throw new Error("PROVIDER_WEB_NOT_ROLLED_OUT");
+    if (settingsSnapshot) await this._promptConfig(provider, settingsSnapshot);
+    return config;
+  }
+  static async _promptConfig(provider, settingsSnapshot) {
+    if (provider !== "muse") {
+      const { mediaType, model, ratio, deleteAfterGen } = settingsSnapshot;
+      if (provider === "chatgpt" && mediaType !== "image")
+        throw new Error("UNSUPPORTED_MEDIA_TYPE");
+      if (deleteAfterGen && !["chatgpt", "gemini"].includes(provider))
+        throw new Error("WORKER_DELETE_UNSUPPORTED");
+      const adapter2 = window.ProviderRegistry?.get?.(provider);
+      if (!adapter2 || adapter2.key !== provider)
+        throw new Error("PROVIDER_ADAPTER_NOT_READY");
+      if (!window.ModelRegistry?.findModel?.(provider, model))
+        throw new Error("MODEL_CONFIG_MISSING");
+      let ratios = window.ProviderConfigManager?.safeGetRatiosSync?.(
+        provider,
+        mediaType,
+      );
+      if (!ratios?.length && window.ProviderConfigManager?.getRatios)
+        ratios = await window.ProviderConfigManager.getRatios(
+          provider,
+          mediaType,
+        );
+      if (
+        !Array.isArray(ratios) ||
+        !ratios.some(
+          (entry) => entry.value === ratio || entry.ui_name === ratio,
+        )
+      )
+        throw new Error("RATIO_CONFIG_MISSING");
+      if (
+        provider === "gemini" &&
+        !(mediaType === "image"
+          ? adapter2.capabilities?.supportsImageMode
+          : adapter2.capabilities?.supportsVideo)
+      )
+        throw new Error("PROVIDER_MEDIA_DISABLED");
+      return;
+    }
+    const adapter = window.ProviderRegistry?.get?.("muse");
+    if (!adapter || adapter.key !== "muse")
+      throw new Error("MUSE_ADAPTER_NOT_READY");
+    const settings = {
+      mode: settingsSnapshot.mediaType,
+      ratio: settingsSnapshot.ratio,
+    };
+    if (!adapter._composePrompt("", settings).ok) {
+      await window.ProviderConfigManager?.fetchPrivateConfigs?.(true);
+      const prepared = adapter._composePrompt("", settings);
+      if (!prepared.ok) throw new Error(prepared.error);
+    }
+  }
+  static async _lease(userId) {
+    if (this._leaseTimer && this._leaseUserId !== String(userId)) {
+      clearInterval(this._leaseTimer);
+      this._leaseTimer = null;
+      for (const active of this._activeRuns.values())
+        if (active.run.userId !== String(userId)) active.paused = true;
+    }
+    let lease;
+    try {
+      lease = await window.ProviderWebQueueStore.acquireLease(
+        userId,
+        this._ownerId,
+        3e4,
+      );
+    } catch (error) {
+      if (error?.message !== "PROVIDER_RECONCILE_REQUIRED") throw error;
+      lease = await window.ProviderWebQueueStore.acquireLease(
+        userId,
+        this._ownerId,
+        3e4,
+        true,
+      );
+      const reviewed = [];
+      try {
+        const staleRuns =
+          await window.ProviderWebQueueStore.listRunningRuns(userId);
+        for (const run of staleRuns) {
+          const result = await window.ProviderWebQueueStore.reconcileRun(
+            run.id,
+          );
+          if (result.review > 0) reviewed.push(run.id);
+        }
+      } catch (reconcileError) {
+        await window.ProviderWebQueueStore.releaseLease(
+          userId,
+          this._ownerId,
+          lease.epoch,
+        ).catch(() => {});
+        throw reconcileError;
+      }
+      for (const runId of reviewed)
+        await this._recordHistory(runId, "needs_review").catch((historyError) =>
+          console.warn(
+            "[ProviderWebScheduler] Recovered history:",
+            historyError?.message || historyError,
+          ),
+        );
+    }
+    this._leaseUserId = String(userId);
+    if (!this._leaseTimer)
+      this._leaseTimer = setInterval(() => {
+        if (this._leaseRenewal) return;
+        const renewal = window.ProviderWebQueueStore.acquireLease(
+          userId,
+          this._ownerId,
+          3e4,
+        )
+          .catch((error) => {
+            for (const active of this._activeRuns.values())
+              active.paused = true;
+            console.warn(
+              "[ProviderWebScheduler] Lease lost:",
+              error?.message || error,
+            );
+          })
+          .finally(() => {
+            if (this._leaseRenewal === renewal) this._leaseRenewal = null;
+          });
+        this._leaseRenewal = renewal;
+      }, 1e4);
+    this._leaseHolders.set(
+      String(userId),
+      (this._leaseHolders.get(String(userId)) || 0) + 1,
+    );
+    return lease;
+  }
+  static async _releaseLease(userId, lease) {
+    const key = String(userId);
+    const count = (this._leaseHolders.get(key) || 1) - 1;
+    if (count > 0) {
+      this._leaseHolders.set(key, count);
+      return;
+    }
+    this._leaseHolders.delete(key);
+    if (this._leaseUserId === key) {
+      clearInterval(this._leaseTimer);
+      this._leaseTimer = null;
+      this._leaseUserId = null;
+    }
+    if (this._leaseRenewal) await this._leaseRenewal;
+    await window.ProviderWebQueueStore.releaseLease(
+      key,
+      this._ownerId,
+      lease.epoch,
+    );
+  }
+  static async createDirect({
+    userId,
+    projectId,
+    provider = "muse",
+    settingsSnapshot,
+    prompts,
+    refAssets = [],
+  }) {
+    if (!Array.isArray(prompts) || !prompts.length)
+      throw new Error("PROVIDER_RUN_ITEMS_REQUIRED");
+    const id = crypto.randomUUID();
+    await window.ProviderWebQueueStore.createRun({
+      id,
+      userId,
+      projectId,
+      provider,
+      source: "gentab_direct",
+      settingsSnapshot,
+      prompts,
+      refAssets,
+    });
+    return id;
+  }
+  static _reservationRequest(data, ownerCredentials = null) {
+    const { run, items } = data;
+    const mediaType = run.settingsSnapshot.mediaType;
+    const refKeys = new Set(items.flatMap((item) => item.refKeys || []));
+    const source =
+      run.source === "gentab_direct"
+        ? "gen"
+        : run.source === "batch"
+          ? "batch_list"
+          : run.source === "mcp_direct"
+            ? "mcp"
+            : "workflow";
+    if (run.provider === "muse" && run.settingsSnapshot.chain?.enabled) {
+      window.MuseVideoContinuity.validate(run.settingsSnapshot, items);
+    }
+    const request = {
+      run_id: run.id,
+      provider: run.provider,
+      project_id: run.projectId,
+      source,
+      prompt_count: items.length,
+      media_type: mediaType,
+      ref_count:
+        refKeys.size +
+        (run.provider === "muse" && run.settingsSnapshot.chain?.enabled
+          ? 1
+          : 0),
+    };
+    if (source === "workflow") {
+      if (
+        ownerCredentials?.workflowId !== run.workflowId ||
+        ownerCredentials?.nodeId !== run.nodeId ||
+        !ownerCredentials?.parentWorkflowToken
+      )
+        throw new Error("PROVIDER_WORKFLOW_OWNER_INVALID");
+      request.workflow_id = run.workflowId;
+      request.node_id = run.nodeId;
+      request.parent_workflow_token = ownerCredentials.parentWorkflowToken;
+    } else if (source === "mcp") {
+      if (
+        ownerCredentials?.mcpJobId !== run.mcpJobId ||
+        ownerCredentials?.runnerId !== run.runnerId
+      )
+        throw new Error("PROVIDER_MCP_OWNER_INVALID");
+      request.mcp_job_id = run.mcpJobId;
+      request.runner_id = run.runnerId;
+    }
+    return request;
+  }
+  static async _reserve(
+    data,
+    lease,
+    ownerCredentials = null,
+    ownerBindingVerified = false,
+  ) {
+    const { run, reservation } = data;
+    if (reservation) {
+      if (
+        reservation.ownerId !== this._ownerId ||
+        reservation.epoch !== lease.epoch
+      )
+        throw new Error("PROVIDER_RESERVATION_OWNER_MISMATCH");
+      if (
+        !["workflow", "mcp_direct"].includes(run.source) ||
+        ownerBindingVerified
+      )
+        return reservation;
+    }
+    if (String(window.authManager?.getUser?.()?.id) !== run.userId)
+      throw new Error("PROVIDER_RUN_ACCOUNT_CHANGED");
+    const request = this._reservationRequest(data, ownerCredentials);
+    let gate;
+    try {
+      gate = await this._api("provider-web/reserve", request);
+    } catch (error) {
+      if (
+        !/TIMEOUT|NETWORK|CONNECTION|NO_RESPONSE/i.test(
+          error?.code || error?.message || "",
+        )
+      )
+        throw error;
+      gate = await this._api("provider-web/reserve", request);
+    }
+    if (reservation) {
+      if (gate?.execution_token !== reservation.token)
+        throw new Error("PROVIDER_RESERVATION_OWNER_MISMATCH");
+      if (gate.token_status !== "active" || Number(gate.expires_in) <= 0)
+        throw new Error("PROVIDER_RESERVATION_NOT_ACTIVE");
+      return reservation;
+    }
+    if (
+      !gate?.execution_token ||
+      gate.token_status !== "active" ||
+      Number(gate.expires_in) <= 0
+    )
+      throw new Error("PROVIDER_RESERVATION_NOT_ACTIVE");
+    return window.ProviderWebQueueStore.reserve(run.id, {
+      token: gate.execution_token,
+      expiresAt: Date.now() + Number(gate.expires_in) * 1e3,
+      ownerId: this._ownerId,
+      epoch: lease.epoch,
+    });
+  }
+  static async _verifyOwnedServerBinding(snapshot, ownerCredentials) {
+    if (
+      snapshot.run.source === "workflow" &&
+      !ownerCredentials?.parentWorkflowToken
+    ) {
+      if (
+        ownerCredentials?.workflowId !== snapshot.run.workflowId ||
+        ownerCredentials?.nodeId !== snapshot.run.nodeId ||
+        !snapshot.reservation?.token
+      )
+        throw new Error("PROVIDER_WORKFLOW_OWNER_INVALID");
+      const observed = await this._api("settlement", {
+        token: snapshot.reservation.token,
+      });
+      const binding = observed?.provider_web;
+      if (
+        binding?.run_id !== snapshot.run.id ||
+        binding.source !== "workflow" ||
+        binding.workflow_id !== snapshot.run.workflowId ||
+        binding.node_id !== snapshot.run.nodeId
+      )
+        throw new Error("PROVIDER_RESERVATION_OWNER_MISMATCH");
+      return observed;
+    }
+    const request = this._reservationRequest(snapshot, ownerCredentials);
+    const gate = await this._api("provider-web/reserve", request);
+    if (gate?.execution_token !== snapshot.reservation?.token)
+      throw new Error("PROVIDER_RESERVATION_OWNER_MISMATCH");
+    return gate;
+  }
+  static async _refs(run, item, shouldStop = () => false) {
+    const refs = [];
+    for (const key of item.refKeys || []) {
+      const asset = await window.ProviderWebQueueStore.getAsset(
+        run.userId,
+        run.projectId,
+        key,
+        run.ownerScope,
+      );
+      if (!asset || (asset.runId !== run.id && asset.batchId !== run.batchId))
+        throw new Error("PROVIDER_REF_ASSET_MISSING");
+      const dataUrl = await new Promise((resolve, reject) => {
+        const reader = new FileReader();
+        reader.onload = () => resolve(reader.result);
+        reader.onerror = () => reject(reader.error);
+        reader.readAsDataURL(asset.blob);
+      });
+      refs.push({
+        base64: String(dataUrl).replace(/^data:[^,]+,/, ""),
+        name: asset.name,
+        type: asset.type,
+      });
+    }
+    return run.provider === "muse" &&
+      window.MuseVideoContinuity?.enabled(run.settingsSnapshot)
+      ? window.MuseVideoContinuity.refs(run, item, refs, shouldStop)
+      : refs;
+  }
+  static async _storeMuseVideo(run, attempt, url, assetKey, index) {
+    const transferId = crypto.randomUUID(),
+      chunkIds = [];
+    const scope = {
+      id: assetKey,
+      userId: run.userId,
+      projectId: run.projectId,
+      ownerScope: run.ownerScope,
+      runId: run.id,
+    };
+    const read = async (stage, offset = 0) => {
+      const result = await this._rpc("muse:readVideoChunk", {
+        tabId: attempt.tabId,
+        attemptId: attempt.id,
+        transferId,
+        url,
+        stage,
+        offset,
+      });
+      if (!result?.success)
+        throw new Error(result?.error || "MUSE_VIDEO_CHUNK_READ_FAILED");
+      return result;
+    };
+    try {
+      const opened = await read("open");
+      if (
+        !Number.isSafeInteger(opened.size) ||
+        opened.size <= 0 ||
+        !Number.isSafeInteger(opened.chunkBytes) ||
+        opened.chunkBytes <= 0 ||
+        !/^video\/[a-z0-9.+-]+$/i.test(opened.mime || "")
+      )
+        throw new Error("MUSE_VIDEO_CHUNK_METADATA_INVALID");
+      let offset = 0;
+      while (offset < opened.size) {
+        const chunk = await read("read", offset);
+        const nextOffset = Math.min(offset + opened.chunkBytes, opened.size);
+        if (
+          chunk.offset !== offset ||
+          chunk.nextOffset !== nextOffset ||
+          chunk.size !== opened.size ||
+          chunk.mime !== opened.mime ||
+          chunk.done !== (nextOffset === opened.size) ||
+          typeof chunk.dataUrl !== "string" ||
+          chunk.dataUrl.length > Math.ceil(opened.chunkBytes / 3) * 4 + 128 ||
+          !/^data:video\/[a-z0-9.+-]+;base64,/i.test(chunk.dataUrl)
+        )
+          throw new Error("MUSE_VIDEO_CHUNK_INVALID");
+        const blob = await (await fetch(chunk.dataUrl)).blob();
+        if (blob.type !== opened.mime || blob.size !== nextOffset - offset)
+          throw new Error("MUSE_VIDEO_CHUNK_SIZE_MISMATCH");
+        const id = `${assetKey}:chunk:${transferId}:${offset}`;
+        chunkIds.push(id);
+        await window.ProviderWebQueueStore.putAsset({
+          ...scope,
+          id,
+          blob,
+          name: "video-chunk",
+          type: blob.type,
+        });
+        offset = nextOffset;
+      }
+      return await window.ProviderWebQueueStore.commitAssetChunks({
+        ...scope,
+        chunkIds,
+        size: opened.size,
+        type: opened.mime,
+        name: `${index + 1}.mp4`,
+      });
+    } finally {
+      await read("close").catch(() => {});
+      if (chunkIds.length)
+        await window.ProviderWebQueueStore.deleteAssetChunks({
+          ...scope,
+          chunkIds,
+        }).catch((error) =>
+          console.warn(
+            "[ProviderWebScheduler] Video chunk cleanup:",
+            error?.message,
+          ),
+        );
+    }
+  }
+  static async _receipt(run, item, attempt, result) {
+    if (run.provider !== "muse")
+      return this._mediaReceipt(run, item, attempt, result);
+    const reject = (reason) => {
+      if (result && typeof result === "object")
+        result.receiptFailureReason = reason;
+      return null;
+    };
+    if (!result?.success) return reject("result_unsuccessful");
+    if (result.tabId !== attempt.tabId) return reject("tab_mismatch");
+    if (!Array.isArray(result.mediaUrls) || !result.mediaUrls.length)
+      return reject("missing_media_urls");
+    const output = [];
+    for (let index = 0; index < result.mediaUrls.length; index++) {
+      const url = result.mediaUrls[index];
+      const media = result.fetchedMedia?.find((entry) => entry.url === url);
+      if (result.mediaType === "image" && !media?.base64)
+        return reject("image_bytes_missing");
+      const assetKey = `${attempt.id}:result:${index}`;
+      let blob;
+      if (result.mediaType === "image") {
+        blob = await (await fetch(media.base64)).blob();
+      } else if (result.mediaType === "video") {
+        await this._storeMuseVideo(run, attempt, url, assetKey, index);
+      } else return reject("media_type_invalid");
+      if (result.mediaType === "image") {
+        if (!blob?.size) return reject("empty_media_bytes");
+        const extension =
+          {
+            "image/webp": "webp",
+            "image/png": "png",
+            "image/avif": "avif",
+            "image/gif": "gif",
+          }[blob.type] || "jpg";
+        await window.ProviderWebQueueStore.putAsset({
+          id: assetKey,
+          userId: run.userId,
+          projectId: run.projectId,
+          ownerScope: run.ownerScope,
+          runId: run.id,
+          blob,
+          name: `${index + 1}.${extension}`,
+          type: blob.type,
+        });
+      }
+      let posterAssetKey = null;
+      if (result.mediaType === "video") {
+        const poster = media?.poster;
+        if (
+          typeof poster === "string" &&
+          /^data:image\/[a-z0-9.+-]+;base64,/i.test(poster)
+        ) {
+          try {
+            const posterBlob = await (await fetch(poster)).blob();
+            if (posterBlob.size && /^image\//i.test(posterBlob.type)) {
+              posterAssetKey = `${assetKey}:poster`;
+              await window.ProviderWebQueueStore.putAsset({
+                id: posterAssetKey,
+                userId: run.userId,
+                projectId: run.projectId,
+                ownerScope: run.ownerScope,
+                runId: run.id,
+                blob: posterBlob,
+                name: `${index + 1}-poster.jpg`,
+                type: posterBlob.type,
+              });
+            }
+          } catch (error) {
+            console.warn(
+              "[ProviderWebScheduler] Muse poster:",
+              error?.message || error,
+            );
+          }
+        }
+      }
+      output.push({
+        identity: `${attempt.id}:${index}`,
+        assetKey,
+        posterAssetKey,
+        mediaType: result.mediaType,
+        tabId: attempt.tabId,
+        index,
+      });
+    }
+    return output;
+  }
+  static async _mediaReceipt(run, item, attempt, result) {
+    const reject = (reason) => {
+      if (result && typeof result === "object")
+        result.receiptFailureReason = reason;
+      console.warn(
+        "[ProviderWebScheduler] media_receipt_unverified",
+        JSON.stringify({
+          runId: run.id,
+          promptIndex: item.promptIndex,
+          provider: run.provider,
+          reason,
+          submitStage: attempt.submitStage || null,
+          sendObserved: !!attempt.sendObservedAt,
+          turnIdAvailable: !!result?.turnId,
+          imageLineage: result?.imageLineage || null,
+          imageCount: Array.isArray(result?.imageUrls)
+            ? result.imageUrls.length
+            : null,
+          ...(reason === "media_fetch_failed" &&
+            result?.mediaFetchDiagnostic && {
+              mediaFetchDiagnostic: result.mediaFetchDiagnostic,
+            }),
+          ...(run.provider === "chatgpt" &&
+            result?.reason === "SEND_NOT_CONFIRMED" &&
+            result?.diagnostic && { submitDiagnostic: result.diagnostic }),
+        }),
+      );
+      return null;
+    };
+    if (!result?.success || result.tabId !== attempt.tabId)
+      return reject("result_or_tab_mismatch");
+    let entries;
+    if (run.provider === "chatgpt") {
+      if (!Array.isArray(result.imageUrls) || !result.imageUrls.length)
+        return reject("missing_images");
+      const baselineLineage =
+        result.imageLineage === "worker_new_chat_baseline_delta" &&
+        attempt.submitStage === "dispatch_intent" &&
+        !!attempt.sendObservedAt;
+      if (!result.turnId && !baselineLineage)
+        return reject("missing_verified_lineage");
+      entries = result.imageUrls.map((url, index) => ({
+        url,
+        identity: `${result.turnId || "baseline"}:${index}`,
+        mediaType: "image",
+      }));
+    } else if (run.provider === "gemini") {
+      if (!Array.isArray(result.results) || !result.results.length)
+        return reject("missing_media");
+      entries = result.results.map((entry) => ({
+        url: entry.url,
+        identity: entry.fingerprint,
+        mediaType: result.mediaType,
+      }));
+      if (
+        entries.some(
+          (entry) =>
+            !entry.identity || !["image", "video"].includes(entry.mediaType),
+        )
+      )
+        return reject("missing_media_identity");
+    } else return reject("unsupported_provider");
+    const pendingAssets = [];
+    const posterAssets = [];
+    const receipts = [];
+    for (let index = 0; index < entries.length; index++) {
+      const entry = entries[index];
+      let dataUrl = /^data:(image|video)\/[a-z0-9.+-]+;base64,/i.test(
+        entry.url || "",
+      )
+        ? entry.url
+        : null;
+      let materializedBlob = null;
+      if (!dataUrl) {
+        let response;
+        for (
+          let read = 0;
+          read < (run.provider === "chatgpt" ? 2 : 1);
+          read++
+        ) {
+          const owner = await this._rpc("providerWorker:verify", {
+            workerId: attempt.workerId,
+            epoch: attempt.epoch,
+            userId: run.userId,
+            tabId: attempt.tabId,
+          });
+          if (!owner?.success || owner.worker?.tabId !== attempt.tabId)
+            return reject("worker_owner_lost");
+          response =
+            run.provider === "chatgpt"
+              ? await window.MessageBridge.chatGPTFetchImage(
+                  entry.url,
+                  attempt.tabId,
+                )
+              : await window.MessageBridge.geminiFetchMedia(
+                  entry.url,
+                  attempt.tabId,
+                  void 0,
+                  { mediaType: entry.mediaType, fingerprint: entry.identity },
+                );
+          if (response?.success && (response.base64 || response.blob)) break;
+          const code = String(
+            response?.error ||
+              (response?.success ? "EMPTY_BASE64" : "NO_RESPONSE"),
+          );
+          if (
+            read ||
+            !/^(?:HTTP_5[0-9]{2}|READ_ERROR|FETCH_EXCEPTION|FETCH_FAILED|SEND_FAILED|NO_RESPONSE|EXCEPTION)$/.test(
+              code,
+            )
+          )
+            break;
+          await new Promise((resolve) => setTimeout(resolve, 250));
+        }
+        if (!response?.success || (!response.base64 && !response.blob)) {
+          const rawCode = String(
+            response?.error ||
+              (response?.success ? "EMPTY_BASE64" : "NO_RESPONSE"),
+          );
+          const code = rawCode === "Failed to fetch" ? "FETCH_FAILED" : rawCode;
+          const mediaHttpStatus = /^MEDIA_FETCH_([1-5][0-9]{2})$/.exec(code);
+          const status =
+            response?.status ??
+            (mediaHttpStatus ? Number(mediaHttpStatus[1]) : null);
+          result.mediaFetchDiagnostic = {
+            code: /^(?:HTTP_[1-5][0-9]{2}|READ_ERROR|FETCH_EXCEPTION|FETCH_FAILED|SEND_FAILED|NO_RESPONSE|EXCEPTION|MISSING_PARAMS|EMPTY_BASE64|INVALID_(?:MEDIA_URL|FETCH_ARGUMENTS|MEDIA_CHUNK_ARGUMENTS)|MEDIA_(?:FETCH_[1-5][0-9]{2}|FETCH_FAILED|FETCH_TIMEOUT|BYTES_INVALID|READ_FAILED|TRANSFER_EXISTS|PAYLOAD_TOO_LARGE|CHUNK_(?:METADATA_INVALID|INVALID|POSITION_INVALID|SIZE_MISMATCH)))$/.test(
+              code,
+            )
+              ? code
+              : "OTHER",
+            ...(Number.isInteger(status) && status >= 100 && status <= 599
+              ? { status }
+              : {}),
+          };
+          const source = response?.sourceDiagnostic;
+          if (
+            code === "INVALID_MEDIA_URL" &&
+            source &&
+            typeof source === "object"
+          ) {
+            result.mediaFetchDiagnostic.sourceDiagnostic = {
+              reason: [
+                "url_invalid",
+                "config_unavailable",
+                "allowlist_missing",
+                "allowlist_invalid",
+                "protocol_rejected",
+                "host_rejected",
+              ].includes(source.reason)
+                ? source.reason
+                : "other",
+              stage: ["open", "read", "bounded"].includes(source.stage)
+                ? source.stage
+                : null,
+              protocol: ["https", "http", "blob", "data"].includes(
+                source.protocol,
+              )
+                ? source.protocol
+                : "other",
+              configAvailable: source.configAvailable === true,
+              allowedHostCount:
+                Number.isSafeInteger(source.allowedHostCount) &&
+                source.allowedHostCount >= 0
+                  ? source.allowedHostCount
+                  : null,
+              hostAllowed: source.hostAllowed === true,
+            };
+          }
+          return reject("media_fetch_failed");
+        }
+        dataUrl = response.base64;
+        materializedBlob = response.blob || null;
+      }
+      if (
+        !materializedBlob &&
+        !new RegExp(`^data:${entry.mediaType}/[a-z0-9.+-]+;base64,`, "i").test(
+          dataUrl,
+        )
+      )
+        return reject("media_mime_invalid");
+      const blob = materializedBlob || (await (await fetch(dataUrl)).blob());
+      if (!blob.size || !blob.type.startsWith(`${entry.mediaType}/`))
+        return reject("media_bytes_invalid");
+      const assetKey = `${attempt.id}:result:${index}`;
+      const ext =
+        entry.mediaType === "video"
+          ? "mp4"
+          : {
+              "image/webp": "webp",
+              "image/png": "png",
+              "image/avif": "avif",
+              "image/gif": "gif",
+            }[blob.type] || "jpg";
+      pendingAssets.push({
+        id: assetKey,
+        userId: run.userId,
+        projectId: run.projectId,
+        ownerScope: run.ownerScope,
+        runId: run.id,
+        blob,
+        name: `${index + 1}.${ext}`,
+        type: blob.type,
+      });
+      let posterAssetKey = null;
+      if (run.provider === "gemini" && entry.mediaType === "video") {
+        try {
+          const posterData =
+            await window.ImmediateUploader?._portableVideoThumbnail?.(
+              blob,
+              200,
+              { representativeFrame: true },
+            );
+          if (/^data:image\/[a-z0-9.+-]+;base64,/i.test(posterData || "")) {
+            const posterBlob = await (await fetch(posterData)).blob();
+            if (posterBlob.size && posterBlob.type.startsWith("image/")) {
+              posterAssetKey = `${assetKey}:poster`;
+              posterAssets.push({
+                receiptIndex: index,
+                asset: {
+                  id: posterAssetKey,
+                  userId: run.userId,
+                  projectId: run.projectId,
+                  ownerScope: run.ownerScope,
+                  runId: run.id,
+                  blob: posterBlob,
+                  name: `${index + 1}-poster.jpg`,
+                  type: posterBlob.type,
+                },
+              });
+            }
+          }
+        } catch (error) {
+          console.warn(
+            "[ProviderWebScheduler] Gemini video poster unavailable:",
+            error?.message || error,
+          );
+        }
+      }
+      receipts.push({
+        identity: `${attempt.id}:${entry.identity}`,
+        assetKey,
+        mediaType: entry.mediaType,
+        tabId: attempt.tabId,
+        index,
+      });
+    }
+    for (const asset of pendingAssets)
+      await window.ProviderWebQueueStore.putAsset(asset);
+    for (const { receiptIndex, asset } of posterAssets) {
+      try {
+        await window.ProviderWebQueueStore.putAsset(asset);
+        receipts[receiptIndex].posterAssetKey = asset.id;
+        receipts[receiptIndex].posterFrameVersion = 2;
+      } catch (error) {
+        console.warn(
+          "[ProviderWebScheduler] Gemini video poster storage unavailable:",
+          error?.message || error,
+        );
+      }
+    }
+    return receipts;
+  }
+  static async _submitWorker(
+    run,
+    item,
+    attempt,
+    workerContext,
+    refs,
+    shouldStop,
+  ) {
+    const adapter = window.ProviderRegistry?.get?.(run.provider);
+    if (!adapter || adapter.key !== run.provider)
+      throw new Error("PROVIDER_ADAPTER_NOT_READY");
+    const settings = {
+      ...run.settingsSnapshot,
+      ...(item.settingsOverride || {}),
+    };
+    if (run.provider === "muse")
+      return adapter.submit({
+        prompt: item.prompt,
+        refs,
+        settings: {
+          mode: settings.mediaType,
+          ratio: settings.ratio,
+          model: settings.model,
+          newChat: true,
+          autoDownload: false,
+          source: run.source,
+        },
+        workerContext,
+        shouldStop,
+      });
+    if (
+      settings.deleteAfterGen &&
+      !["chatgpt", "gemini"].includes(run.provider)
+    )
+      throw new Error("WORKER_DELETE_UNSUPPORTED");
+    if (run.provider === "chatgpt") {
+      if (settings.mediaType !== "image")
+        throw new Error("UNSUPPORTED_MEDIA_TYPE");
+      return adapter.submit({
+        prompt: item.prompt,
+        refFileIds: refs,
+        settings: {
+          ratio: settings.ratio,
+          model: settings.model,
+          source: run.source,
+        },
+        workerContext,
+        shouldStop,
+      });
+    }
+    if (run.provider === "gemini")
+      return adapter.submit({
+        prompt: item.prompt,
+        mediaType: settings.mediaType,
+        model: settings.model,
+        ratio: settings.ratio,
+        refs,
+        runId: attempt.id,
+        settings: { ...settings, source: run.source },
+        workerContext,
+        shouldStop,
+      });
+    throw new Error("PROVIDER_WORKER_UNSUPPORTED");
+  }
+  static async _submitWorkerWithActivation(
+    run,
+    item,
+    attempt,
+    workerContext,
+    refs,
+    shouldStop,
+  ) {
+    const previousTurn = this._workerSubmitTurn || Promise.resolve();
+    let releaseTurn;
+    this._workerSubmitTurn = new Promise((resolve) => {
+      releaseTurn = resolve;
+    });
+    this._submitTurnByAttempt || (this._submitTurnByAttempt = new Map());
+    this._submitTurnByAttempt.set(attempt.id, this._workerSubmitTurn);
+    await previousTurn;
+    let task = null;
+    let workerActivated = false;
+    try {
+      if (shouldStop?.()) return { success: false, error: "CANCELLED" };
+      if (["chatgpt", "muse", "gemini"].includes(run.provider)) {
+        const readyStartedAt = Date.now();
+        const ready =
+          run.provider === "muse"
+            ? await window.MuseSession.ensureReady({
+                workerContext,
+                waitForComposer: true,
+                silent: true,
+              })
+            : await (
+                run.provider === "chatgpt"
+                  ? window.ChatGPTSession
+                  : window.GeminiSession
+              ).ensureReady({
+                workerContext,
+                waitForEditorMs:
+                  await window.ExecutionConfig.getProviderStartupTimeoutMs(
+                    run.provider,
+                  ),
+              });
+        if (shouldStop?.()) return { success: false, error: "CANCELLED" };
+        if (!ready?.ready || ready.tabId !== workerContext.tabId)
+          return {
+            success: false,
+            error: ready?.error || "EDITOR_NOT_FOUND",
+            diagnostic: ready?.diagnostic || null,
+          };
+        console.info(
+          "[ProviderWebScheduler] worker_editor_ready",
+          JSON.stringify({
+            provider: run.provider,
+            promptIndex: item.promptIndex,
+            tabId: workerContext.tabId,
+            beforeWindowFocus: false,
+            elapsedMs: Date.now() - readyStartedAt,
+            ...(run.provider === "chatgpt" && { proof: "hydrated_composer" }),
+          }),
+        );
+      }
+      const activated = { success: true, focused: false };
+      if (!activated?.success)
+        throw new Error(activated?.error || "WORKER_ACTIVATION_FAILED");
+      workerActivated = true;
+      console.info(
+        "[ProviderWebScheduler] worker_activation",
+        JSON.stringify({
+          provider: run.provider,
+          promptIndex: item.promptIndex,
+          stage: "deferred_to_composer",
+          windowFocused: activated.focused !== false,
+        }),
+      );
+      const activatedAt = Date.now();
+      let earlyRestored = false;
+      task = this._submitWorker(
+        run,
+        item,
+        attempt,
+        workerContext,
+        refs,
+        shouldStop,
+      );
+      let finished = false;
+      const settled = task.then(
+        () => {
+          finished = true;
+        },
+        () => {
+          finished = true;
+        },
+      );
+      while (!finished) {
+        const current = await window.ProviderWebQueueStore.getAttempt(
+          attempt.id,
+        ).catch(() => null);
+        if (current?.sendObservedAt) break;
+        if (
+          run.source === "workflow" &&
+          activated.focused === true &&
+          !earlyRestored &&
+          current?.submitStage === "pre_submit" &&
+          Date.now() - activatedAt >= 1e3
+        ) {
+          earlyRestored = true;
+          const restored = await this._rpc(
+            "providerWorker:restoreFocus",
+            workerContext,
+          ).catch((error) => ({
+            success: false,
+            error: error?.message || "FOCUS_RESTORE_FAILED",
+          }));
+          console.info(
+            "[ProviderWebScheduler] worker_input_focus",
+            JSON.stringify({
+              provider: run.provider,
+              promptIndex: item.promptIndex,
+              stage: "early_restore",
+              restored: restored?.restored === true,
+              reason: restored?.reason || restored?.error || null,
+            }),
+          );
+          if (!restored?.success)
+            console.warn(
+              "[ProviderWebScheduler] worker_focus_restore_failed",
+              restored?.error || "FOCUS_RESTORE_FAILED",
+            );
+        }
+        await Promise.race([
+          settled,
+          new Promise((resolve) => setTimeout(resolve, 150)),
+        ]);
+      }
+    } finally {
+      if (workerActivated) {
+        const restored = await this._rpc(
+          "providerWorker:restoreFocus",
+          workerContext,
+        ).catch((error) => ({
+          success: false,
+          error: error?.message || "FOCUS_RESTORE_FAILED",
+        }));
+        if (!restored?.success)
+          console.warn(
+            "[ProviderWebScheduler] worker_focus_restore_failed",
+            restored?.error || "FOCUS_RESTORE_FAILED",
+          );
+      }
+      releaseTurn();
+      this._submitTurnByAttempt.delete(attempt.id);
+    }
+    return task;
+  }
+  static _verifiedTextOnly(provider, error, confirmed) {
+    return (
+      confirmed === true &&
+      ((provider === "chatgpt" && error === "TEXT_ONLY") ||
+        (provider === "gemini" && error === "GEMINI_TEXT_ONLY_RESULT"))
+    );
+  }
+  static async _downloadWorkerReceipts(
+    run,
+    item,
+    attempt,
+    result,
+    receipts,
+    settings,
+  ) {
+    for (const receipt of receipts) {
+      const asset = await window.ProviderWebQueueStore.getAsset(
+        run.userId,
+        run.projectId,
+        receipt.assetKey,
+        run.ownerScope,
+      );
+      if (!asset?.blob?.size)
+        return { success: false, error: "PROVIDER_RESULT_ASSET_MISSING" };
+      const video = receipt.mediaType === "video";
+      const ext = video
+        ? { "video/mp4": "mp4", "video/webm": "webm", "video/ogg": "ogv" }[
+            asset.blob.type
+          ]
+        : run.provider === "gemini"
+          ? "png"
+          : "jpg";
+      if (!ext)
+        return { success: false, error: "PROVIDER_RESULT_FORMAT_UNKNOWN" };
+      const filename = window.DownloadHelper.buildFilename({
+        template: settings.template,
+        project: settings.project || window._currentProjectName || "flow",
+        prompt: item.prompt,
+        index: item.promptIndex + 1 + receipt.index,
+        taskName: run.settingsSnapshot.downloadSubFolder || "",
+        folder: settings.folder,
+        ext,
+      });
+      let downloaded = null;
+      if (run.provider === "gemini") {
+        const watermarkEnabled = video
+          ? run.settingsSnapshot.geminiRemoveWatermarkVideo
+          : run.settingsSnapshot.geminiRemoveWatermark;
+        const shouldRemove =
+          watermarkEnabled === false
+            ? false
+            : watermarkEnabled === true
+              ? window.featureGate?.shouldRemoveWatermark?.(receipt.mediaType, {
+                  ignoreUserSetting: true,
+                }) === true
+              : window.WatermarkClient?.enabled?.(receipt.mediaType) === true;
+        const native = video
+          ? window.MessageBridge?.geminiDownloadVideoNative
+          : window.MessageBridge?.geminiDownloadImageNative;
+        const fingerprint = result.results?.[receipt.index]?.fingerprint;
+        if (native && fingerprint && (!video || !shouldRemove)) {
+          downloaded = await this._serializeGeminiNativeDownload(async () => {
+            const owner = await this._rpc("providerWorker:verify", {
+              workerId: attempt.workerId,
+              epoch: attempt.epoch,
+              userId: run.userId,
+              tabId: attempt.tabId,
+            }).catch(() => ({ success: false }));
+            if (!owner?.success || owner.worker?.tabId !== attempt.tabId)
+              return { success: false, error: "PROVIDER_WORKER_OWNER_LOST" };
+            try {
+              return await native.call(window.MessageBridge, {
+                tabId: attempt.tabId,
+                fingerprint,
+                filename,
+                removeWatermark: shouldRemove,
+              });
+            } catch (error) {
+              return {
+                success: false,
+                error: error?.message || "GEMINI_NATIVE_DOWNLOAD_FAILED",
+              };
+            }
+          });
+          if (!downloaded?.success)
+            return (
+              downloaded || {
+                success: false,
+                error: "GEMINI_NATIVE_DOWNLOAD_FAILED",
+              }
+            );
+          continue;
+        }
+        if (downloaded?.success) continue;
+        if (video) {
+          downloaded = await window.DownloadHelper.downloadStoredProviderVideo({
+            blob: asset.blob,
+            filename,
+            waitForComplete: true,
+            watermarkEnabled,
+          });
+        } else {
+          downloaded = await window.DownloadHelper.downloadStoredProviderImage({
+            blob: asset.blob,
+            filename,
+            waitForComplete: true,
+            watermarkEnabled,
+          });
+        }
+      } else if (video) {
+        const url = URL.createObjectURL(asset.blob);
+        try {
+          downloaded = await this._rpc("chromeDownload", {
+            url,
+            filename,
+            waitForComplete: true,
+          });
+        } finally {
+          URL.revokeObjectURL(url);
+        }
+      } else {
+        const dataUrl = await new Promise((resolve, reject) => {
+          const reader = new FileReader();
+          reader.onload = () => resolve(reader.result);
+          reader.onerror = () =>
+            reject(reader.error || new Error("PROVIDER_RESULT_READ_FAILED"));
+          reader.readAsDataURL(asset.blob);
+        });
+        downloaded = await window.DownloadHelper.downloadImageAsJpeg({
+          dataUrl,
+          filename,
+          waitForComplete: true,
+        });
+      }
+      if (!downloaded?.success)
+        return {
+          success: false,
+          error: downloaded?.error || "PROVIDER_RESULT_DOWNLOAD_FAILED",
+        };
+    }
+    return { success: true };
+  }
+  static async _workOne(active, worker, item, onClaim = () => {}) {
+    const { run, lease } = active;
+    const attemptId = crypto.randomUUID();
+    const attempt = await window.ProviderWebQueueStore.claim(
+      run.id,
+      item.promptIndex,
+      {
+        attemptId,
+        workerId: worker.workerId,
+        tabId: worker.tabId,
+        epoch: lease.epoch,
+        ownerId: this._ownerId,
+      },
+    );
+    onClaim(attemptId);
+    window.eventBus?.emit?.("provider_web:changed", {
+      runId: run.id,
+      projectId: run.projectId,
+    });
+    const workerContext = {
+      workerId: worker.workerId,
+      epoch: lease.epoch,
+      userId: run.userId,
+      tabId: worker.tabId,
+      workerAttempt: { attemptId },
+    };
+    if (worker.openedAtNewChat === true && !worker.initialChatConsumed)
+      workerContext.initialNewChat = true;
+    const tracker = {
+      trackerProvider: run.provider,
+      isRunning: true,
+      total: active.itemCount,
+      completed: 0,
+      elapsed: Date.now() - run.createdAt,
+      jobs: [
+        {
+          id: run.id,
+          owner: "prompts",
+          label: `${run.provider} Gen`,
+          status: "running",
+          total: active.itemCount,
+          completed: 0,
+          failed: 0,
+          startedAt: run.createdAt,
+          items: [
+            {
+              id: item.id,
+              promptIndex: item.promptIndex,
+              promptText: item.prompt,
+              state: "SUBMITTING",
+              retryCount: 0,
+              submittedAt: null,
+              completedAt: null,
+            },
+          ],
+        },
+      ],
+    };
+    await this._rpc("providerWorker:trackerUpdate", {
+      ...workerContext,
+      data: tracker,
+    }).catch((error) =>
+      console.warn("[ProviderWebScheduler] Tracker:", error?.message || error),
+    );
+    if (run.source === "gentab_direct")
+      window.eventBus?.emit?.("execution:tracker_update", {
+        owner: "prompts",
+        label: `${run.provider} Gen`,
+        phase: "prompt_submitting",
+        current: item.promptIndex + 1,
+        total: active.itemCount,
+        promptText: item.prompt,
+        provider: run.provider,
+      });
+    let workerStage = "refs";
+    try {
+      const refs = await this._refs(run, item, () => active.stop === true);
+      workerStage = "submit_activation";
+      const result = await this._submitWorkerWithActivation(
+        run,
+        item,
+        attempt,
+        workerContext,
+        refs,
+        () => active.stop === true,
+      );
+      workerStage = "attempt_read";
+      const actual = await window.ProviderWebQueueStore.getAttempt(attemptId);
+      if (actual?.submitStage !== "dispatch_intent") {
+        const diagnostic = result?.diagnostic;
+        const transportMessage =
+          result?.error === "SEND_FAILED" ? String(result.message || "") : "";
+        const transportReason = /receiving end does not exist/i.test(
+          transportMessage,
+        )
+          ? "receiver_missing"
+          : /message port closed|channel closed/i.test(transportMessage)
+            ? "channel_closed"
+            : transportMessage
+              ? "other"
+              : null;
+        let workerCheckOutcome = null;
+        let tabState = diagnostic?.tabState || null;
+        if (result?.error === "SEND_FAILED") {
+          let timer;
+          const checked = await Promise.race([
+            this._rpc("providerWorker:verify", workerContext).catch(() => ({
+              success: false,
+              error: "PROBE_UNAVAILABLE",
+            })),
+            new Promise((resolve) => {
+              timer = setTimeout(
+                () => resolve({ success: false, error: "PROBE_UNAVAILABLE" }),
+                2e3,
+              );
+            }),
+          ]);
+          clearTimeout(timer);
+          workerCheckOutcome = checked?.success
+            ? "verified"
+            : [
+                  "WORKER_TAB_LOST",
+                  "WORKER_TAB_LOADING",
+                  "WORKER_OWNER_MISMATCH",
+                ].includes(checked?.error)
+              ? checked.error.toLowerCase()
+              : "probe_unavailable";
+          tabState = checked?.tabState || tabState;
+        }
+        console.warn(
+          "[ProviderWebScheduler] worker_pre_submit_failed",
+          JSON.stringify({
+            runId: run.id,
+            promptIndex: item.promptIndex,
+            workerId: worker.workerId,
+            error: result?.error || "PRE_SUBMIT_FAILED",
+            submitStage: actual?.submitStage || null,
+            reason: result?.reason || null,
+            transportReason,
+            diagnostic:
+              diagnostic && typeof diagnostic === "object"
+                ? {
+                    elapsedMs: Number.isFinite(diagnostic.elapsedMs)
+                      ? diagnostic.elapsedMs
+                      : null,
+                    timeoutMs: Number.isFinite(diagnostic.timeoutMs)
+                      ? diagnostic.timeoutMs
+                      : null,
+                    checks: Number.isFinite(diagnostic.checks)
+                      ? diagnostic.checks
+                      : null,
+                    tabState:
+                      diagnostic.tabState &&
+                      typeof diagnostic.tabState === "object"
+                        ? {
+                            status: diagnostic.tabState.status || null,
+                            location: diagnostic.tabState.location || null,
+                          }
+                        : null,
+                  }
+                : null,
+          }),
+        );
+        await window.ProviderWebQueueStore.settleAttempt(attemptId, {
+          state:
+            active.stop && actual?.submitStage === "pre_submit"
+              ? "CANCELLED"
+              : "FAILED",
+          error:
+            active.stop && actual?.submitStage === "pre_submit"
+              ? "USER_CANCELLED"
+              : result?.error || "PRE_SUBMIT_FAILED",
+          preSubmitDiagnostic: {
+            ...(diagnostic && typeof diagnostic === "object" ? diagnostic : {}),
+            transportReason,
+            workerCheckOutcome,
+            tabState,
+          },
+          intentDiagnostic:
+            result?.error === "PROVIDER_WEB_INTENT_UNAVAILABLE"
+              ? result?.diagnostic || null
+              : null,
+        });
+        if (
+          !active.stop &&
+          active.retryLimit >
+            (Number(
+              run.source === "mcp_direct"
+                ? item.retrySubmitCount
+                : run.retryCount,
+            ) || 0) &&
+          window.ProviderWebQueueStore.setRetryPending
+        )
+          await window.ProviderWebQueueStore.setRetryPending(
+            attemptId,
+            result?.error || "PRE_SUBMIT_FAILED",
+          ).catch((error) =>
+            console.warn(
+              "[ProviderWebScheduler] Retry status:",
+              error?.message || error,
+            ),
+          );
+        return;
+      }
+      console.info(
+        "[ProviderWebScheduler] worker_result",
+        JSON.stringify({
+          runId: run.id,
+          promptIndex: item.promptIndex,
+          provider: run.provider,
+          success: result?.success === true,
+          error: result?.error || null,
+          reason: result?.reason || null,
+          ...(run.provider === "chatgpt" &&
+            result?.error === "COMPOSER_DIRTY" &&
+            result?.diagnostic && { composerDiagnostic: result.diagnostic }),
+          submitStage: actual.submitStage,
+          sendObserved: !!actual.sendObservedAt,
+          turnIdAvailable: !!result?.turnId,
+          imageLineage: result?.imageLineage || null,
+          imageCount: Array.isArray(result?.imageUrls)
+            ? result.imageUrls.length
+            : null,
+          ...(["chatgpt", "gemini"].includes(run.provider) && {
+            deleteAfterGen: run.settingsSnapshot.deleteAfterGen === true,
+            conversationUrlAvailable:
+              typeof result?.conversationUrl === "string",
+          }),
+          ...(run.provider === "gemini" && {
+            modelSelection: result?.modelSelection || null,
+          }),
+        }),
+      );
+      if (result?.success === true) {
+        const returned = await this._rpc(
+          "providerWorker:returnToSourceIfWorkerFocused",
+          workerContext,
+        ).catch((error) => ({
+          success: false,
+          error: error?.message || "WORKER_RESULT_FOCUS_RETURN_FAILED",
+        }));
+        console.info(
+          "[ProviderWebScheduler] worker_result_focus",
+          JSON.stringify({
+            runId: run.id,
+            promptIndex: item.promptIndex,
+            provider: run.provider,
+            restored: returned?.restored === true,
+            reason: returned?.reason || returned?.error || null,
+          }),
+        );
+      }
+      const receipts = await this._receipt(run, item, actual, result);
+      if (receipts?.length) {
+        await window.ProviderWebQueueStore.settleAttempt(attemptId, {
+          state:
+            receipts.length >= item.quantity ? "COMPLETED" : "PARTIAL_FAIL",
+          resultReceipts: receipts,
+          tabId: attempt.tabId,
+          epoch: attempt.epoch,
+        });
+        let downloadSucceeded = true;
+        if (
+          (!run.ownerScope ||
+            (run.source === "mcp_direct" &&
+              run.provider === "muse" &&
+              run.settingsSnapshot.deleteAfterGen)) &&
+          run.settingsSnapshot.autoDownload &&
+          window.featureGate?.canUse?.("auto_download") === true
+        ) {
+          await window.ProviderWebQueueStore.setDownloadState(
+            item.id,
+            "downloading",
+          );
+          window.eventBus?.emit?.("provider_web:changed", {
+            runId: run.id,
+            projectId: run.projectId,
+          });
+          try {
+            const downloadSettings = await window.DownloadHelper.getSettings();
+            const downloaded = await this._downloadWorkerReceipts(
+              run,
+              item,
+              attempt,
+              result,
+              receipts,
+              downloadSettings,
+            );
+            await window.ProviderWebQueueStore.setDownloadState(
+              item.id,
+              downloaded?.success ? "completed" : "failed",
+              downloaded?.error || null,
+            );
+            downloadSucceeded = downloaded?.success === true;
+            if (
+              run.provider === "muse" &&
+              downloaded?.success &&
+              run.settingsSnapshot.deleteAfterGen &&
+              receipts.length >= item.quantity &&
+              !active.stop
+            ) {
+              try {
+                const cleanup =
+                  await window.MuseSession.deleteCurrentConversation({
+                    workerContext,
+                  });
+                if (cleanup?.success !== true)
+                  console.warn(
+                    "[ProviderWebScheduler] Muse cleanup:",
+                    cleanup?.error || "DELETE_UNVERIFIED",
+                  );
+              } catch (cleanupError) {
+                console.warn(
+                  "[ProviderWebScheduler] Muse cleanup:",
+                  cleanupError?.message || cleanupError,
+                );
+              }
+            }
+          } catch (error) {
+            downloadSucceeded = false;
+            await window.ProviderWebQueueStore.setDownloadState(
+              item.id,
+              "failed",
+              error?.message || "PROVIDER_RESULT_DOWNLOAD_FAILED",
+            );
+          }
+        }
+        if (!run.ownerScope && run.provider === "chatgpt") {
+          const cleanupReason =
+            run.settingsSnapshot.deleteAfterGen !== true
+              ? "setting_disabled"
+              : receipts.length < item.quantity
+                ? "incomplete_results"
+                : !downloadSucceeded
+                  ? "download_failed"
+                  : active.stop
+                    ? "run_stopped"
+                    : typeof result.conversationUrl !== "string"
+                      ? "conversation_url_unavailable"
+                      : null;
+          console.info(
+            "[ProviderWebScheduler] chatgpt_cleanup_decision",
+            JSON.stringify({
+              runId: run.id,
+              promptIndex: item.promptIndex,
+              enabled: run.settingsSnapshot.deleteAfterGen === true,
+              receiptCount: receipts.length,
+              expectedCount: item.quantity,
+              downloadSucceeded,
+              reason: cleanupReason || "attempt",
+            }),
+          );
+          if (!cleanupReason) {
+            try {
+              const owner = await this._rpc("providerWorker:verify", {
+                workerId: attempt.workerId,
+                epoch: attempt.epoch,
+                userId: run.userId,
+                tabId: attempt.tabId,
+              });
+              if (owner?.success && owner.worker?.tabId === attempt.tabId) {
+                const cleanup = await this._rpc(
+                  "chatgpt:deleteConversationWithReloadFallback",
+                  {
+                    tabId: attempt.tabId,
+                    expectedConversationUrl: result.conversationUrl,
+                    focusWindow: false,
+                  },
+                );
+                console.info(
+                  "[ProviderWebScheduler] chatgpt_cleanup_outcome",
+                  JSON.stringify({
+                    runId: run.id,
+                    promptIndex: item.promptIndex,
+                    success: cleanup?.success === true,
+                    error: cleanup?.error || null,
+                    reloaded: cleanup?.reloaded === true,
+                  }),
+                );
+              } else {
+                console.warn(
+                  "[ProviderWebScheduler] chatgpt_cleanup_skipped",
+                  "worker_owner_lost",
+                );
+              }
+            } catch (error) {
+              console.warn(
+                "[ProviderWebScheduler] chatgpt_cleanup_failed",
+                error?.message || "DELETE_UNVERIFIED",
+              );
+            }
+          }
+        }
+        if (!run.ownerScope && run.provider === "gemini") {
+          const cleanupReason =
+            run.settingsSnapshot.deleteAfterGen !== true
+              ? "setting_disabled"
+              : receipts.length < item.quantity
+                ? "incomplete_results"
+                : !downloadSucceeded
+                  ? "download_failed"
+                  : active.stop
+                    ? "run_stopped"
+                    : typeof result.conversationUrl !== "string"
+                      ? "conversation_url_unavailable"
+                      : null;
+          console.info(
+            "[ProviderWebScheduler] gemini_cleanup_decision",
+            JSON.stringify({
+              runId: run.id,
+              promptIndex: item.promptIndex,
+              enabled: run.settingsSnapshot.deleteAfterGen === true,
+              receiptCount: receipts.length,
+              expectedCount: item.quantity,
+              downloadSucceeded,
+              reason: cleanupReason || "attempt",
+            }),
+          );
+          if (!cleanupReason) {
+            try {
+              const owner = await this._rpc("providerWorker:verify", {
+                workerId: attempt.workerId,
+                epoch: attempt.epoch,
+                userId: run.userId,
+                tabId: attempt.tabId,
+              });
+              if (owner?.success && owner.worker?.tabId === attempt.tabId) {
+                const cleanup =
+                  await window.GeminiSession.deleteCurrentConversation({
+                    workerContext,
+                    expectedConversationUrl: result.conversationUrl,
+                  });
+                console.info(
+                  "[ProviderWebScheduler] gemini_cleanup_outcome",
+                  JSON.stringify({
+                    runId: run.id,
+                    promptIndex: item.promptIndex,
+                    success: cleanup?.success === true,
+                    error: cleanup?.error || null,
+                  }),
+                );
+              } else {
+                console.warn(
+                  "[ProviderWebScheduler] gemini_cleanup_skipped",
+                  "worker_owner_lost",
+                );
+              }
+            } catch (error) {
+              console.warn(
+                "[ProviderWebScheduler] gemini_cleanup_failed",
+                error?.message || "DELETE_UNVERIFIED",
+              );
+            }
+          }
+        }
+      } else {
+        const verifiedTextOnly = this._verifiedTextOnly(
+          run.provider,
+          result?.error,
+          result?.textOnlyConfirmed,
+        );
+        const failureCode = result?.error || "PROVIDER_RESULT_UNVERIFIED";
+        const mediaReadUnconfirmed =
+          run.provider === "gemini" &&
+          result?.success === true &&
+          result.receiptFailureReason === "media_fetch_failed";
+        await window.ProviderWebQueueStore.settleAttempt(attemptId, {
+          state: mediaReadUnconfirmed ? "NEEDS_REVIEW" : "FAILED",
+          error: failureCode,
+          verifiedTextOnly,
+          deliveryErrorObserved:
+            run.provider === "muse" &&
+            failureCode === "MUSE_DELIVERY_UNCONFIRMED" &&
+            result?.deliveryErrorObserved === true,
+          ...(failureCode === "EXCEPTION" && {
+            exceptionDiagnostic: result?.diagnostic || null,
+          }),
+          ...(((["muse", "chatgpt"].includes(run.provider) &&
+            failureCode === "TIMEOUT") ||
+            (run.provider === "gemini" &&
+              [
+                "STARTUP_TIMEOUT",
+                "GENERATION_STALLED",
+                "ABSOLUTE_TIMEOUT",
+              ].includes(failureCode))) && {
+            monitorDiagnostic: result?.diagnostic || null,
+          }),
+          ...(failureCode === "PROVIDER_RESULT_UNVERIFIED" && {
+            receiptDiagnostic: result?.receiptFailureReason || null,
+            mediaFetchDiagnostic: result?.mediaFetchDiagnostic || null,
+          }),
+          ...(failureCode === "PROVIDER_WEB_INTENT_UNAVAILABLE" && {
+            intentDiagnostic: result?.diagnostic || null,
+          }),
+        });
+        if (
+          !active.stop &&
+          !mediaReadUnconfirmed &&
+          active.retryLimit >
+            (Number(
+              run.source === "mcp_direct"
+                ? item.retrySubmitCount
+                : run.retryCount,
+            ) || 0) &&
+          window.ProviderWebQueueStore.setRetryPending
+        )
+          await window.ProviderWebQueueStore.setRetryPending(
+            attemptId,
+            failureCode,
+          ).catch((error) =>
+            console.warn(
+              "[ProviderWebScheduler] Retry status:",
+              error?.message || error,
+            ),
+          );
+      }
+      return {
+        conversationUrl:
+          typeof result?.conversationUrl === "string"
+            ? result.conversationUrl
+            : null,
+      };
+    } catch (error) {
+      const actual = await window.ProviderWebQueueStore.getAttempt(attemptId);
+      console.warn(
+        "[ProviderWebScheduler] worker_attempt_exception",
+        JSON.stringify({
+          runId: run.id,
+          promptIndex: item.promptIndex,
+          workerId: worker.workerId,
+          error: error?.message || "PROVIDER_WORKER_FAILED",
+          submitStage: actual?.submitStage || null,
+        }),
+      );
+      const verifiedTextOnly =
+        actual?.submitStage === "dispatch_intent" &&
+        this._verifiedTextOnly(
+          run.provider,
+          error?.code,
+          error?.textOnlyConfirmed,
+        );
+      const errorCode = verifiedTextOnly
+        ? error.code
+        : error?.message || "PROVIDER_WORKER_FAILED";
+      const preSubmitDiagnostic =
+        actual?.submitStage === "pre_submit" && errorCode === "EXCEPTION"
+          ? { exceptionOrigin: "worker_scheduler", exceptionStage: workerStage }
+          : null;
+      await window.ProviderWebQueueStore.settleAttempt(attemptId, {
+        state:
+          active.stop && actual?.submitStage === "pre_submit"
+            ? "CANCELLED"
+            : "FAILED",
+        error:
+          active.stop && actual?.submitStage === "pre_submit"
+            ? "USER_CANCELLED"
+            : errorCode,
+        verifiedTextOnly,
+        ...(preSubmitDiagnostic && { preSubmitDiagnostic }),
+        ...(run.provider === "gemini" &&
+        ["STARTUP_TIMEOUT", "GENERATION_STALLED", "ABSOLUTE_TIMEOUT"].includes(
+          errorCode,
+        )
+          ? { monitorDiagnostic: error?.monitorDiagnostic || null }
+          : {}),
+      });
+      if (
+        !active.stop &&
+        !(
+          run.provider === "muse" &&
+          run.settingsSnapshot.chain?.enabled &&
+          workerStage === "refs"
+        ) &&
+        active.retryLimit >
+          (Number(
+            run.source === "mcp_direct"
+              ? item.retrySubmitCount
+              : run.retryCount,
+          ) || 0) &&
+        window.ProviderWebQueueStore.setRetryPending
+      )
+        await window.ProviderWebQueueStore.setRetryPending(
+          attemptId,
+          errorCode,
+        ).catch((retryError) =>
+          console.warn(
+            "[ProviderWebScheduler] Retry status:",
+            retryError?.message || retryError,
+          ),
+        );
+    } finally {
+      await this._rpc("providerWorker:trackerUpdate", {
+        ...workerContext,
+        data: { trackerProvider: run.provider, isRunning: false, jobs: [] },
+      }).catch(() => {});
+      window.eventBus?.emit?.("provider_web:changed", {
+        runId: run.id,
+        projectId: run.projectId,
+      });
+    }
+  }
+  static async _waitForWorkerSubmit(attemptId, workerTask, active) {
+    let finished = false;
+    const startedAt = Date.now();
+    let releaseReason = "task_finished";
+    workerTask.finally(() => {
+      finished = true;
+    });
+    while (!finished && !active.stop && !active.paused) {
+      const attempt = await window.ProviderWebQueueStore.getAttempt(
+        attemptId,
+      ).catch(() => null);
+      if (attempt?.sendObservedAt) {
+        releaseReason = "send_observed";
+        break;
+      }
+      await Promise.race([
+        workerTask,
+        new Promise((resolve) => setTimeout(resolve, 150)),
+      ]);
+    }
+    if (active.stop) releaseReason = "stopped";
+    else if (active.paused) releaseReason = "paused";
+    const submitTurn = this._submitTurnByAttempt?.get(attemptId);
+    if (submitTurn) await submitTurn;
+    console.info(
+      "[ProviderWebScheduler] worker_startup_gate",
+      JSON.stringify({
+        runId: active.run.id,
+        elapsedMs: Date.now() - startedAt,
+        releaseReason,
+      }),
+    );
+  }
+  static async _createRecoverableRetry(snapshot, retryCount) {
+    const { run, items } = snapshot;
+    const failed = items.filter(
+      (item) =>
+        !item.hidden &&
+        ["FAILED", "PARTIAL_FAIL"].includes(item.state) &&
+        item.attemptId,
+    );
+    const attempts = await Promise.all(
+      failed.map((item) =>
+        window.ProviderWebQueueStore.getAttempt(item.attemptId),
+      ),
+    );
+    const candidates = failed.filter(
+      (item, index) =>
+        attempts[index] &&
+        window.ProviderWebQueueStore._retrySafeAttempt(
+          item,
+          attempts[index],
+          true,
+        ),
+    );
+    if (!candidates.length) return null;
+    const originalIndexes = candidates.map((item) =>
+      run.manualRegen
+        ? run.originalIndexes?.[item.promptIndex]
+        : item.promptIndex,
+    );
+    if (originalIndexes.some((index) => !Number.isInteger(index)))
+      throw new Error("PROVIDER_RETRY_INDEX_UNAVAILABLE");
+    const assets = new Map();
+    const refKeys = [
+      ...new Set(candidates.flatMap((item) => item.refKeys || [])),
+    ];
+    const sourceAssets = await Promise.all(
+      refKeys.map((key) =>
+        window.ProviderWebQueueStore.getAsset(
+          run.userId,
+          run.projectId,
+          key,
+          run.ownerScope,
+        ),
+      ),
+    );
+    for (let index = 0; index < refKeys.length; index++) {
+      const asset = sourceAssets[index];
+      if (!asset?.blob) throw new Error("PROVIDER_RETRY_REF_UNAVAILABLE");
+      assets.set(refKeys[index], {
+        id: crypto.randomUUID(),
+        blob: asset.blob,
+        name: asset.name,
+        type: asset.type,
+      });
+    }
+    const id = crypto.randomUUID();
+    const args = {
+      id,
+      userId: run.userId,
+      projectId: run.projectId,
+      settingsSnapshot: run.settingsSnapshot,
+      originalIndexes,
+      retryCount,
+      runAction: "AUTO_RETRY",
+      batchName: run.batchName || null,
+      prompts: candidates.map((item) => ({
+        text: item.prompt,
+        quantity: item.quantity,
+        refKeys: (item.refKeys || []).map((key) => assets.get(key).id),
+        settingsOverride: item.settingsOverride || {},
+      })),
+      refAssets: [...assets.values()],
+    };
+    if (run.mcpParentRunId)
+      await window.ProviderWebQueueStore.createMcpManualRun({
+        ...args,
+        parentRunId: run.mcpParentRunId,
+      });
+    else if (run.source === "gentab_direct")
+      await window.ProviderWebQueueStore.createDirectManualRun({
+        ...args,
+        parentRunId: run.manualRegen ? run.parentRunId : run.id,
+      });
+    else
+      await window.ProviderWebQueueStore.createManualRun({
+        ...args,
+        batchId: run.batchId,
+      });
+    window.eventBus?.emit?.("provider_web:changed", {
+      runId: id,
+      projectId: run.projectId,
+    });
+    console.info(
+      "[ProviderWebScheduler] recoverable_retry",
+      JSON.stringify({
+        fromRunId: run.id,
+        runId: id,
+        retryCount,
+        promptIndexes: originalIndexes,
+        reasons: candidates.map((item) => item.error),
+      }),
+    );
+    return id;
+  }
+  static async run(runId) {
+    const apiBatch = await window.ProviderWebQueueStore.getRun(runId);
+    if (
+      window.MuseApiBatchRunner?.applies(apiBatch?.run) ||
+      (window.MuseApiBatchRunner?.intended(apiBatch?.run) &&
+        apiBatch.run.museApiStarted)
+    )
+      return window.MuseApiBatchRunner.run(runId);
+    const initial = await window.ProviderWebQueueStore.getRun(runId);
+    if (!["batch", "gentab_direct"].includes(initial?.run?.source))
+      throw new Error("PROVIDER_RUN_OWNER_MISMATCH");
+    if (this._runCalls.has(runId))
+      throw new Error("PROVIDER_RUN_ALREADY_ACTIVE");
+    this._runCalls.add(runId);
+    const geminiAccountTabId = window.GeminiSession?._tabId ?? null;
+    let currentRunId = runId;
+    const visited = new Set();
+    const retainedMainLayouts = [];
+    let finalOutcome = null;
+    try {
+      while (true) {
+        visited.add(currentRunId);
+        const outcome = await this._runOnce(currentRunId, {
+          geminiAccountTabId,
+          managedRun: true,
+          retainMainLayout: (layout) => retainedMainLayouts.push(layout),
+        });
+        finalOutcome = outcome;
+        if (
+          !["failed", "partial", "needs_review"].includes(outcome.status) ||
+          this._pendingStops.has(runId)
+        )
+          return outcome;
+        const snapshot =
+          await window.ProviderWebQueueStore.getRun(currentRunId);
+        if (!["SETTLED", "RUNNING"].includes(snapshot?.run?.status))
+          return outcome;
+        let maxRetries;
+        try {
+          maxRetries = Number(
+            (await window.ExecutionConfig.getConfig())?.workflow?.max_retries,
+          );
+        } catch (_) {
+          return outcome;
+        }
+        if (!Number.isSafeInteger(maxRetries) || maxRetries < 0) return outcome;
+        const retryCount = Number(snapshot.run.retryCount) || 0;
+        if (retryCount >= maxRetries) return outcome;
+        let nextRunId;
+        try {
+          nextRunId = await this._createRecoverableRetry(
+            snapshot,
+            retryCount + 1,
+          );
+        } catch (error) {
+          console.warn(
+            "[ProviderWebScheduler] recoverable_retry_unavailable",
+            error?.message || error,
+          );
+          return outcome;
+        }
+        if (!nextRunId) return outcome;
+        this._retryChildren.set(runId, nextRunId);
+        if (this._pendingPauses.delete(currentRunId))
+          this._pendingPauses.add(nextRunId);
+        if (initial.run.source === "gentab_direct")
+          window.eventBus?.emit?.("execution:tracker_update", {
+            owner: "prompts",
+            label: `${initial.run.provider} Gen`,
+            phase: "retry",
+            current: 0,
+            total: initial.items.length,
+            promptText: "",
+            provider: initial.run.provider,
+            retryInfo: { attempt: retryCount + 1, maxRetries },
+          });
+        if (this._pendingStops.has(runId)) this._pendingStops.add(nextRunId);
+        currentRunId = nextRunId;
+      }
+    } finally {
+      for (const layout of retainedMainLayouts.reverse()) {
+        try {
+          const restored = await this.restoreMainWindowLayout(
+            layout.runId,
+            layout.windowId,
+          );
+          console.info(
+            "[ProviderWebScheduler] main_worker_layout_restore",
+            JSON.stringify({ runId: layout.runId, ...restored }),
+          );
+        } catch (error) {
+          console.warn(
+            "[ProviderWebScheduler] main worker layout restore failed:",
+            error?.message || error,
+          );
+        }
+      }
+      this._retryChildren.delete(runId);
+      this._runCalls.delete(runId);
+      for (const id of visited) this._pendingPauses.delete(id);
+      if (window.ProviderWebQueueStore.clearRetryPending)
+        await Promise.allSettled(
+          [...visited].map((id) =>
+            window.ProviderWebQueueStore.clearRetryPending(id),
+          ),
+        );
+      window.eventBus?.emit?.("provider_web:changed", { runId });
+      if (initial.run.source === "gentab_direct")
+        window.eventBus?.emit?.("execution:tracker_update", {
+          owner: "prompts",
+          label: `${initial.run.provider} Gen`,
+          phase:
+            finalOutcome?.status === "stopped" || this._pendingStops.has(runId)
+              ? "stopped"
+              : finalOutcome?.status === "paused"
+                ? "paused"
+                : finalOutcome?.status === "success"
+                  ? "completed"
+                  : "error",
+          current: initial.items.length,
+          total: initial.items.length,
+          promptText: "",
+          provider: initial.run.provider,
+          retryInfo: null,
+        });
+    }
+  }
+  static async createOwned({
+    userId,
+    provider,
+    source,
+    settingsSnapshot,
+    prompts,
+    refAssets = [],
+    owner,
+    batchName = null,
+  }) {
+    if (String(window.authManager?.getUser?.()?.id) !== String(userId))
+      throw new Error("PROVIDER_RUN_ACCOUNT_CHANGED");
+    if (
+      !["workflow", "mcp_direct"].includes(source) ||
+      !owner ||
+      typeof owner !== "object"
+    )
+      throw new Error("PROVIDER_RUN_OWNER_MISMATCH");
+    const id = crypto.randomUUID();
+    const assetIds = new Map(
+      refAssets.map((asset, index) => [asset.id, `${id}:ref:${index}`]),
+    );
+    if (
+      assetIds.size !== refAssets.length ||
+      prompts.some((prompt) =>
+        (prompt.refKeys || []).some((key) => !assetIds.has(key)),
+      )
+    )
+      throw new Error("PROVIDER_RUN_ASSET_MISSING");
+    const ownedAssets = refAssets.map((asset) => ({
+      ...asset,
+      id: assetIds.get(asset.id),
+    }));
+    const ownedPrompts = prompts.map((prompt) => ({
+      ...prompt,
+      refKeys: (prompt.refKeys || []).map((key) => assetIds.get(key)),
+    }));
+    await window.ProviderWebQueueStore.createRun({
+      id,
+      userId,
+      projectId: null,
+      provider,
+      source,
+      settingsSnapshot,
+      prompts: ownedPrompts,
+      refAssets: ownedAssets,
+      batchName: source === "mcp_direct" ? batchName : null,
+      ...(source === "workflow"
+        ? { workflowId: owner.workflowId, nodeId: owner.nodeId }
+        : { mcpJobId: owner.mcpJobId, runnerId: owner.runnerId }),
+    });
+    return id;
+  }
+  static async runOwned(
+    runId,
+    userId,
+    owner,
+    { onVerified = null, retainMainLayout = null } = {},
+  ) {
+    if (String(window.authManager?.getUser?.()?.id) !== String(userId))
+      throw new Error("PROVIDER_RUN_ACCOUNT_CHANGED");
+    if (this._ownedRunCalls.has(runId))
+      throw new Error("PROVIDER_RUN_ALREADY_ACTIVE");
+    this._ownedRunCalls.add(runId);
+    try {
+      const snapshot = await window.ProviderWebQueueStore.getOwnedRun(
+        runId,
+        userId,
+        owner,
+      );
+      if (
+        !snapshot ||
+        !["workflow", "mcp_direct"].includes(snapshot.run.source)
+      )
+        throw new Error("PROVIDER_RUN_OWNER_MISMATCH");
+      if (
+        onVerified &&
+        (snapshot.run.source !== "workflow" ||
+          !["muse", "chatgpt", "gemini"].includes(snapshot.run.provider) ||
+          snapshot.run.settingsSnapshot?.deleteAfterGen !== true ||
+          snapshot.items.length !== 1)
+      )
+        throw new Error("PROVIDER_OWNER_CALLBACK_INVALID");
+      return await this._runOnce(runId, {
+        ownerCredentials: owner,
+        geminiAccountTabId: window.GeminiSession?._tabId ?? null,
+        onVerified,
+        retainMainLayout,
+      });
+    } finally {
+      this._ownedRunCalls.delete(runId);
+    }
+  }
+  static async stopOwned(runId, userId, owner, stopSource = null) {
+    if (String(window.authManager?.getUser?.()?.id) !== String(userId))
+      throw new Error("PROVIDER_RUN_ACCOUNT_CHANGED");
+    const snapshot = await window.ProviderWebQueueStore.getOwnedRun(
+      runId,
+      userId,
+      owner,
+    );
+    if (!snapshot || !["workflow", "mcp_direct"].includes(snapshot.run.source))
+      throw new Error("PROVIDER_RUN_OWNER_MISMATCH");
+    return this.stop(runId, stopSource);
+  }
+  static async settleOwned(
+    runId,
+    userId,
+    owner,
+    status,
+    successfulCount = null,
+  ) {
+    if (String(window.authManager?.getUser?.()?.id) !== String(userId))
+      throw new Error("PROVIDER_RUN_ACCOUNT_CHANGED");
+    if (!["success", "partial", "failed"].includes(status))
+      throw new Error("PROVIDER_OWNER_SETTLEMENT_INVALID");
+    const snapshot = await window.ProviderWebQueueStore.getOwnedRun(
+      runId,
+      userId,
+      owner,
+    );
+    if (
+      !snapshot ||
+      !["workflow", "mcp_direct"].includes(snapshot.run.source) ||
+      !snapshot.reservation?.token
+    )
+      throw new Error("PROVIDER_RUN_OWNER_MISMATCH");
+    if (
+      status === "partial" &&
+      (!Number.isSafeInteger(successfulCount) ||
+        successfulCount < 0 ||
+        successfulCount > snapshot.items.length)
+    )
+      throw new Error("PROVIDER_OWNER_SETTLEMENT_INVALID");
+    if (snapshot.reservation.state === "settled") {
+      const receipt = snapshot.reservation.receipt;
+      if (
+        !receipt ||
+        receipt.status !== status ||
+        (status === "partial" && receipt.successful_count !== successfulCount)
+      )
+        throw new Error("PROVIDER_OWNER_SETTLEMENT_CONFLICT");
+      await this._verifyOwnedServerBinding(snapshot, owner);
+      await window.ProviderWebQueueStore.markOwnerCheckpointed(
+        runId,
+        userId,
+        owner,
+      );
+      return receipt;
+    }
+    const lease = await this._lease(userId);
+    try {
+      await this._verifyOwnedServerBinding(snapshot, owner);
+      await window.ProviderWebQueueStore.markOwnerCheckpointed(
+        runId,
+        userId,
+        owner,
+      );
+      const observed = await this._api("settlement", {
+        token: snapshot.reservation.token,
+      });
+      if (observed?.provider_web?.run_id !== runId)
+        throw new Error("PROVIDER_RESERVATION_OWNER_MISMATCH");
+      const lateWorkflowCheckpoint =
+        observed.token_status === "expired" &&
+        snapshot.run.source === "workflow" &&
+        status === "success" &&
+        (snapshot.run.ownerCheckpointStatus === "success" ||
+          !!snapshot.run.ownerDiscardedAt) &&
+        snapshot.items.length === 1 &&
+        snapshot.items[0].state === "COMPLETED" &&
+        snapshot.items[0].resultReceipts?.some(
+          (receipt2) => receipt2?.identity && receipt2?.assetKey,
+        ) &&
+        observed.provider_web?.dispatch_intent_count === 1;
+      if (observed.token_status === "active" || lateWorkflowCheckpoint)
+        await this._api("complete", {
+          token: snapshot.reservation.token,
+          status,
+          ...(status === "partial"
+            ? { result_data: { successful_count: successfulCount } }
+            : {}),
+        });
+      const confirmed =
+        observed.token_status === "active" || lateWorkflowCheckpoint
+          ? await this._api("settlement", { token: snapshot.reservation.token })
+          : observed;
+      if (confirmed?.provider_web?.run_id !== runId)
+        throw new Error("PROVIDER_RESERVATION_OWNER_MISMATCH");
+      const receipt = confirmed.settlement;
+      if (!receipt) {
+        const terminalStatus = confirmed.token_status;
+        const intentCount = confirmed.provider_web?.dispatch_intent_count;
+        const unsubmittedItem = snapshot.items[0];
+        const unsubmittedAttempt = unsubmittedItem?.attemptId
+          ? await window.ProviderWebQueueStore.getAttempt(
+              unsubmittedItem.attemptId,
+            )
+          : null;
+        const unsubmittedFailure =
+          snapshot.run.source === "workflow" &&
+          status === "failed" &&
+          snapshot.run.ownerCheckpointStatus === "failed" &&
+          snapshot.items.length === 1 &&
+          !unsubmittedItem.resultReceipts?.length &&
+          ((unsubmittedItem.state === "CANCELLED" &&
+            unsubmittedItem.error === "WORKER_UI_ONLY" &&
+            !unsubmittedItem.attemptId) ||
+            (unsubmittedItem.state === "CANCELLED" &&
+              unsubmittedItem.error === "USER_CANCELLED" &&
+              unsubmittedAttempt?.itemId === unsubmittedItem.id &&
+              unsubmittedAttempt.submitStage === "pre_submit" &&
+              !unsubmittedAttempt.intentRequestedAt &&
+              !unsubmittedAttempt.clickGrantedAt &&
+              !unsubmittedAttempt.sendObservedAt) ||
+            (unsubmittedItem.state === "FAILED" &&
+              unsubmittedAttempt?.itemId === unsubmittedItem.id &&
+              unsubmittedAttempt.submitStage === "pre_submit" &&
+              !unsubmittedAttempt.intentRequestedAt &&
+              !unsubmittedAttempt.clickGrantedAt &&
+              !unsubmittedAttempt.sendObservedAt));
+        if (
+          unsubmittedFailure &&
+          ["expired", "revoked", "used"].includes(terminalStatus) &&
+          intentCount === 0 &&
+          window.ProviderWebQueueStore.closeOwnedUnsubmitted
+        ) {
+          await window.ProviderWebQueueStore.closeOwnedUnsubmitted(
+            runId,
+            userId,
+            owner,
+            this._ownerId,
+            lease.epoch,
+            snapshot.reservation.token,
+            terminalStatus,
+            intentCount,
+          );
+          console.info(
+            "[ProviderWebScheduler] Closed terminal unsubmitted failure",
+            JSON.stringify({ runId, tokenStatus: terminalStatus, intentCount }),
+          );
+          return { terminal_unsubmitted: true, token_status: terminalStatus };
+        }
+        const confirmedDeliveryFailure =
+          snapshot.run.source === "workflow" &&
+          snapshot.run.provider === "muse" &&
+          status === "failed" &&
+          snapshot.run.ownerCheckpointStatus === "failed" &&
+          snapshot.items.length === 1 &&
+          unsubmittedItem.state === "FAILED" &&
+          unsubmittedItem.error === "MUSE_DELIVERY_UNCONFIRMED" &&
+          !unsubmittedItem.resultReceipts?.length &&
+          unsubmittedAttempt?.itemId === unsubmittedItem.id &&
+          unsubmittedAttempt.submitStage === "dispatch_intent" &&
+          !!unsubmittedAttempt.clickGrantedAt &&
+          unsubmittedAttempt.deliveryErrorObserved === true;
+        if (
+          confirmedDeliveryFailure &&
+          ["expired", "revoked", "used"].includes(terminalStatus) &&
+          intentCount === 1 &&
+          window.ProviderWebQueueStore.closeOwnedConfirmedDelivery
+        ) {
+          await window.ProviderWebQueueStore.closeOwnedConfirmedDelivery(
+            runId,
+            userId,
+            owner,
+            this._ownerId,
+            lease.epoch,
+            snapshot.reservation.token,
+            terminalStatus,
+            intentCount,
+          );
+          console.info(
+            "[ProviderWebScheduler] Closed terminal Muse delivery failure",
+            JSON.stringify({ runId, tokenStatus: terminalStatus, intentCount }),
+          );
+          return {
+            terminal_delivery_failure: true,
+            token_status: terminalStatus,
+          };
+        }
+        const reviewedReset =
+          snapshot.run.source === "workflow" &&
+          status === "failed" &&
+          snapshot.run.ownerCheckpointStatus === "failed" &&
+          !!snapshot.run.ownerReviewDiscardedAt &&
+          snapshot.items.length === 1 &&
+          ["NEEDS_REVIEW", "FAILED"].includes(snapshot.items[0].state) &&
+          !snapshot.items[0].resultReceipts?.length;
+        if (
+          reviewedReset &&
+          ["expired", "revoked", "used"].includes(terminalStatus) &&
+          intentCount === 1 &&
+          window.ProviderWebQueueStore.closeOwnedReviewedReset
+        ) {
+          await window.ProviderWebQueueStore.closeOwnedReviewedReset(
+            runId,
+            userId,
+            owner,
+            this._ownerId,
+            lease.epoch,
+            snapshot.reservation.token,
+            terminalStatus,
+            intentCount,
+          );
+          console.info(
+            "[ProviderWebScheduler] Closed terminal reviewed reset",
+            JSON.stringify({ runId, tokenStatus: terminalStatus, intentCount }),
+          );
+          return {
+            terminal_review_discard: true,
+            token_status: terminalStatus,
+          };
+        }
+        console.warn(
+          "[ProviderWebScheduler] Owner settlement missing receipt",
+          JSON.stringify({
+            runId,
+            source: snapshot.run.source,
+            tokenStatus: terminalStatus,
+            intentCount: Number.isInteger(intentCount) ? intentCount : null,
+            itemState: snapshot.items[0]?.state || null,
+            itemError: snapshot.items[0]?.error || null,
+            hasAttempt: !!snapshot.items[0]?.attemptId,
+            attemptStage: unsubmittedAttempt?.submitStage || null,
+            intentRequested: !!unsubmittedAttempt?.intentRequestedAt,
+            clickGranted: !!unsubmittedAttempt?.clickGrantedAt,
+            sendObserved: !!unsubmittedAttempt?.sendObservedAt,
+            checkpointStatus: snapshot.run.ownerCheckpointStatus || null,
+          }),
+        );
+        throw new Error("PROVIDER_OWNER_SETTLEMENT_UNCONFIRMED");
+      }
+      if (
+        receipt.status !== status ||
+        (status === "partial" && receipt.successful_count !== successfulCount)
+      )
+        throw new Error("PROVIDER_OWNER_SETTLEMENT_CONFLICT");
+      await window.ProviderWebQueueStore.saveRecoveredSettlement(
+        runId,
+        this._ownerId,
+        lease.epoch,
+        snapshot.reservation.token,
+        receipt,
+      );
+      return receipt;
+    } finally {
+      await this._releaseLease(userId, lease);
+    }
+  }
+  static async _runOnce(
+    runId,
+    {
+      geminiAccountTabId = null,
+      ownerCredentials = null,
+      onVerified = null,
+      retainMainLayout = null,
+      managedRun = false,
+    } = {},
+  ) {
+    if (this._activeRuns.has(runId))
+      throw new Error("PROVIDER_RUN_ALREADY_ACTIVE");
+    let data = await window.ProviderWebQueueStore.getRun(runId);
+    const owned = ["workflow", "mcp_direct"].includes(data?.run?.source);
+    if (
+      !data?.run ||
+      (owned && !ownerCredentials) ||
+      !["batch", "gentab_direct", "workflow", "mcp_direct"].includes(
+        data.run.source,
+      ) ||
+      !["muse", "chatgpt", "gemini"].includes(data.run.provider) ||
+      !["QUEUED", "RUNNING"].includes(data.run.status)
+    )
+      throw new Error("PROVIDER_RUN_NOT_READY");
+    if (
+      data.run.source === "workflow" &&
+      !ownerCredentials?.parentWorkflowToken
+    )
+      throw new Error("PROVIDER_WORKFLOW_RECOVERY_DISPATCH_BLOCKED");
+    const resumed = data.run.status === "RUNNING";
+    if (!resumed)
+      await this._runStage(runId, "config", () =>
+        this._config(data.run.provider, null, data.run.source),
+      );
+    const configuredRetryLimit = Number(
+      window.ExecutionConfig.getWorkflowConfig?.()?.max_retries,
+    );
+    const retryLimit =
+      data.run.source === "mcp_direct" &&
+      window.featureGate?.canUse?.("retry_on_fail") === true
+        ? configuredRetryLimit
+        : owned
+          ? 0
+          : configuredRetryLimit;
+    if (managedRun) this._publishHistoryInBackground(data.run.userId);
+    else await this.publishPending(data.run.userId);
+    const lease = await this._runStage(runId, "lease", () =>
+      this._lease(data.run.userId),
+    );
+    try {
+      let ownerBindingVerified = false;
+      if (resumed) {
+        if (owned && data.reservation?.token)
+          ownerBindingVerified = !!(await this._verifyOwnedServerBinding(
+            data,
+            ownerCredentials,
+          ));
+        await window.ProviderWebQueueStore.reconcileRun(runId);
+        data = await window.ProviderWebQueueStore.getRun(runId);
+        if (!data?.reservation?.token)
+          throw new Error("PROVIDER_RESERVATION_MISSING");
+        const settlement = await this._api("settlement", {
+          token: data.reservation.token,
+        });
+        if (settlement?.provider_web?.run_id !== runId)
+          throw new Error("PROVIDER_RESERVATION_OWNER_MISMATCH");
+        if (settlement.token_status !== "active") {
+          if (settlement.settlement)
+            await window.ProviderWebQueueStore.saveRecoveredSettlement(
+              runId,
+              this._ownerId,
+              lease.epoch,
+              data.reservation.token,
+              settlement.settlement,
+            );
+          const recoveredStatus = ["success", "partial", "failed"].includes(
+            settlement.settlement?.status,
+          )
+            ? settlement.settlement.status
+            : settlement.settlement?.status === "cancelled"
+              ? "stopped"
+              : "needs_review";
+          await this._recordHistory(runId, recoveredStatus, {
+            waitForPublish: !managedRun,
+          });
+          return {
+            status: recoveredStatus,
+            runId,
+            items: data.items,
+            receipt: settlement.settlement || null,
+          };
+        }
+        if (data.items.some((item) => item.state === "NEEDS_REVIEW")) {
+          await this._recordHistory(runId, "needs_review", {
+            waitForPublish: !managedRun,
+          });
+          return { status: "needs_review", runId, items: data.items };
+        }
+        await window.ProviderWebQueueStore.adoptReservation(runId, {
+          ownerId: this._ownerId,
+          epoch: lease.epoch,
+        });
+        data = await window.ProviderWebQueueStore.getRun(runId);
+      }
+      if (resumed && data.items.some((item) => item.state === "QUEUED"))
+        await window.ExecutionConfig.getConfig(true);
+      if (data.items.some((item) => item.state === "QUEUED"))
+        await this._runStage(runId, "prompt_config", () =>
+          this._promptConfig(data.run.provider, data.run.settingsSnapshot),
+        );
+      const reservation = await this._runStage(runId, "reserve", () =>
+        this._reserve(
+          data,
+          lease,
+          ownerCredentials,
+          resumed && ownerBindingVerified,
+        ),
+      );
+      const selectedItems =
+        data.run.selectedPromptIndex === null ||
+        data.run.selectedPromptIndex === void 0
+          ? data.items
+          : data.items.filter(
+              (item) => item.promptIndex === data.run.selectedPromptIndex,
+            );
+      if (!selectedItems.length)
+        throw new Error("PROVIDER_ITEM_SELECTION_INVALID");
+      const dispatchItems = owned
+        ? selectedItems.filter((item) => item.state === "QUEUED")
+        : selectedItems;
+      const sourceWindowId =
+        typeof chrome === "undefined" || !chrome.windows?.getCurrent
+          ? null
+          : await chrome.windows
+              .getCurrent()
+              .then((win) => win?.id)
+              .catch(() => null);
+      const sourceSurface =
+        data.run.source === "workflow" ? "workflow" : "sidebar";
+      const screenTop = Number.isSafeInteger(window.screen?.availTop)
+        ? window.screen.availTop
+        : null;
+      const screenLeft = Number.isSafeInteger(window.screen?.availLeft)
+        ? window.screen.availLeft
+        : null;
+      const screenWidth =
+        Number.isSafeInteger(window.screen?.availWidth) &&
+        window.screen.availWidth > 100
+          ? window.screen.availWidth
+          : null;
+      const screenHeight =
+        Number.isSafeInteger(window.screen?.availHeight) &&
+        window.screen.availHeight > 100
+          ? window.screen.availHeight
+          : null;
+      let mainLayout = null;
+      if (
+        data.run.source !== "workflow" &&
+        dispatchItems.length > 0 &&
+        Number.isInteger(sourceWindowId)
+      ) {
+        try {
+          const limits = this._admissionFor(data.run.provider, data.run.source);
+          if (limits.parallelEnabled === true) {
+            const layout = await this.prepareMainWindowLayout(
+              runId,
+              sourceWindowId,
+            );
+            if (layout?.success && layout.adjusted) {
+              mainLayout = layout;
+              if (typeof retainMainLayout === "function")
+                retainMainLayout({ runId, ...layout });
+            }
+            console.info(
+              "[ProviderWebScheduler] main_worker_layout",
+              JSON.stringify({
+                runId,
+                source: data.run.source,
+                provider: data.run.provider,
+                ...layout,
+              }),
+            );
+          }
+        } catch (error) {
+          console.warn(
+            "[ProviderWebScheduler] main worker layout failed:",
+            error?.message || error,
+          );
+        }
+      }
+      const active = {
+        run: data.run,
+        lease,
+        reservation,
+        retryLimit: Number.isSafeInteger(retryLimit) ? retryLimit : 0,
+        stop: this._pendingStops.delete(runId),
+        paused: this._pendingPauses.has(runId),
+        workers: [],
+        closedWorkers: new Set(),
+        itemCount: dispatchItems.length,
+        openedWindowCount: 0,
+        sourceWindowId,
+        screenLeft,
+        screenWidth,
+        screenTop,
+        screenHeight,
+        geminiAccountTabId,
+      };
+      this._activeRuns.set(runId, active);
+      this._pausedRuns.delete(runId);
+      if (data.run.source === "gentab_direct")
+        window.eventBus?.emit?.("execution:tracker_update", {
+          owner: "prompts",
+          label: `${data.run.provider} Gen`,
+          phase: "started",
+          current: 0,
+          total: data.items.length,
+          promptText: data.items[0]?.prompt || "",
+          provider: data.run.provider,
+          retryInfo: null,
+        });
+      try {
+        let next = 0;
+        const process = async (onClaim) => {
+          const releaseSlot = await this._slot(
+            this._admissionFor(data.run.provider, data.run.source)
+              .maxConcurrentWorkers,
+            data.run.userId,
+            () => active.stop || active.paused,
+            data.run.provider,
+            data.run.source,
+          );
+          const workerId = crypto.randomUUID();
+          let lastPromptIndex = null;
+          let openedAt = null;
+          let exitReason = null;
+          try {
+            if (active.stop || active.paused || next >= dispatchItems.length)
+              return;
+            if (reservation.expiresAt <= Date.now()) {
+              active.paused = true;
+              return;
+            }
+            const workerLimits = this._admissionFor(
+              data.run.provider,
+              data.run.source,
+            );
+            if (workerLimits.parallelEnabled === false) {
+              active.paused = true;
+              exitReason = "provider_disabled";
+              return;
+            }
+            if (active.stop || active.paused) return;
+            const opened = await this._openWorkerWithCapacityWait(
+              {
+                workerId,
+                epoch: lease.epoch,
+                userId: data.run.userId,
+                provider: data.run.provider,
+                runId,
+                sourceWindowId: active.sourceWindowId,
+                sourceSurface,
+                screenLeft: active.screenLeft,
+                screenWidth: active.screenWidth,
+                screenTop: active.screenTop,
+                screenHeight: active.screenHeight,
+                layoutCount: workerLimits.maxConcurrentWorkers,
+                promptIndex: dispatchItems[next]?.promptIndex,
+                ...(data.run.provider === "gemini" && {
+                  accountTabId: active.geminiAccountTabId,
+                }),
+              },
+              () =>
+                active.stop ||
+                active.paused ||
+                next >= dispatchItems.length ||
+                reservation.expiresAt <= Date.now(),
+              () => this._admissionFor(data.run.provider, data.run.source),
+              data.run.provider,
+            );
+            if (opened?.error === "PROVIDER_WORKER_SLOT_CANCELLED") {
+              if (reservation.expiresAt <= Date.now()) active.paused = true;
+              return;
+            }
+            if (opened?.error === "PROVIDER_WEB_PAUSED_BY_CONFIG") {
+              active.paused = true;
+              exitReason = "provider_disabled";
+              return;
+            }
+            if (!opened.success)
+              throw new Error(opened.error || "PROVIDER_WORKER_CREATE_FAILED");
+            const worker = opened.worker;
+            active.workers.push(worker);
+            releaseSlot.opened(workerId);
+            const peak = active.workers.length;
+            await window.ProviderWebQueueStore.recordPeakWorkerWindows?.(
+              runId,
+              peak,
+            )?.catch((error) =>
+              console.warn(
+                "[ProviderWebScheduler] Worker peak history:",
+                error?.message || error,
+              ),
+            );
+            openedAt = Date.now();
+            if (!worker.reusedTab) active.openedWindowCount++;
+            console.info(
+              "[ProviderWebScheduler] worker_window",
+              JSON.stringify({
+                event: worker.reusedTab ? "reused_tab" : "opened",
+                runId,
+                openInRun: active.workers.length,
+                openedTotal: active.openedWindowCount,
+                configuredLimit:
+                  workerLimits.configuredMaxConcurrentWorkers ??
+                  workerLimits.maxConcurrentWorkers,
+                effectiveLimit: workerLimits.maxConcurrentWorkers,
+                parallelEnabled: workerLimits.parallelEnabled ?? null,
+                promptCount: data.items.length,
+                dispatchCount: dispatchItems.length,
+                selectedPromptIndex: data.run.selectedPromptIndex ?? null,
+              }),
+            );
+            while (
+              !active.stop &&
+              !active.paused &&
+              next < dispatchItems.length
+            ) {
+              let live;
+              try {
+                live = this._admissionFor(data.run.provider, data.run.source);
+              } catch (_) {
+                active.paused = true;
+                exitReason = "config_unavailable";
+                break;
+              }
+              if (
+                live.parallelEnabled === false ||
+                !live.enabledProviders.includes(data.run.provider)
+              ) {
+                active.paused = true;
+                exitReason = "provider_disabled";
+                break;
+              }
+              if (
+                active.workers.findIndex(
+                  (record) => record.workerId === workerId,
+                ) >= live.maxConcurrentWorkers
+              ) {
+                exitReason = "cap_reduced";
+                break;
+              }
+              const item = dispatchItems[next++];
+              if (item.state !== "QUEUED") continue;
+              if (reservation.expiresAt <= Date.now()) {
+                active.paused = true;
+                exitReason = "reservation_expired";
+                break;
+              }
+              lastPromptIndex = item.promptIndex;
+              if (worker.promptIndex !== item.promptIndex) {
+                const placement = await this._rpc(
+                  "providerWorker:assignPrompt",
+                  {
+                    workerId,
+                    epoch: lease.epoch,
+                    userId: data.run.userId,
+                    tabId: worker.tabId,
+                    promptIndex: item.promptIndex,
+                  },
+                ).catch((error) => ({
+                  success: false,
+                  error: error?.message || "ASSIGN_PROMPT_FAILED",
+                }));
+                if (placement?.success) worker.promptIndex = item.promptIndex;
+                else
+                  console.warn(
+                    "[ProviderWebScheduler] worker layout:",
+                    placement?.error || "ASSIGN_PROMPT_FAILED",
+                  );
+              }
+              const generated = await this._workOne(
+                active,
+                worker,
+                item,
+                onClaim,
+              );
+              worker.initialChatConsumed = true;
+              const latest = await window.ProviderWebQueueStore.getRun(runId);
+              const settled = latest?.items.find(
+                (entry) => entry.promptIndex === item.promptIndex,
+              );
+              if (settled?.state !== "COMPLETED") {
+                if (
+                  data.run.provider === "muse" &&
+                  window.MuseVideoContinuity?.enabled(data.run.settingsSnapshot)
+                )
+                  active.paused = true;
+                exitReason = "item_not_completed";
+                break;
+              }
+              if (onVerified && !active.stop)
+                await onVerified({
+                  workerId: worker.workerId,
+                  epoch: worker.epoch,
+                  userId: worker.userId,
+                  tabId: worker.tabId,
+                  conversationUrl: generated?.conversationUrl || null,
+                });
+            }
+          } finally {
+            const worker = active.workers.find(
+              (record) => record.workerId === workerId,
+            );
+            let closeOutcome = null;
+            try {
+              if (worker)
+                closeOutcome = active.closedWorkers.has(workerId)
+                  ? { success: true, alreadyClosed: true }
+                  : await this._closeOwnedWorker(worker);
+              if (worker && !closeOutcome?.success)
+                console.warn("[ProviderWebScheduler] worker_close_failed", {
+                  runId,
+                  workerId,
+                  error: closeOutcome?.error || "WORKER_CLOSE_UNKNOWN",
+                });
+            } finally {
+              releaseSlot();
+              if (worker) releaseSlot.closed(workerId);
+              if (worker)
+                active.workers = active.workers.filter(
+                  (record) => record.workerId !== workerId,
+                );
+            }
+            const listed = await this._rpc("providerWorker:list", {
+              userId: data.run.userId,
+            }).catch(() => null);
+            if (listed?.success)
+              this._busyWorkers =
+                (Number.isSafeInteger(listed.totalCount)
+                  ? listed.totalCount
+                  : listed.workers.length) + this._pendingOpens;
+            if (worker)
+              console.info(
+                "[ProviderWebScheduler] worker_window",
+                JSON.stringify({
+                  event: !closeOutcome?.success
+                    ? "close_failed"
+                    : closeOutcome.released
+                      ? "released_tab"
+                      : closeOutcome.detached
+                        ? "detached"
+                        : closeOutcome.alreadyClosed
+                          ? "already_closed"
+                          : "closed",
+                  runId,
+                  openInRun: active.workers.length,
+                  openedTotal: active.openedWindowCount,
+                  lastPromptIndex,
+                  lifetimeMs: openedAt === null ? null : Date.now() - openedAt,
+                  exitReason:
+                    exitReason ||
+                    (active.stop
+                      ? "stopped"
+                      : active.paused
+                        ? "paused"
+                        : next >= dispatchItems.length
+                          ? "queue_consumed"
+                          : "worker_error"),
+                  registryOpen: listed?.success ? listed.workers.length : null,
+                  closeError: closeOutcome?.success
+                    ? closeOutcome?.reason || null
+                    : closeOutcome?.error || "WORKER_CLOSE_UNKNOWN",
+                }),
+              );
+          }
+        };
+        const pending = new Set();
+        let workerError = null;
+        const startWorker = () => {
+          const previousStartup = this._startupGate;
+          let releaseStartup;
+          this._startupGate = new Promise((resolve) => {
+            releaseStartup = resolve;
+          });
+          let admit;
+          const claimed = new Promise((resolve) => {
+            admit = resolve;
+          });
+          const task = previousStartup
+            .then(() => process((attemptId) => admit(attemptId)))
+            .catch((error) => {
+              workerError || (workerError = error);
+            })
+            .finally(() => {
+              admit(null);
+              pending.delete(task);
+            });
+          pending.add(task);
+          return { task, claimed, releaseStartup };
+        };
+        while (
+          !active.stop &&
+          !active.paused &&
+          !workerError &&
+          next < dispatchItems.length
+        ) {
+          let live;
+          try {
+            live = this._admissionFor(data.run.provider, data.run.source);
+          } catch (_) {
+            active.paused = true;
+            break;
+          }
+          if (
+            live.parallelEnabled === false ||
+            !live.enabledProviders.includes(data.run.provider)
+          ) {
+            active.paused = true;
+            break;
+          }
+          const chained =
+            data.run.provider === "muse" &&
+            window.MuseVideoContinuity?.enabled(data.run.settingsSnapshot);
+          const target = Math.min(
+            chained ? 1 : live.maxConcurrentWorkers,
+            dispatchItems.length - next + pending.size,
+          );
+          if (pending.size < target) {
+            const { task, claimed, releaseStartup } = startWorker();
+            try {
+              const attemptId = await claimed;
+              if (attemptId)
+                await this._waitForWorkerSubmit(attemptId, task, active);
+            } finally {
+              releaseStartup();
+            }
+            continue;
+          }
+          if (!pending.size) break;
+          await Promise.race([
+            Promise.race(pending),
+            new Promise((resolve) => setTimeout(resolve, 1e3)),
+          ]);
+        }
+        await Promise.allSettled([...pending]);
+        console.info(
+          "[ProviderWebScheduler] worker_dispatch_end",
+          JSON.stringify({
+            runId,
+            dispatchCursor: next,
+            dispatchCount: dispatchItems.length,
+            selectedPromptIndex: data.run.selectedPromptIndex ?? null,
+            stopped: active.stop,
+            paused: active.paused,
+            workerError: workerError?.message || null,
+          }),
+        );
+        if (
+          [
+            "PROVIDER_WEB_PAUSED_BY_CONFIG",
+            "PROVIDER_WORKER_CAP_HELD_FOR_REVIEW",
+            "PROVIDER_WORKER_CAP_HELD_BY_OTHER_ACCOUNT",
+            "PROVIDER_WORKER_SLOT_CANCELLED",
+          ].includes(workerError?.message) &&
+          !active.stop
+        )
+          active.paused = true;
+        if (active.stop || (workerError && !active.paused))
+          await window.ProviderWebQueueStore.cancelUnclaimed(
+            runId,
+            active.stop
+              ? "USER_CANCELLED"
+              : workerError?.message || "WORKER_START_FAILED",
+            data.run.selectedPromptIndex,
+          );
+        let final = await window.ProviderWebQueueStore.getRun(runId);
+        if (
+          final.items.some((item) =>
+            ["PREPARING", "SUBMITTING", "MONITORING"].includes(item.state),
+          )
+        ) {
+          const reconciliation =
+            await window.ProviderWebQueueStore.reconcileRun(runId);
+          final = await window.ProviderWebQueueStore.getRun(runId);
+          console.warn(
+            "[ProviderWebScheduler] closed_worker_state_reconciled",
+            JSON.stringify({
+              runId,
+              reviewCount: reconciliation?.review ?? null,
+            }),
+          );
+        }
+        const hasQueued = final.items.some((item) => item.state === "QUEUED");
+        if (
+          final.items.some((item) => item.state === "NEEDS_REVIEW") ||
+          (hasQueued &&
+            (data.run.selectedPromptIndex === null ||
+              data.run.selectedPromptIndex === void 0 ||
+              active.paused ||
+              final.items.find(
+                (item) => item.promptIndex === data.run.selectedPromptIndex,
+              )?.state === "QUEUED"))
+        ) {
+          active.review = final.items.some(
+            (item) => item.state === "NEEDS_REVIEW",
+          );
+          if (active.paused && !active.review && !active.stop)
+            this._pausedRuns.add(runId);
+          if (active.review || !active.paused)
+            await this._recordHistory(runId, "needs_review", {
+              waitForPublish: !managedRun,
+            });
+          return {
+            status: active.review
+              ? "needs_review"
+              : active.paused
+                ? "paused"
+                : "needs_review",
+            runId,
+            items: final.items,
+          };
+        }
+        const completed = final.items.filter(
+          (item) => item.state === "COMPLETED",
+        ).length;
+        const hasPartialResult = final.items.some(
+          (item) =>
+            item.state === "PARTIAL_FAIL" && item.resultReceipts?.length > 0,
+        );
+        const status =
+          completed === final.items.length
+            ? "success"
+            : completed > 0 || hasPartialResult
+              ? "partial"
+              : "failed";
+        if (owned)
+          return {
+            status,
+            runId,
+            items: final.items,
+            executionToken: reservation.token,
+            needsOwnerSettlement: true,
+          };
+        const receipt = await this._runStage(runId, "complete", () =>
+          this._api("complete", {
+            token: reservation.token,
+            status,
+            result_data: { successful_count: completed },
+          }),
+        );
+        await window.ProviderWebQueueStore.saveSettlement(
+          runId,
+          this._ownerId,
+          lease.epoch,
+          receipt,
+        );
+        active.completed = status === "success";
+        const displayStatus =
+          active.stop &&
+          final.items.some(
+            (item) =>
+              item.state === "CANCELLED" && item.error === "USER_CANCELLED",
+          )
+            ? "stopped"
+            : status;
+        await this._runStage(runId, "history", () =>
+          this._recordHistory(runId, displayStatus, {
+            waitForPublish: !managedRun,
+          }),
+        );
+        return { status: displayStatus, runId, items: final.items, receipt };
+      } finally {
+        if (mainLayout && typeof retainMainLayout !== "function") {
+          try {
+            const restored = await this.restoreMainWindowLayout(
+              runId,
+              mainLayout.windowId,
+            );
+            console.info(
+              "[ProviderWebScheduler] main_worker_layout_restore",
+              JSON.stringify({ runId, ...restored }),
+            );
+          } catch (error) {
+            console.warn(
+              "[ProviderWebScheduler] main worker layout restore failed:",
+              error?.message || error,
+            );
+          }
+        }
+        this._activeRuns.delete(runId);
+        window.eventBus?.emit?.("provider_web:changed", {
+          runId,
+          projectId: data.run.projectId,
+        });
+        if (!managedRun && data.run.source === "gentab_direct")
+          window.eventBus?.emit?.("execution:tracker_update", {
+            owner: "prompts",
+            label: `${data.run.provider} Gen`,
+            phase: active.stop
+              ? "stopped"
+              : active.paused
+                ? "paused"
+                : active.completed
+                  ? "completed"
+                  : "error",
+            current: data.items.length,
+            total: data.items.length,
+            promptText: "",
+            provider: data.run.provider,
+          });
+      }
+    } finally {
+      await this._releaseLease(data.run.userId, lease).catch((error) =>
+        console.warn(
+          "[ProviderWebScheduler] Lease release:",
+          error?.message || error,
+        ),
+      );
+    }
+  }
+  static _managedRoot(runId) {
+    if (this._runCalls.has(runId)) return runId;
+    for (const [root, child] of this._retryChildren)
+      if (child === runId && this._runCalls.has(root)) return root;
+    return null;
+  }
+  static getRunControlState(runId) {
+    const api = window.MuseApiBatchRunner?.control(runId);
+    if (api) return api;
+    const id = this._retryChildren.get(runId) || runId;
+    const active = this._activeRuns.get(id);
+    return {
+      active: !!active || this._managedRoot(runId) !== null,
+      paused: active
+        ? active.paused
+        : this._pausedRuns.has(id) || this._pendingPauses.has(id),
+      stopping: !!active?.stop,
+    };
+  }
+  static pause(runId) {
+    if (window.MuseApiBatchRunner?.control(runId))
+      return window.MuseApiBatchRunner.pause(runId);
+    const id = this._retryChildren.get(runId) || runId;
+    if (this._managedRoot(runId) !== null) this._pendingPauses.add(id);
+    const run = this._activeRuns.get(id);
+    if (run) run.paused = true;
+  }
+  static async stop(runId, stopSource = null) {
+    if (window.MuseApiBatchRunner?.control(runId))
+      return window.MuseApiBatchRunner.stop(runId);
+    const apiRun =
+      window.MuseApiBatchRunner && !this._activeRuns.has(runId)
+        ? await window.ProviderWebQueueStore.getRun(runId)
+        : null;
+    if (
+      window.MuseApiBatchRunner?.intended(apiRun?.run) &&
+      (apiRun.run.museApiStarted ||
+        window.MuseApiBatchRunner.applies(apiRun.run))
+    )
+      return window.MuseApiBatchRunner.stop(runId);
+    const root = this._managedRoot(runId);
+    if (root !== null) this._pendingStops.add(root);
+    const activeRunId = this._retryChildren.get(runId) || runId;
+    this._pausedRuns.delete(activeRunId);
+    if (activeRunId !== runId) this._pendingStops.add(runId);
+    const run = this._activeRuns.get(activeRunId);
+    if (!run) {
+      this._pendingStops.add(runId);
+      this._pendingStops.add(activeRunId);
+      if (stopSource)
+        await window.ProviderWebQueueStore.markStopSource(
+          activeRunId,
+          stopSource,
+        ).catch((error) =>
+          console.warn(
+            "[ProviderWebScheduler] Stop source not persisted:",
+            error?.message || error,
+          ),
+        );
+      return;
+    }
+    if (run.stop) {
+      if (stopSource)
+        await window.ProviderWebQueueStore.markStopSource(
+          activeRunId,
+          stopSource,
+        ).catch((error) =>
+          console.warn(
+            "[ProviderWebScheduler] Stop source not persisted:",
+            error?.message || error,
+          ),
+        );
+      return;
+    }
+    run.stop = true;
+    if (stopSource)
+      await window.ProviderWebQueueStore.markStopSource(
+        activeRunId,
+        stopSource,
+      ).catch((error) =>
+        console.warn(
+          "[ProviderWebScheduler] Stop source not persisted:",
+          error?.message || error,
+        ),
+      );
+    await Promise.allSettled(
+      [...run.workers].map(async (worker) => {
+        let timer;
+        try {
+          const abort =
+            worker.provider === "muse"
+              ? window.MuseSession.abort({
+                  workerContext: {
+                    workerId: worker.workerId,
+                    epoch: worker.epoch,
+                    userId: worker.userId,
+                    tabId: worker.tabId,
+                  },
+                })
+              : new Promise((resolve) =>
+                  chrome.tabs.sendMessage(
+                    worker.tabId,
+                    { action: `${worker.provider}:abort` },
+                    (response) =>
+                      resolve(chrome.runtime.lastError ? null : response),
+                  ),
+                );
+          await Promise.race([
+            abort,
+            new Promise((resolve) => {
+              timer = setTimeout(resolve, 1500);
+            }),
+          ]);
+        } finally {
+          clearTimeout(timer);
+          const closed = await this._closeOwnedWorker(worker);
+          if (closed?.success) run.closedWorkers.add(worker.workerId);
+          else
+            console.warn("[ProviderWebScheduler] worker_close_failed", {
+              runId,
+              workerId: worker.workerId,
+              error: closed?.error || "WORKER_CLOSE_UNKNOWN",
+            });
+        }
+      }),
+    );
+  }
+  static forgetStop(runId) {
+    window.MuseApiBatchRunner?.forgetStop(runId);
+    this._pendingStops.delete(runId);
+  }
+}
+__publicField(ProviderWebScheduler, "_ownerId", crypto.randomUUID());
+__publicField(ProviderWebScheduler, "_activeRuns", new Map());
+__publicField(ProviderWebScheduler, "_pausedRuns", new Set());
+__publicField(ProviderWebScheduler, "_runCalls", new Set());
+__publicField(ProviderWebScheduler, "_pendingPauses", new Set());
+__publicField(ProviderWebScheduler, "_ownedRunCalls", new Set());
+__publicField(ProviderWebScheduler, "_pendingStops", new Set());
+__publicField(ProviderWebScheduler, "_retryChildren", new Map());
+__publicField(ProviderWebScheduler, "_leaseTimer", null);
+__publicField(ProviderWebScheduler, "_leaseRenewal", null);
+__publicField(ProviderWebScheduler, "_leaseUserId", null);
+__publicField(ProviderWebScheduler, "_leaseHolders", new Map());
+__publicField(ProviderWebScheduler, "_busyWorkers", 0);
+__publicField(ProviderWebScheduler, "_pendingOpens", 0);
+__publicField(ProviderWebScheduler, "_activeWorkerIds", new Set());
+__publicField(ProviderWebScheduler, "_slotWaiters", []);
+__publicField(ProviderWebScheduler, "_lastSlotProvider", null);
+__publicField(ProviderWebScheduler, "_slotAdmission", Promise.resolve());
+__publicField(ProviderWebScheduler, "_startupGate", Promise.resolve());
+__publicField(ProviderWebScheduler, "_publishingUsers", new Map());
+__publicField(ProviderWebScheduler, "_historyPublishFailures", new Map());
+__publicField(
+  ProviderWebScheduler,
+  "_geminiNativeDownloadTurn",
+  Promise.resolve(),
+);
+__publicField(ProviderWebScheduler, "_ownedGcPromise", null);
+__publicField(ProviderWebScheduler, "_lastOwnedGcAt", 0);
+__publicField(ProviderWebScheduler, "_lastOwnedGcUserId", null);
+window.ProviderWebScheduler = ProviderWebScheduler;

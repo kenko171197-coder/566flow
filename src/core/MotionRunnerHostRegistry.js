@@ -1,1 +1,414 @@
-var __defProp=Object.defineProperty;var __defNormalProp=(obj,key,value)=>key in obj?__defProp(obj,key,{enumerable:true,configurable:true,writable:true,value}):obj[key]=value;var __publicField=(obj,key,value)=>__defNormalProp(obj,typeof key!=="symbol"?key+"":key,value);class MotionRunnerHostRegistry{static _serialize(task){const next=this._mutation.catch(()=>{}).then(task);this._mutation=next.catch(()=>{});return next}static async _sendBounded(message,timeoutMs){if(!Number.isFinite(timeoutMs)||timeoutMs<=0)throw new Error("MOTION_RUNNER_TIMEOUT_CONFIG_UNAVAILABLE");let timer;try{return await Promise.race([chrome.runtime.sendMessage(message),new Promise(resolve=>{timer=setTimeout(()=>resolve(null),timeoutMs)})])}catch(_){return null}finally{clearTimeout(timer)}}static async _awaitReady(record,timeoutMs){const startedAt=Date.now();let attempts=0,lastError=null;const deadline=Date.now()+timeoutMs;do{const remaining=deadline-Date.now();if(remaining<=0)break;const state=await this._sendBounded({action:"motionRunner:unquiesce",tabId:record.tabId,epoch:record.epoch},remaining);attempts++;lastError=state?.error||null;if(state?.resumed===true&&state.epoch===record.epoch){console.info("[MotionRunnerHost]",JSON.stringify({stage:"document_ready",tabId:record.tabId,epoch:record.epoch,elapsedMs:Date.now()-startedAt,attempts,timeoutMs}));return true}const delay=Math.min(50,deadline-Date.now());if(delay>0)await new Promise(resolve=>setTimeout(resolve,delay))}while(Date.now()<deadline);console.warn("[MotionRunnerHost]",JSON.stringify({stage:"document_ready_timeout",tabId:record.tabId,epoch:record.epoch,elapsedMs:Date.now()-startedAt,attempts,timeoutMs,reason:lastError}));return false}static async _verify(record,{allowPending=false}={}){if(!record||!Number.isInteger(record.windowId)||!Number.isInteger(record.tabId))return false;const[tab,window]=await Promise.all([chrome.tabs.get(record.tabId).catch(()=>null),chrome.windows.get(record.windowId).catch(()=>null)]);const baseUrl=chrome.runtime.getURL("motion-runner.html"),url=record.url||baseUrl;if(url!==baseUrl&&(typeof url!=="string"||!url.startsWith(`${baseUrl}?host=`)||!/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(url.slice(`${baseUrl}?host=`.length))))return false;return!!window&&["normal","popup"].includes(window.type)&&tab?.windowId===record.windowId&&(tab.url===url||allowPending&&tab.status==="loading"&&tab.pendingUrl===url)}static async _discardCreated(windowId,tabId,url=null){if(!Number.isInteger(windowId)||!Number.isInteger(tabId)||!await this._verify({windowId,tabId,...url&&{url}},{allowPending:true}))return;await chrome.tabs.remove(tabId).catch(()=>{})}static async reloadUnresponsive(expected,timeoutMs,assertScope){return this._serialize(async()=>{await assertScope();const stored=await chrome.storage.session.get([this.KEY,this.EPOCH_KEY]);const record=stored[this.KEY];if(!record||["userId","epoch","tabId","windowId"].some(key=>record[key]!==expected[key])||!await this._verify(record))throw new Error("MOTION_RUNNER_OWNER_MISMATCH");const alive=await this._sendBounded({action:"motionRunner:recoveryState",tabId:record.tabId,epoch:record.epoch},timeoutMs);if(alive?.success&&alive.epoch===record.epoch)return false;await assertScope();if(!await this._verify(record))throw new Error("MOTION_RUNNER_OWNER_MISMATCH");const epoch=Math.max(Number(stored[this.EPOCH_KEY])||0,record.epoch)+1;const next={...record,epoch};await chrome.storage.session.set({[this.KEY]:next,[this.EPOCH_KEY]:epoch});await assertScope();await chrome.tabs.reload(record.tabId);return true})}static async ensure({userId,timeoutMs,sourceWindowId},assertScope=async()=>{}){if(!Number.isSafeInteger(Number(userId))||Number(userId)<1)throw new Error("MOTION_RUNNER_USER_INVALID");if(!Number.isFinite(timeoutMs)||timeoutMs<=0)throw new Error("MOTION_RUNNER_TIMEOUT_CONFIG_UNAVAILABLE");return this._serialize(async()=>{await assertScope();const stored=await chrome.storage.session.get([this.KEY,this.EPOCH_KEY,this.CREATION_KEY]);let record=stored?.[this.KEY];if(await this._verify(record,{allowPending:true})){if(!Number.isSafeInteger(record.userId)||record.userId<1||!Number.isSafeInteger(record.epoch)||record.epoch<1){return{success:false,error:"MOTION_RUNNER_OWNER_INVALID"}}if(record.userId!==Number(userId))return{success:false,error:"MOTION_RUNNER_ACCOUNT_CONFLICT"};const hostWindow=await chrome.windows.get(record.windowId);if(hostWindow.type==="popup"&&Number.isInteger(sourceWindowId)){const source=await chrome.windows.get(sourceWindowId).catch(()=>null);if(source?.type==="normal"){const state=await this._sendBounded({action:"motionRunner:quiesce",tabId:record.tabId,epoch:record.epoch},timeoutMs);if(state?.idle===true&&state.quiesced===true&&state.epoch===record.epoch&&await this._verify(record)){await assertScope();await chrome.tabs.remove(record.tabId);await chrome.storage.session.remove(this.KEY);record=null}}}if(record){const ready=await this._awaitReady(record,timeoutMs);await assertScope();if(!ready)return{success:false,error:"MOTION_RUNNER_NOT_READY"};if(!await this._verify(record))return{success:false,error:"MOTION_RUNNER_NOT_READY"};return{success:true,...record,reused:true}}}if(record&&Number.isInteger(record.tabId)&&Number.isInteger(record.windowId)){const[tab2,window]=await Promise.all([chrome.tabs.get(record.tabId).catch(()=>null),chrome.windows.get(record.windowId).catch(()=>null)]);if(["normal","popup"].includes(window?.type)&&tab2?.windowId===record.windowId&&tab2.status==="loading"&&(!tab2.url||tab2.url==="about:blank")&&!tab2.pendingUrl){return{success:false,error:"MOTION_RUNNER_NOT_READY"}}}const creation=stored[this.CREATION_KEY];if(creation){const baseUrl=chrome.runtime.getURL("motion-runner.html");if(!Number.isSafeInteger(creation.userId)||creation.userId<1||!Number.isSafeInteger(creation.epoch)||creation.epoch<1||!/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(String(creation.creationId||""))||creation.url!==`${baseUrl}?host=${creation.creationId}`)return{success:false,error:"MOTION_RUNNER_CREATION_INVALID"};const candidates=(await chrome.tabs.query({})).filter(tab2=>tab2.url===creation.url||tab2.pendingUrl===creation.url);if(candidates.length>1)return{success:false,error:"MOTION_RUNNER_CREATION_AMBIGUOUS"};if(candidates.length===1){const tab2=candidates[0],adopted={userId:creation.userId,epoch:creation.epoch,url:creation.url,windowId:tab2.windowId,tabId:tab2.id};if(!await this._verify(adopted,{allowPending:true}))return{success:false,error:"MOTION_RUNNER_CREATION_AMBIGUOUS"};if(creation.userId!==Number(userId))return{success:false,error:"MOTION_RUNNER_ACCOUNT_CONFLICT"};await assertScope();await chrome.storage.session.set({[this.KEY]:adopted,[this.EPOCH_KEY]:creation.epoch});await chrome.storage.session.remove(this.CREATION_KEY);const ready=await this._awaitReady(adopted,timeoutMs);await assertScope();return ready&&await this._verify(adopted)?{success:true,...adopted,reused:true}:{success:false,error:"MOTION_RUNNER_NOT_READY"}}await chrome.storage.session.remove(this.CREATION_KEY)}if(!Number.isInteger(sourceWindowId))throw new Error("MOTION_SOURCE_WINDOW_CHANGED");const sourceWindow=await chrome.windows.get(sourceWindowId).catch(()=>null);if(!sourceWindow||sourceWindow.type!=="normal")throw new Error("MOTION_SOURCE_WINDOW_CHANGED");const epoch=Number.isSafeInteger(stored?.[this.EPOCH_KEY])?stored[this.EPOCH_KEY]+1:1;if(!Number.isSafeInteger(epoch)||epoch<1)throw new Error("MOTION_RUNNER_EPOCH_INVALID");await assertScope();const creationId=crypto.randomUUID(),url=`${chrome.runtime.getURL("motion-runner.html")}?host=${creationId}`;await chrome.storage.session.set({[this.CREATION_KEY]:{userId:Number(userId),epoch,creationId,url},[this.EPOCH_KEY]:epoch});const tab=await chrome.tabs.create({url,windowId:sourceWindowId,active:false});if(!Number.isInteger(tab?.id)||tab.windowId!==sourceWindowId){await this._discardCreated(tab?.windowId,tab?.id,url);throw new Error("MOTION_RUNNER_TAB_INVALID")}const next={userId:Number(userId),epoch,url,windowId:tab.windowId,tabId:tab.id};console.info("[MotionRunnerHost]",JSON.stringify({stage:"coordinator_tab_created",windowId:tab.windowId,tabId:tab.id,epoch,active:false}));try{await assertScope();await chrome.storage.session.set({[this.KEY]:next,[this.EPOCH_KEY]:epoch});await chrome.storage.session.remove(this.CREATION_KEY);await assertScope();const ready=await this._awaitReady(next,timeoutMs);await assertScope();if(!ready)return{success:false,error:"MOTION_RUNNER_NOT_READY"};if(!await this._verify(next))return{success:false,error:"MOTION_RUNNER_NOT_READY"}}catch(error){const current=(await chrome.storage.session.get(this.KEY).catch(()=>({})))?.[this.KEY];if(current?.tabId===tab.id&&current?.epoch===epoch)await chrome.storage.session.remove(this.KEY).catch(()=>{});await this._discardCreated(tab.windowId,tab.id,url);throw error}return{success:true,...next,reused:false}})}static async closeIdle({userId,epoch,timeoutMs}){return this._serialize(async()=>{if(!Number.isSafeInteger(Number(userId))||Number(userId)<1||!Number.isSafeInteger(epoch)||epoch<1)return{success:false,error:"MOTION_RUNNER_OWNER_MISMATCH"};const record=(await chrome.storage.session.get(this.KEY))?.[this.KEY];if(!record||record.userId!==Number(userId)||record.epoch!==epoch)return{success:false,error:"MOTION_RUNNER_OWNER_MISMATCH"};if(!await this._verify(record))return{success:false,error:"MOTION_RUNNER_OWNER_LOST"};const state=await this._sendBounded({action:"motionRunner:quiesce",tabId:record.tabId,epoch},timeoutMs);if(state?.idle!==true||state?.quiesced!==true||state?.epoch!==epoch)return{success:false,error:"MOTION_RUNNER_BUSY"};if(!await this._verify(record))return{success:false,error:"MOTION_RUNNER_OWNER_LOST"};await chrome.tabs.remove(record.tabId);await chrome.storage.session.remove(this.KEY);return{success:true}})}}__publicField(MotionRunnerHostRegistry,"KEY","tobyflow_motion_runner_host");__publicField(MotionRunnerHostRegistry,"EPOCH_KEY","tobyflow_motion_runner_host_epoch");__publicField(MotionRunnerHostRegistry,"CREATION_KEY","tobyflow_motion_runner_host_creation");__publicField(MotionRunnerHostRegistry,"_mutation",Promise.resolve());self.MotionRunnerHostRegistry=MotionRunnerHostRegistry;
+var __defProp = Object.defineProperty;
+var __defNormalProp = (obj, key, value) =>
+  key in obj
+    ? __defProp(obj, key, {
+        enumerable: true,
+        configurable: true,
+        writable: true,
+        value,
+      })
+    : (obj[key] = value);
+var __publicField = (obj, key, value) =>
+  __defNormalProp(obj, typeof key !== "symbol" ? key + "" : key, value);
+class MotionRunnerHostRegistry {
+  static _serialize(task) {
+    const next = this._mutation.catch(() => {}).then(task);
+    this._mutation = next.catch(() => {});
+    return next;
+  }
+  static async _sendBounded(message, timeoutMs) {
+    if (!Number.isFinite(timeoutMs) || timeoutMs <= 0)
+      throw new Error("MOTION_RUNNER_TIMEOUT_CONFIG_UNAVAILABLE");
+    let timer;
+    try {
+      return await Promise.race([
+        chrome.runtime.sendMessage(message),
+        new Promise((resolve) => {
+          timer = setTimeout(() => resolve(null), timeoutMs);
+        }),
+      ]);
+    } catch (_) {
+      return null;
+    } finally {
+      clearTimeout(timer);
+    }
+  }
+  static async _awaitReady(record, timeoutMs) {
+    const startedAt = Date.now();
+    let attempts = 0,
+      lastError = null;
+    const deadline = Date.now() + timeoutMs;
+    do {
+      const remaining = deadline - Date.now();
+      if (remaining <= 0) break;
+      const state = await this._sendBounded(
+        {
+          action: "motionRunner:unquiesce",
+          tabId: record.tabId,
+          epoch: record.epoch,
+        },
+        remaining,
+      );
+      attempts++;
+      lastError = state?.error || null;
+      if (state?.resumed === true && state.epoch === record.epoch) {
+        console.info(
+          "[MotionRunnerHost]",
+          JSON.stringify({
+            stage: "document_ready",
+            tabId: record.tabId,
+            epoch: record.epoch,
+            elapsedMs: Date.now() - startedAt,
+            attempts,
+            timeoutMs,
+          }),
+        );
+        return true;
+      }
+      const delay = Math.min(50, deadline - Date.now());
+      if (delay > 0) await new Promise((resolve) => setTimeout(resolve, delay));
+    } while (Date.now() < deadline);
+    console.warn(
+      "[MotionRunnerHost]",
+      JSON.stringify({
+        stage: "document_ready_timeout",
+        tabId: record.tabId,
+        epoch: record.epoch,
+        elapsedMs: Date.now() - startedAt,
+        attempts,
+        timeoutMs,
+        reason: lastError,
+      }),
+    );
+    return false;
+  }
+  static async _verify(record, { allowPending = false } = {}) {
+    if (
+      !record ||
+      !Number.isInteger(record.windowId) ||
+      !Number.isInteger(record.tabId)
+    )
+      return false;
+    const [tab, window] = await Promise.all([
+      chrome.tabs.get(record.tabId).catch(() => null),
+      chrome.windows.get(record.windowId).catch(() => null),
+    ]);
+    const baseUrl = chrome.runtime.getURL("motion-runner.html"),
+      url = record.url || baseUrl;
+    if (
+      url !== baseUrl &&
+      (typeof url !== "string" ||
+        !url.startsWith(`${baseUrl}?host=`) ||
+        !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(
+          url.slice(`${baseUrl}?host=`.length),
+        ))
+    )
+      return false;
+    return (
+      !!window &&
+      ["normal", "popup"].includes(window.type) &&
+      tab?.windowId === record.windowId &&
+      (tab.url === url ||
+        (allowPending && tab.status === "loading" && tab.pendingUrl === url))
+    );
+  }
+  static async _discardCreated(windowId, tabId, url = null) {
+    if (
+      !Number.isInteger(windowId) ||
+      !Number.isInteger(tabId) ||
+      !(await this._verify(
+        { windowId, tabId, ...(url && { url }) },
+        { allowPending: true },
+      ))
+    )
+      return;
+    await chrome.tabs.remove(tabId).catch(() => {});
+  }
+  static async reloadUnresponsive(expected, timeoutMs, assertScope) {
+    return this._serialize(async () => {
+      await assertScope();
+      const stored = await chrome.storage.session.get([
+        this.KEY,
+        this.EPOCH_KEY,
+      ]);
+      const record = stored[this.KEY];
+      if (
+        !record ||
+        ["userId", "epoch", "tabId", "windowId"].some(
+          (key) => record[key] !== expected[key],
+        ) ||
+        !(await this._verify(record))
+      )
+        throw new Error("MOTION_RUNNER_OWNER_MISMATCH");
+      const alive = await this._sendBounded(
+        {
+          action: "motionRunner:recoveryState",
+          tabId: record.tabId,
+          epoch: record.epoch,
+        },
+        timeoutMs,
+      );
+      if (alive?.success && alive.epoch === record.epoch) return false;
+      await assertScope();
+      if (!(await this._verify(record)))
+        throw new Error("MOTION_RUNNER_OWNER_MISMATCH");
+      const epoch =
+        Math.max(Number(stored[this.EPOCH_KEY]) || 0, record.epoch) + 1;
+      const next = { ...record, epoch };
+      await chrome.storage.session.set({
+        [this.KEY]: next,
+        [this.EPOCH_KEY]: epoch,
+      });
+      await assertScope();
+      await chrome.tabs.reload(record.tabId);
+      return true;
+    });
+  }
+  static async ensure(
+    { userId, timeoutMs, sourceWindowId },
+    assertScope = async () => {},
+  ) {
+    if (!Number.isSafeInteger(Number(userId)) || Number(userId) < 1)
+      throw new Error("MOTION_RUNNER_USER_INVALID");
+    if (!Number.isFinite(timeoutMs) || timeoutMs <= 0)
+      throw new Error("MOTION_RUNNER_TIMEOUT_CONFIG_UNAVAILABLE");
+    return this._serialize(async () => {
+      await assertScope();
+      const stored = await chrome.storage.session.get([
+        this.KEY,
+        this.EPOCH_KEY,
+        this.CREATION_KEY,
+      ]);
+      let record = stored?.[this.KEY];
+      if (await this._verify(record, { allowPending: true })) {
+        if (
+          !Number.isSafeInteger(record.userId) ||
+          record.userId < 1 ||
+          !Number.isSafeInteger(record.epoch) ||
+          record.epoch < 1
+        ) {
+          return { success: false, error: "MOTION_RUNNER_OWNER_INVALID" };
+        }
+        if (record.userId !== Number(userId))
+          return { success: false, error: "MOTION_RUNNER_ACCOUNT_CONFLICT" };
+        const hostWindow = await chrome.windows.get(record.windowId);
+        if (hostWindow.type === "popup" && Number.isInteger(sourceWindowId)) {
+          const source = await chrome.windows
+            .get(sourceWindowId)
+            .catch(() => null);
+          if (source?.type === "normal") {
+            const state = await this._sendBounded(
+              {
+                action: "motionRunner:quiesce",
+                tabId: record.tabId,
+                epoch: record.epoch,
+              },
+              timeoutMs,
+            );
+            if (
+              state?.idle === true &&
+              state.quiesced === true &&
+              state.epoch === record.epoch &&
+              (await this._verify(record))
+            ) {
+              await assertScope();
+              await chrome.tabs.remove(record.tabId);
+              await chrome.storage.session.remove(this.KEY);
+              record = null;
+            }
+          }
+        }
+        if (record) {
+          const ready = await this._awaitReady(record, timeoutMs);
+          await assertScope();
+          if (!ready)
+            return { success: false, error: "MOTION_RUNNER_NOT_READY" };
+          if (!(await this._verify(record)))
+            return { success: false, error: "MOTION_RUNNER_NOT_READY" };
+          return { success: true, ...record, reused: true };
+        }
+      }
+      if (
+        record &&
+        Number.isInteger(record.tabId) &&
+        Number.isInteger(record.windowId)
+      ) {
+        const [tab2, window] = await Promise.all([
+          chrome.tabs.get(record.tabId).catch(() => null),
+          chrome.windows.get(record.windowId).catch(() => null),
+        ]);
+        if (
+          ["normal", "popup"].includes(window?.type) &&
+          tab2?.windowId === record.windowId &&
+          tab2.status === "loading" &&
+          (!tab2.url || tab2.url === "about:blank") &&
+          !tab2.pendingUrl
+        ) {
+          return { success: false, error: "MOTION_RUNNER_NOT_READY" };
+        }
+      }
+      const creation = stored[this.CREATION_KEY];
+      if (creation) {
+        const baseUrl = chrome.runtime.getURL("motion-runner.html");
+        if (
+          !Number.isSafeInteger(creation.userId) ||
+          creation.userId < 1 ||
+          !Number.isSafeInteger(creation.epoch) ||
+          creation.epoch < 1 ||
+          !/^[0-9a-f]{8}(?:-[0-9a-f]{4}){3}-[0-9a-f]{12}$/i.test(
+            String(creation.creationId || ""),
+          ) ||
+          creation.url !== `${baseUrl}?host=${creation.creationId}`
+        )
+          return { success: false, error: "MOTION_RUNNER_CREATION_INVALID" };
+        const candidates = (await chrome.tabs.query({})).filter(
+          (tab2) =>
+            tab2.url === creation.url || tab2.pendingUrl === creation.url,
+        );
+        if (candidates.length > 1)
+          return { success: false, error: "MOTION_RUNNER_CREATION_AMBIGUOUS" };
+        if (candidates.length === 1) {
+          const tab2 = candidates[0],
+            adopted = {
+              userId: creation.userId,
+              epoch: creation.epoch,
+              url: creation.url,
+              windowId: tab2.windowId,
+              tabId: tab2.id,
+            };
+          if (!(await this._verify(adopted, { allowPending: true })))
+            return {
+              success: false,
+              error: "MOTION_RUNNER_CREATION_AMBIGUOUS",
+            };
+          if (creation.userId !== Number(userId))
+            return { success: false, error: "MOTION_RUNNER_ACCOUNT_CONFLICT" };
+          await assertScope();
+          await chrome.storage.session.set({
+            [this.KEY]: adopted,
+            [this.EPOCH_KEY]: creation.epoch,
+          });
+          await chrome.storage.session.remove(this.CREATION_KEY);
+          const ready = await this._awaitReady(adopted, timeoutMs);
+          await assertScope();
+          return ready && (await this._verify(adopted))
+            ? { success: true, ...adopted, reused: true }
+            : { success: false, error: "MOTION_RUNNER_NOT_READY" };
+        }
+        await chrome.storage.session.remove(this.CREATION_KEY);
+      }
+      if (!Number.isInteger(sourceWindowId))
+        throw new Error("MOTION_SOURCE_WINDOW_CHANGED");
+      const sourceWindow = await chrome.windows
+        .get(sourceWindowId)
+        .catch(() => null);
+      if (!sourceWindow || sourceWindow.type !== "normal")
+        throw new Error("MOTION_SOURCE_WINDOW_CHANGED");
+      const epoch = Number.isSafeInteger(stored?.[this.EPOCH_KEY])
+        ? stored[this.EPOCH_KEY] + 1
+        : 1;
+      if (!Number.isSafeInteger(epoch) || epoch < 1)
+        throw new Error("MOTION_RUNNER_EPOCH_INVALID");
+      await assertScope();
+      const creationId = crypto.randomUUID(),
+        url = `${chrome.runtime.getURL("motion-runner.html")}?host=${creationId}`;
+      await chrome.storage.session.set({
+        [this.CREATION_KEY]: { userId: Number(userId), epoch, creationId, url },
+        [this.EPOCH_KEY]: epoch,
+      });
+      const tab = await chrome.tabs.create({
+        url,
+        windowId: sourceWindowId,
+        active: false,
+      });
+      if (!Number.isInteger(tab?.id) || tab.windowId !== sourceWindowId) {
+        await this._discardCreated(tab?.windowId, tab?.id, url);
+        throw new Error("MOTION_RUNNER_TAB_INVALID");
+      }
+      const next = {
+        userId: Number(userId),
+        epoch,
+        url,
+        windowId: tab.windowId,
+        tabId: tab.id,
+      };
+      console.info(
+        "[MotionRunnerHost]",
+        JSON.stringify({
+          stage: "coordinator_tab_created",
+          windowId: tab.windowId,
+          tabId: tab.id,
+          epoch,
+          active: false,
+        }),
+      );
+      try {
+        await assertScope();
+        await chrome.storage.session.set({
+          [this.KEY]: next,
+          [this.EPOCH_KEY]: epoch,
+        });
+        await chrome.storage.session.remove(this.CREATION_KEY);
+        await assertScope();
+        const ready = await this._awaitReady(next, timeoutMs);
+        await assertScope();
+        if (!ready) return { success: false, error: "MOTION_RUNNER_NOT_READY" };
+        if (!(await this._verify(next)))
+          return { success: false, error: "MOTION_RUNNER_NOT_READY" };
+      } catch (error) {
+        const current = (
+          await chrome.storage.session.get(this.KEY).catch(() => ({}))
+        )?.[this.KEY];
+        if (current?.tabId === tab.id && current?.epoch === epoch)
+          await chrome.storage.session.remove(this.KEY).catch(() => {});
+        await this._discardCreated(tab.windowId, tab.id, url);
+        throw error;
+      }
+      return { success: true, ...next, reused: false };
+    });
+  }
+  static async closeIdle({ userId, epoch, timeoutMs }) {
+    return this._serialize(async () => {
+      if (
+        !Number.isSafeInteger(Number(userId)) ||
+        Number(userId) < 1 ||
+        !Number.isSafeInteger(epoch) ||
+        epoch < 1
+      )
+        return { success: false, error: "MOTION_RUNNER_OWNER_MISMATCH" };
+      const record = (await chrome.storage.session.get(this.KEY))?.[this.KEY];
+      if (!record || record.userId !== Number(userId) || record.epoch !== epoch)
+        return { success: false, error: "MOTION_RUNNER_OWNER_MISMATCH" };
+      if (!(await this._verify(record)))
+        return { success: false, error: "MOTION_RUNNER_OWNER_LOST" };
+      const state = await this._sendBounded(
+        { action: "motionRunner:quiesce", tabId: record.tabId, epoch },
+        timeoutMs,
+      );
+      if (
+        state?.idle !== true ||
+        state?.quiesced !== true ||
+        state?.epoch !== epoch
+      )
+        return { success: false, error: "MOTION_RUNNER_BUSY" };
+      if (!(await this._verify(record)))
+        return { success: false, error: "MOTION_RUNNER_OWNER_LOST" };
+      await chrome.tabs.remove(record.tabId);
+      await chrome.storage.session.remove(this.KEY);
+      return { success: true };
+    });
+  }
+}
+__publicField(MotionRunnerHostRegistry, "KEY", "tobyflow_motion_runner_host");
+__publicField(
+  MotionRunnerHostRegistry,
+  "EPOCH_KEY",
+  "tobyflow_motion_runner_host_epoch",
+);
+__publicField(
+  MotionRunnerHostRegistry,
+  "CREATION_KEY",
+  "tobyflow_motion_runner_host_creation",
+);
+__publicField(MotionRunnerHostRegistry, "_mutation", Promise.resolve());
+self.MotionRunnerHostRegistry = MotionRunnerHostRegistry;

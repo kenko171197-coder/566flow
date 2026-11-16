@@ -1,1 +1,426 @@
-(function(){"use strict";const relayDocument=crypto.randomUUID();let sequence=0,boundBus=null;let nativeDocumentId=null,snapshotScope=null;let cacheUntil=0;const recent=new Map;const recentCosts=new Map;let recentCost=0;function forget(nodeId){recentCost-=recentCosts.get(nodeId)||0;recentCosts.delete(nodeId);recent.delete(nodeId)}function clearRecent(){recent.clear();recentCosts.clear();recentCost=0}chrome.runtime.sendMessage({action:"workflowSpaceHealthIdentify"}).then(reply=>{nativeDocumentId=reply?.documentId||null}).catch(()=>{});const fields=["status","phase","run_started_at","generation_queued","last_error","result_file_ids","result_file_names","result_thumbnails","result_text","result_source","result_provider_urls","result_frame_file_ids","result_frame_thumbnails","result_clean_file_ids","result_clean_thumbnails","result_gen_mode","provider_web_run_id","error_message"];const textFields=new Set(["result_text","error_message","last_error","phase"]);function portable(value){if(typeof value==="string"&&/^(?:blob:|data:)/i.test(value))return void 0;if(Array.isArray(value)){const values=value.map(portable).filter(item=>item!==void 0);return value.length&&!values.length?void 0:values}if(value&&typeof value==="object"){const entries=Object.entries(value).map(([key,item])=>[key,portable(item)]).filter(([,item])=>item!==void 0);return Object.keys(value).length&&!entries.length?void 0:Object.fromEntries(entries)}return value}function scope(data){const executor=window.workflowExecutor,workflow=executor?.currentWorkflow;const userId=String(window.authManager?.getUser?.()?.id||"");if(!userId||!workflow?.wf_id||String(workflow.user_id||"")!==userId||data?.workflowId&&data.workflowId!==workflow.wf_id)return null;const owned=[...workflow.nodes||[]];for(const record of executor._singleNodeSession?.records?.values?.()||[])if(record.liveNode)owned.push(record.liveNode);const node=data?.node||owned.find(entry=>entry.node_id===data?.nodeId);if(!node?.node_id||!owned.some(entry=>entry.node_id===node.node_id))return null;if(!owned.includes(node)&&(String(node.user_id||"")!==userId||node.wf_id!==workflow.wf_id||!node.node_type))return null;return{node,userId,workflowId:workflow.wf_id,runId:executor._flowRunId||null}}function publish(event,data){const owner=scope(data);if(!owner)return;const{node}=owner;let patch,notice;if(event==="node:ref_replaced"||event==="node:preview_available"){const source=event==="node:ref_replaced"?data:data.result||{};const mappings=event==="node:ref_replaced"?[["resultFileIds","result_file_ids"],["resultFileNames","result_file_names"],["resultThumbnails","result_thumbnails"],["resultProviderUrls","result_provider_urls"]]:[["fileIds","result_file_ids"],["fileNames","result_file_names"],["thumbnails","result_thumbnails"],["providerUrls","result_provider_urls"],["genMode","result_gen_mode"],["frameFileIds","result_frame_file_ids"],["frameThumbnails","result_frame_thumbnails"],["cleanFileIds","result_clean_file_ids"],["cleanThumbnails","result_clean_thumbnails"]];patch={};for(const[key2,target]of mappings){if(!Object.hasOwn(source,key2)||source[key2]===void 0)continue;const value=["fileIds","frameFileIds","cleanFileIds"].includes(key2)&&Array.isArray(source[key2])?source[key2].join(", "):portable(source[key2]);if(value!==void 0)patch[target]=value}if(!Object.keys(patch).length)return}else if(event==="node:warning"){patch={status:"skipped",phase:null,run_started_at:null,generation_queued:false}}else if(event==="node:retry"){const key2="flowStatus.retryDelay",label=window.I18n?.t?.(key2,{attempt:data.attempt,max:data.maxRetries,seconds:Math.ceil(Math.max(0,Number(data.delayMs)||0)/1e3)});const reason=window.WorkflowSpaceFormatError(node,data.error?.message||"",(key3,params)=>window.I18n?.t?.(key3,params),window.ProviderConfigManager?.getApiConfigValueSync?.("flow","api_error_codes")||{},data.error,data.error?.flowApiFailure===true);const text=[label&&label!==key2?label:window.I18n?.t?.("exec.retrying"),reason].filter(Boolean).join(" \u2014 ");patch={status:"running",phase:text,generation_queued:false,error_message:null,last_error:null};notice={kind:"retry",text}}else if(event==="node:submitted"){const text=window.I18n?.t?.("workflow.waitingForResult")||"Waiting for results...";patch={phase:text};notice={kind:"submitted",text}}else if(event==="node:phase"){patch={phase:data.phase||null}}else{patch=Object.fromEntries(fields.filter(key2=>Object.hasOwn(node,key2)).map(key2=>[key2,textFields.has(key2)?node[key2]:portable(node[key2])]).filter(([,value])=>value!==void 0))}if(event==="node:completed"){const result=data.result||{};patch.status="completed";patch.phase=null;patch.run_started_at=null;patch.generation_queued=false;patch.error_message=result.partialFailureMessage?"[PARTIAL_GENERATION] "+result.partialFailureMessage:null;patch.last_error=null;if(Array.isArray(result.fileIds))patch.result_file_ids=result.fileIds.join(", ");for(const[source,target]of[["thumbnails","result_thumbnails"],["fileNames","result_file_names"],["providerUrls","result_provider_urls"]]){if(result[source]&&typeof result[source]==="object")patch[target]=portable({...node[target]||{},...result[source]})}}if(event==="node:review"){Object.assign(patch,window.WorkflowSpaceReviewState(data));notice={kind:"review"}}const key=JSON.stringify([owner.userId,owner.workflowId,owner.runId]);if(snapshotScope!==key){clearRecent();snapshotScope=key}const payload={workflowId:owner.workflowId,userId:owner.userId,nodeId:node.node_id,runId:owner.runId,document:relayDocument,sequence:++sequence,patch,...notice?{notice}:{}};if(Date.now()<cacheUntil){const cached={...payload,patch:{...recent.get(node.node_id)?.patch,...patch}};forget(node.node_id);const cost=JSON.stringify(cached).length*2;if(cost<=1024*1024){while(recent.size&&(recentCost+cost>1024*1024||recent.size>=256))forget(recent.keys().next().value);recent.set(node.node_id,cached);recentCosts.set(node.node_id,cost);recentCost+=cost}}else{clearRecent()}chrome.runtime.sendMessage({action:"workflowSpaceResultPatch",data:payload}).then(reply=>{if(event!=="node:completed"||!reply?.spaceTransport)return;if(String(window.authManager?.getUser?.()?.id||"")!==owner.userId||window.workflowExecutor?.currentWorkflow?.wf_id!==owner.workflowId)return;window.eventBus?.emit?.("execution:log",{message:"[SpaceTransport] "+JSON.stringify({stage:"published",nodeId:node.node_id,runId:owner.runId,sourceSequence:payload.sequence,subscribers:reply.spaceTransport.subscribers,pending:reply.spaceTransport.pending,legacyRelay:true})})}).catch(()=>{})}const handlers=new Map(["node:completed","node:review","node:ref_replaced","node:preview_available","node:retry","node:submitted","node:phase","node:warning"].map(event=>[event,data=>publish(event,data)]));handlers.set("node:started",data=>{const owner=scope(data);if(owner)forget(owner.node.node_id)});handlers.set("workflow:reset",data=>{if(!data?.workflowId||data.workflowId===window.workflowExecutor?.currentWorkflow?.wf_id)clearRecent()});handlers.set("workflow:remote_reset",data=>{if(data?.workflowId===window.workflowExecutor?.currentWorkflow?.wf_id)for(const id of data.nodeIds||[])forget(String(id))});handlers.set("storage:node_status_updated",data=>{if(data?.wfId!==window.workflowExecutor?.currentWorkflow?.wf_id)return;const cached=recent.get(data.nodeId)?.patch;if(cached&&["status","result_file_ids"].some(key=>Object.hasOwn(data.data||{},key)&&Object.hasOwn(cached,key)&&data.data[key]!==cached[key]))forget(data.nodeId)});handlers.set("storage:node_deleted",data=>{if(data?.wfId===window.workflowExecutor?.currentWorkflow?.wf_id)forget(data.nodeId)});handlers.set("storage:workflow_reset",data=>{if(data?.wfId===window.workflowExecutor?.currentWorkflow?.wf_id)clearRecent()});function bind(){if(boundBus===window.eventBus)return;for(const[event,handler]of handlers)boundBus?.off?.(event,handler);boundBus=window.eventBus;for(const[event,handler]of handlers)boundBus?.on?.(event,handler)}bind();if(globalThis.document?.readyState==="loading")globalThis.document.addEventListener("DOMContentLoaded",bind,{once:true});window.WorkflowSpaceRuntimeRelay={active:true};chrome.runtime.onMessage?.addListener((message,sender,reply)=>{if(!["workflowSpaceNativeEventSnapshot","workflowSpaceTransportAudit"].includes(message?.action)||sender.id!==chrome.runtime.id||!nativeDocumentId||message.documentId!==nativeDocumentId)return;const executor=window.workflowExecutor,workflow=executor?.currentWorkflow;const userId=String(window.authManager?.getUser?.()?.id||"");if(!userId||userId!==message.userId||workflow?.wf_id!==message.workflowId||String(workflow.user_id)!==userId){reply({ok:false,error:"SPACE_EVENTS_OWNER_SCOPE"});return false}if(message.action==="workflowSpaceTransportAudit"){const input=message.diagnostic||{};const keys=["stage","connectionId","mode","nodeId","runId","sourceSequence","streamSequence","status","outcome","elapsedMs"];const diagnostic=Object.fromEntries(keys.filter(key=>["string","number","boolean"].includes(typeof input[key])).map(key=>[key,typeof input[key]==="string"?input[key].slice(0,160):input[key]]));window.eventBus?.emit?.("execution:log",{message:"[SpaceTransport] "+JSON.stringify(diagnostic)});reply({ok:true});return false}const current=JSON.stringify([userId,workflow.wf_id,executor._flowRunId||null]);if(Date.now()>=cacheUntil)clearRecent();cacheUntil=Date.now()+12e4;reply({ok:true,document:relayDocument,sequence,runId:executor._flowRunId||null,patches:executor.isRunning&&current===snapshotScope?[...recent.values()].map(({notice,...payload})=>notice?.kind==="review"?{...payload,notice}:payload):[]});return false})})();
+(function () {
+  "use strict";
+  const relayDocument = crypto.randomUUID();
+  let sequence = 0,
+    boundBus = null;
+  let nativeDocumentId = null,
+    snapshotScope = null;
+  let cacheUntil = 0;
+  const recent = new Map();
+  const recentCosts = new Map();
+  let recentCost = 0;
+  function forget(nodeId) {
+    recentCost -= recentCosts.get(nodeId) || 0;
+    recentCosts.delete(nodeId);
+    recent.delete(nodeId);
+  }
+  function clearRecent() {
+    recent.clear();
+    recentCosts.clear();
+    recentCost = 0;
+  }
+  chrome.runtime
+    .sendMessage({ action: "workflowSpaceHealthIdentify" })
+    .then((reply) => {
+      nativeDocumentId = reply?.documentId || null;
+    })
+    .catch(() => {});
+  const fields = [
+    "status",
+    "phase",
+    "run_started_at",
+    "generation_queued",
+    "last_error",
+    "result_file_ids",
+    "result_file_names",
+    "result_thumbnails",
+    "result_text",
+    "result_source",
+    "result_provider_urls",
+    "result_frame_file_ids",
+    "result_frame_thumbnails",
+    "result_clean_file_ids",
+    "result_clean_thumbnails",
+    "result_gen_mode",
+    "provider_web_run_id",
+    "error_message",
+  ];
+  const textFields = new Set([
+    "result_text",
+    "error_message",
+    "last_error",
+    "phase",
+  ]);
+  function portable(value) {
+    if (typeof value === "string" && /^(?:blob:|data:)/i.test(value))
+      return void 0;
+    if (Array.isArray(value)) {
+      const values = value.map(portable).filter((item) => item !== void 0);
+      return value.length && !values.length ? void 0 : values;
+    }
+    if (value && typeof value === "object") {
+      const entries = Object.entries(value)
+        .map(([key, item]) => [key, portable(item)])
+        .filter(([, item]) => item !== void 0);
+      return Object.keys(value).length && !entries.length
+        ? void 0
+        : Object.fromEntries(entries);
+    }
+    return value;
+  }
+  function scope(data) {
+    const executor = window.workflowExecutor,
+      workflow = executor?.currentWorkflow;
+    const userId = String(window.authManager?.getUser?.()?.id || "");
+    if (
+      !userId ||
+      !workflow?.wf_id ||
+      String(workflow.user_id || "") !== userId ||
+      (data?.workflowId && data.workflowId !== workflow.wf_id)
+    )
+      return null;
+    const owned = [...(workflow.nodes || [])];
+    for (const record of executor._singleNodeSession?.records?.values?.() || [])
+      if (record.liveNode) owned.push(record.liveNode);
+    const node =
+      data?.node || owned.find((entry) => entry.node_id === data?.nodeId);
+    if (
+      !node?.node_id ||
+      !owned.some((entry) => entry.node_id === node.node_id)
+    )
+      return null;
+    if (
+      !owned.includes(node) &&
+      (String(node.user_id || "") !== userId ||
+        node.wf_id !== workflow.wf_id ||
+        !node.node_type)
+    )
+      return null;
+    return {
+      node,
+      userId,
+      workflowId: workflow.wf_id,
+      runId: executor._flowRunId || null,
+    };
+  }
+  function publish(event, data) {
+    const owner = scope(data);
+    if (!owner) return;
+    const { node } = owner;
+    let patch, notice;
+    if (event === "node:ref_replaced" || event === "node:preview_available") {
+      const source = event === "node:ref_replaced" ? data : data.result || {};
+      const mappings =
+        event === "node:ref_replaced"
+          ? [
+              ["resultFileIds", "result_file_ids"],
+              ["resultFileNames", "result_file_names"],
+              ["resultThumbnails", "result_thumbnails"],
+              ["resultProviderUrls", "result_provider_urls"],
+            ]
+          : [
+              ["fileIds", "result_file_ids"],
+              ["fileNames", "result_file_names"],
+              ["thumbnails", "result_thumbnails"],
+              ["providerUrls", "result_provider_urls"],
+              ["genMode", "result_gen_mode"],
+              ["frameFileIds", "result_frame_file_ids"],
+              ["frameThumbnails", "result_frame_thumbnails"],
+              ["cleanFileIds", "result_clean_file_ids"],
+              ["cleanThumbnails", "result_clean_thumbnails"],
+            ];
+      patch = {};
+      for (const [key2, target] of mappings) {
+        if (!Object.hasOwn(source, key2) || source[key2] === void 0) continue;
+        const value =
+          ["fileIds", "frameFileIds", "cleanFileIds"].includes(key2) &&
+          Array.isArray(source[key2])
+            ? source[key2].join(", ")
+            : portable(source[key2]);
+        if (value !== void 0) patch[target] = value;
+      }
+      if (!Object.keys(patch).length) return;
+    } else if (event === "node:warning") {
+      patch = {
+        status: "skipped",
+        phase: null,
+        run_started_at: null,
+        generation_queued: false,
+      };
+    } else if (event === "node:retry") {
+      const key2 = "flowStatus.retryDelay",
+        label = window.I18n?.t?.(key2, {
+          attempt: data.attempt,
+          max: data.maxRetries,
+          seconds: Math.ceil(Math.max(0, Number(data.delayMs) || 0) / 1e3),
+        });
+      const reason = window.WorkflowSpaceFormatError(
+        node,
+        data.error?.message || "",
+        (key3, params) => window.I18n?.t?.(key3, params),
+        window.ProviderConfigManager?.getApiConfigValueSync?.(
+          "flow",
+          "api_error_codes",
+        ) || {},
+        data.error,
+        data.error?.flowApiFailure === true,
+      );
+      const text = [
+        label && label !== key2 ? label : window.I18n?.t?.("exec.retrying"),
+        reason,
+      ]
+        .filter(Boolean)
+        .join(" \u2014 ");
+      patch = {
+        status: "running",
+        phase: text,
+        generation_queued: false,
+        error_message: null,
+        last_error: null,
+      };
+      notice = { kind: "retry", text };
+    } else if (event === "node:submitted") {
+      const text =
+        window.I18n?.t?.("workflow.waitingForResult") ||
+        "Waiting for results...";
+      patch = { phase: text };
+      notice = { kind: "submitted", text };
+    } else if (event === "node:phase") {
+      patch = { phase: data.phase || null };
+    } else {
+      patch = Object.fromEntries(
+        fields
+          .filter((key2) => Object.hasOwn(node, key2))
+          .map((key2) => [
+            key2,
+            textFields.has(key2) ? node[key2] : portable(node[key2]),
+          ])
+          .filter(([, value]) => value !== void 0),
+      );
+    }
+    if (event === "node:completed") {
+      const result = data.result || {};
+      patch.status = "completed";
+      patch.phase = null;
+      patch.run_started_at = null;
+      patch.generation_queued = false;
+      patch.error_message = result.partialFailureMessage
+        ? "[PARTIAL_GENERATION] " + result.partialFailureMessage
+        : null;
+      patch.last_error = null;
+      if (Array.isArray(result.fileIds))
+        patch.result_file_ids = result.fileIds.join(", ");
+      for (const [source, target] of [
+        ["thumbnails", "result_thumbnails"],
+        ["fileNames", "result_file_names"],
+        ["providerUrls", "result_provider_urls"],
+      ]) {
+        if (result[source] && typeof result[source] === "object")
+          patch[target] = portable({
+            ...(node[target] || {}),
+            ...result[source],
+          });
+      }
+    }
+    if (event === "node:review") {
+      Object.assign(patch, window.WorkflowSpaceReviewState(data));
+      notice = { kind: "review" };
+    }
+    const key = JSON.stringify([owner.userId, owner.workflowId, owner.runId]);
+    if (snapshotScope !== key) {
+      clearRecent();
+      snapshotScope = key;
+    }
+    const payload = {
+      workflowId: owner.workflowId,
+      userId: owner.userId,
+      nodeId: node.node_id,
+      runId: owner.runId,
+      document: relayDocument,
+      sequence: ++sequence,
+      patch,
+      ...(notice ? { notice } : {}),
+    };
+    if (Date.now() < cacheUntil) {
+      const cached = {
+        ...payload,
+        patch: { ...recent.get(node.node_id)?.patch, ...patch },
+      };
+      forget(node.node_id);
+      const cost = JSON.stringify(cached).length * 2;
+      if (cost <= 1024 * 1024) {
+        while (
+          recent.size &&
+          (recentCost + cost > 1024 * 1024 || recent.size >= 256)
+        )
+          forget(recent.keys().next().value);
+        recent.set(node.node_id, cached);
+        recentCosts.set(node.node_id, cost);
+        recentCost += cost;
+      }
+    } else {
+      clearRecent();
+    }
+    chrome.runtime
+      .sendMessage({ action: "workflowSpaceResultPatch", data: payload })
+      .then((reply) => {
+        if (event !== "node:completed" || !reply?.spaceTransport) return;
+        if (
+          String(window.authManager?.getUser?.()?.id || "") !== owner.userId ||
+          window.workflowExecutor?.currentWorkflow?.wf_id !== owner.workflowId
+        )
+          return;
+        window.eventBus?.emit?.("execution:log", {
+          message:
+            "[SpaceTransport] " +
+            JSON.stringify({
+              stage: "published",
+              nodeId: node.node_id,
+              runId: owner.runId,
+              sourceSequence: payload.sequence,
+              subscribers: reply.spaceTransport.subscribers,
+              pending: reply.spaceTransport.pending,
+              legacyRelay: true,
+            }),
+        });
+      })
+      .catch(() => {});
+  }
+  const handlers = new Map(
+    [
+      "node:completed",
+      "node:review",
+      "node:ref_replaced",
+      "node:preview_available",
+      "node:retry",
+      "node:submitted",
+      "node:phase",
+      "node:warning",
+    ].map((event) => [event, (data) => publish(event, data)]),
+  );
+  handlers.set("node:started", (data) => {
+    const owner = scope(data);
+    if (owner) forget(owner.node.node_id);
+  });
+  handlers.set("workflow:reset", (data) => {
+    if (
+      !data?.workflowId ||
+      data.workflowId === window.workflowExecutor?.currentWorkflow?.wf_id
+    )
+      clearRecent();
+  });
+  handlers.set("workflow:remote_reset", (data) => {
+    if (data?.workflowId === window.workflowExecutor?.currentWorkflow?.wf_id)
+      for (const id of data.nodeIds || []) forget(String(id));
+  });
+  handlers.set("storage:node_status_updated", (data) => {
+    if (data?.wfId !== window.workflowExecutor?.currentWorkflow?.wf_id) return;
+    const cached = recent.get(data.nodeId)?.patch;
+    if (
+      cached &&
+      ["status", "result_file_ids"].some(
+        (key) =>
+          Object.hasOwn(data.data || {}, key) &&
+          Object.hasOwn(cached, key) &&
+          data.data[key] !== cached[key],
+      )
+    )
+      forget(data.nodeId);
+  });
+  handlers.set("storage:node_deleted", (data) => {
+    if (data?.wfId === window.workflowExecutor?.currentWorkflow?.wf_id)
+      forget(data.nodeId);
+  });
+  handlers.set("storage:workflow_reset", (data) => {
+    if (data?.wfId === window.workflowExecutor?.currentWorkflow?.wf_id)
+      clearRecent();
+  });
+  function bind() {
+    if (boundBus === window.eventBus) return;
+    for (const [event, handler] of handlers) boundBus?.off?.(event, handler);
+    boundBus = window.eventBus;
+    for (const [event, handler] of handlers) boundBus?.on?.(event, handler);
+  }
+  bind();
+  if (globalThis.document?.readyState === "loading")
+    globalThis.document.addEventListener("DOMContentLoaded", bind, {
+      once: true,
+    });
+  window.WorkflowSpaceRuntimeRelay = { active: true };
+  chrome.runtime.onMessage?.addListener((message, sender, reply) => {
+    if (
+      ![
+        "workflowSpaceNativeEventSnapshot",
+        "workflowSpaceTransportAudit",
+      ].includes(message?.action) ||
+      sender.id !== chrome.runtime.id ||
+      !nativeDocumentId ||
+      message.documentId !== nativeDocumentId
+    )
+      return;
+    const executor = window.workflowExecutor,
+      workflow = executor?.currentWorkflow;
+    const userId = String(window.authManager?.getUser?.()?.id || "");
+    if (
+      !userId ||
+      userId !== message.userId ||
+      workflow?.wf_id !== message.workflowId ||
+      String(workflow.user_id) !== userId
+    ) {
+      reply({ ok: false, error: "SPACE_EVENTS_OWNER_SCOPE" });
+      return false;
+    }
+    if (message.action === "workflowSpaceTransportAudit") {
+      const input = message.diagnostic || {};
+      const keys = [
+        "stage",
+        "connectionId",
+        "mode",
+        "nodeId",
+        "runId",
+        "sourceSequence",
+        "streamSequence",
+        "status",
+        "outcome",
+        "elapsedMs",
+      ];
+      const diagnostic = Object.fromEntries(
+        keys
+          .filter((key) =>
+            ["string", "number", "boolean"].includes(typeof input[key]),
+          )
+          .map((key) => [
+            key,
+            typeof input[key] === "string"
+              ? input[key].slice(0, 160)
+              : input[key],
+          ]),
+      );
+      window.eventBus?.emit?.("execution:log", {
+        message: "[SpaceTransport] " + JSON.stringify(diagnostic),
+      });
+      reply({ ok: true });
+      return false;
+    }
+    const current = JSON.stringify([
+      userId,
+      workflow.wf_id,
+      executor._flowRunId || null,
+    ]);
+    if (Date.now() >= cacheUntil) clearRecent();
+    cacheUntil = Date.now() + 12e4;
+    reply({
+      ok: true,
+      document: relayDocument,
+      sequence,
+      runId: executor._flowRunId || null,
+      patches:
+        executor.isRunning && current === snapshotScope
+          ? [...recent.values()].map(({ notice, ...payload }) =>
+              notice?.kind === "review" ? { ...payload, notice } : payload,
+            )
+          : [],
+    });
+    return false;
+  });
+})();

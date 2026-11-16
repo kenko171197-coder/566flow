@@ -1,3 +1,402 @@
-class GeminiAdapter extends AIProviderAdapter{constructor(){super();this.key="gemini";this.displayName="Gemini";this.featureKey="gemini_enabled";this.executionAction="gemini_run"}get capabilities(){this.constructor._bindCapabilitiesInvalidation();const pcm=typeof ProviderConfigManager!=="undefined"?ProviderConfigManager:null;const token=window.authManager?.getToken?.()||window.authManager?.token||null;if(this.constructor._capabilitiesCache&&this.constructor._capabilitiesCacheToken===token&&pcm?._providerApiConfigs?.("gemini"))return this.constructor._capabilitiesCache;const supports=pcm?.safeGetSupportsSync?.("gemini")||{};const maxRef=pcm?.safeGetMaxRefImagesSync?.("gemini","image")??0;const ratios=pcm?.safeGetRatiosSync?.("gemini","image")||[];const result={supportsRatio:supports.ratio??false,supportsImageMode:supports.image_mode??false,supportsRefImage:supports.ref_image??false,supportsQuantity:supports.quantity??false,supportsVideo:supports.video??false,supportsAutoDownload:supports.auto_download??false,supportsHumanized:supports.humanized??false,maxRefImages:maxRef,supportedRatios:ratios.map(r=>r.value).filter(Boolean),ratioUiMap:ratios.reduce((map,item)=>{if(item.value)map[item.value]=item.label||item.value;return map},{})};this.constructor._capabilitiesCache=pcm?._providerApiConfigs?.("gemini")?result:null;this.constructor._capabilitiesCacheToken=token;return result}static _bindCapabilitiesInvalidation(){if(this._invalidationBound||!window.eventBus)return;this._invalidationBound=true;const invalidate=({provider}={})=>{if(!provider||provider==="gemini")this._capabilitiesCache=null};for(const event of["provider:api_config_updated","provider:api_configs_loaded","provider:private_configs_loaded","provider:updated","auth:logout","auth:login"]){window.eventBus.on(event,invalidate)}}getMaxRefImages({mode:_mode="image",modelValue=null}={}){const pcm=typeof ProviderConfigManager!=="undefined"?ProviderConfigManager:null;const cap=modelValue&&window.ModelRegistry?.findModel?.("gemini",modelValue)?.config?.max_ref_images?.image;if(Number.isInteger(cap)&&cap>=0)return cap;return pcm?.safeGetMaxRefImagesSync?.("gemini","image")??0}getMaxRefImagesTotal(modelValue){const cap=modelValue&&window.ModelRegistry?.findModel?.("gemini",modelValue)?.config?.max_ref_images?.total;return Number.isInteger(cap)&&cap>=0?cap:null}validateModelReferences(model,imageCount,videoCount){const limits=window.ModelRegistry?.findModel?.("gemini",model)?.config?.max_ref_images;if(!limits)return;for(const[key,count]of[["image",imageCount],["video",videoCount],["total",imageCount+videoCount]]){const cap=limits[key];if(Number.isInteger(cap)&&cap>=0&&count>cap){throw Object.assign(new Error("REF_LIMIT_EXCEEDED"),{code:"REF_LIMIT_EXCEEDED"})}}}async ensureReady(options={}){if(!window.GeminiSession){return{ready:false,error:"SESSION_NOT_LOADED"}}try{return await window.GeminiSession.ensureReady(options)}catch(e){return{ready:false,error:e?.message||"SESSION_ERROR"}}}async submitText({prompt,refFileIds=[],videoRefs=[],timeout}={}){const editorWaitMs=await window.ExecutionConfig.getProviderStartupTimeoutMs("gemini");const ready=await this.ensureReady({forceCheck:true,waitForEditorMs:editorWaitMs});if(!ready||!ready.ready){throw new Error(ready?.error||"GEMINI_NOT_READY")}if(!window.MessageBridge||typeof window.MessageBridge.geminiSubmitAndWait!=="function"){throw new Error("BRIDGE_NOT_LOADED")}const maxRefs=this.capabilities.maxRefImages;let resolvedRefs=Array.isArray(refFileIds)?refFileIds:[];resolvedRefs=resolvedRefs.filter(x=>x&&x.base64).slice(0,maxRefs);const result=await window.MessageBridge.geminiSubmitAndWait({text:prompt,images:[...resolvedRefs,...videoRefs],timeout,tabId:ready.tabId});if(!result||!result.success){try{if(window.EditorExecutor?._incrementDailyStat){window.EditorExecutor._incrementDailyStat("gemini_fail")}}catch(_){}const code=result?.error||"GEMINI_TEXT_FAILED";const err=new Error(result?.message||code);err.code=code;throw err}try{if(window.EditorExecutor?._incrementDailyStat){window.EditorExecutor._incrementDailyStat("gemini_prompt_total")}}catch(_){}return{text:result.text||"",turnId:result.turnId||null}}async submit({prompt,mediaType="image",model,ratio=null,refs=[],videoRefs=[],timeout,runId,settings={},shouldStop=()=>false,workerContext=null}={}){if(mediaType!=="image"&&mediaType!=="video")throw new Error("UNSUPPORTED_MEDIA_TYPE");const checkStopped=()=>{if(shouldStop())throw Object.assign(new Error("ABORTED"),{code:"ABORTED",noRetry:true})};checkStopped();const supports=this.capabilities;if(mediaType==="image"&&!supports.supportsImageMode)throw new Error("GEMINI_IMAGE_DISABLED");if(mediaType==="video"&&!supports.supportsVideo)throw new Error("GEMINI_VIDEO_DISABLED");const editorWaitMs=await window.ExecutionConfig.getProviderStartupTimeoutMs("gemini");let ready=workerContext?null:await this.ensureReady({waitForEditorMs:editorWaitMs});if(!workerContext&&["gen","task"].includes(settings.source)&&ready?.error==="EDITOR_NOT_FOUND"&&Number.isInteger(ready.tabId)){const reveal=await window.MessageBridge?.revealHiddenSidebarProvider?.("gemini",ready.tabId,"status");if(reveal?.revealed===true)ready=await this.ensureReady({createIfMissing:false,activate:false,forceCheck:true,waitForEditorMs:editorWaitMs})}if(!workerContext&&!ready?.ready)throw new Error(ready?.error||"GEMINI_NOT_READY");if(settings.source==="workflow"&&!workerContext)await window.MessageBridge?.revealHiddenWorkflowProvider?.("gemini",ready.tabId);checkStopped();const pcm=window.ProviderConfigManager;if(!pcm)throw new Error("CONFIG_UNAVAILABLE");const maxRefs=this.getMaxRefImages({modelValue:model});const suppliedRefs=Array.isArray(refs)?refs:[];const imageCount=suppliedRefs.filter(x=>x?.base64&&!/^video\//i.test(x.type||"")).length;const videoCount=suppliedRefs.filter(x=>x?.base64&&/^video\//i.test(x.type||"")).length+videoRefs.length;this.validateModelReferences(model,imageCount,videoCount);const images=[...suppliedRefs.filter(x=>x?.base64&&!/^video\//i.test(x.type||"")).slice(0,maxRefs),...suppliedRefs.filter(x=>x?.base64&&/^video\//i.test(x.type||"")),...videoRefs];let ratioPromptSuffix="";if(ratio){const ratios=pcm?.safeGetRatiosSync?.("gemini",mediaType);const selected=Array.isArray(ratios)?ratios.find(item=>item.value===ratio||item.ui_name===ratio):null;if(!selected)throw new Error("RATIO_CONFIG_MISSING");ratioPromptSuffix=selected.prompt_suffix?`
+class GeminiAdapter extends AIProviderAdapter {
+  constructor() {
+    super();
+    this.key = "gemini";
+    this.displayName = "Gemini";
+    this.featureKey = "gemini_enabled";
+    this.executionAction = "gemini_run";
+  }
+  get capabilities() {
+    this.constructor._bindCapabilitiesInvalidation();
+    const pcm =
+      typeof ProviderConfigManager !== "undefined"
+        ? ProviderConfigManager
+        : null;
+    const token =
+      window.authManager?.getToken?.() || window.authManager?.token || null;
+    if (
+      this.constructor._capabilitiesCache &&
+      this.constructor._capabilitiesCacheToken === token &&
+      pcm?._providerApiConfigs?.("gemini")
+    )
+      return this.constructor._capabilitiesCache;
+    const supports = pcm?.safeGetSupportsSync?.("gemini") || {};
+    const maxRef = pcm?.safeGetMaxRefImagesSync?.("gemini", "image") ?? 0;
+    const ratios = pcm?.safeGetRatiosSync?.("gemini", "image") || [];
+    const result = {
+      supportsRatio: supports.ratio ?? false,
+      supportsImageMode: supports.image_mode ?? false,
+      supportsRefImage: supports.ref_image ?? false,
+      supportsQuantity: supports.quantity ?? false,
+      supportsVideo: supports.video ?? false,
+      supportsAutoDownload: supports.auto_download ?? false,
+      supportsHumanized: supports.humanized ?? false,
+      maxRefImages: maxRef,
+      supportedRatios: ratios.map((r) => r.value).filter(Boolean),
+      ratioUiMap: ratios.reduce((map, item) => {
+        if (item.value) map[item.value] = item.label || item.value;
+        return map;
+      }, {}),
+    };
+    this.constructor._capabilitiesCache = pcm?._providerApiConfigs?.("gemini")
+      ? result
+      : null;
+    this.constructor._capabilitiesCacheToken = token;
+    return result;
+  }
+  static _bindCapabilitiesInvalidation() {
+    if (this._invalidationBound || !window.eventBus) return;
+    this._invalidationBound = true;
+    const invalidate = ({ provider } = {}) => {
+      if (!provider || provider === "gemini") this._capabilitiesCache = null;
+    };
+    for (const event of [
+      "provider:api_config_updated",
+      "provider:api_configs_loaded",
+      "provider:private_configs_loaded",
+      "provider:updated",
+      "auth:logout",
+      "auth:login",
+    ]) {
+      window.eventBus.on(event, invalidate);
+    }
+  }
+  getMaxRefImages({ mode: _mode = "image", modelValue = null } = {}) {
+    const pcm =
+      typeof ProviderConfigManager !== "undefined"
+        ? ProviderConfigManager
+        : null;
+    const cap =
+      modelValue &&
+      window.ModelRegistry?.findModel?.("gemini", modelValue)?.config
+        ?.max_ref_images?.image;
+    if (Number.isInteger(cap) && cap >= 0) return cap;
+    return pcm?.safeGetMaxRefImagesSync?.("gemini", "image") ?? 0;
+  }
+  getMaxRefImagesTotal(modelValue) {
+    const cap =
+      modelValue &&
+      window.ModelRegistry?.findModel?.("gemini", modelValue)?.config
+        ?.max_ref_images?.total;
+    return Number.isInteger(cap) && cap >= 0 ? cap : null;
+  }
+  validateModelReferences(model, imageCount, videoCount) {
+    const limits = window.ModelRegistry?.findModel?.("gemini", model)?.config
+      ?.max_ref_images;
+    if (!limits) return;
+    for (const [key, count] of [
+      ["image", imageCount],
+      ["video", videoCount],
+      ["total", imageCount + videoCount],
+    ]) {
+      const cap = limits[key];
+      if (Number.isInteger(cap) && cap >= 0 && count > cap) {
+        throw Object.assign(new Error("REF_LIMIT_EXCEEDED"), {
+          code: "REF_LIMIT_EXCEEDED",
+        });
+      }
+    }
+  }
+  async ensureReady(options = {}) {
+    if (!window.GeminiSession) {
+      return { ready: false, error: "SESSION_NOT_LOADED" };
+    }
+    try {
+      return await window.GeminiSession.ensureReady(options);
+    } catch (e) {
+      return { ready: false, error: e?.message || "SESSION_ERROR" };
+    }
+  }
+  async submitText({ prompt, refFileIds = [], videoRefs = [], timeout } = {}) {
+    const editorWaitMs =
+      await window.ExecutionConfig.getProviderStartupTimeoutMs("gemini");
+    const ready = await this.ensureReady({
+      forceCheck: true,
+      waitForEditorMs: editorWaitMs,
+    });
+    if (!ready || !ready.ready) {
+      throw new Error(ready?.error || "GEMINI_NOT_READY");
+    }
+    if (
+      !window.MessageBridge ||
+      typeof window.MessageBridge.geminiSubmitAndWait !== "function"
+    ) {
+      throw new Error("BRIDGE_NOT_LOADED");
+    }
+    const maxRefs = this.capabilities.maxRefImages;
+    let resolvedRefs = Array.isArray(refFileIds) ? refFileIds : [];
+    resolvedRefs = resolvedRefs.filter((x) => x && x.base64).slice(0, maxRefs);
+    const result = await window.MessageBridge.geminiSubmitAndWait({
+      text: prompt,
+      images: [...resolvedRefs, ...videoRefs],
+      timeout,
+      tabId: ready.tabId,
+    });
+    if (!result || !result.success) {
+      try {
+        if (window.EditorExecutor?._incrementDailyStat) {
+          window.EditorExecutor._incrementDailyStat("gemini_fail");
+        }
+      } catch (_) {}
+      const code = result?.error || "GEMINI_TEXT_FAILED";
+      const err = new Error(result?.message || code);
+      err.code = code;
+      throw err;
+    }
+    try {
+      if (window.EditorExecutor?._incrementDailyStat) {
+        window.EditorExecutor._incrementDailyStat("gemini_prompt_total");
+      }
+    } catch (_) {}
+    return { text: result.text || "", turnId: result.turnId || null };
+  }
+  async submit({
+    prompt,
+    mediaType = "image",
+    model,
+    ratio = null,
+    refs = [],
+    videoRefs = [],
+    timeout,
+    runId,
+    settings = {},
+    shouldStop = () => false,
+    workerContext = null,
+  } = {}) {
+    if (mediaType !== "image" && mediaType !== "video")
+      throw new Error("UNSUPPORTED_MEDIA_TYPE");
+    const checkStopped = () => {
+      if (shouldStop())
+        throw Object.assign(new Error("ABORTED"), {
+          code: "ABORTED",
+          noRetry: true,
+        });
+    };
+    checkStopped();
+    const supports = this.capabilities;
+    if (mediaType === "image" && !supports.supportsImageMode)
+      throw new Error("GEMINI_IMAGE_DISABLED");
+    if (mediaType === "video" && !supports.supportsVideo)
+      throw new Error("GEMINI_VIDEO_DISABLED");
+    const editorWaitMs =
+      await window.ExecutionConfig.getProviderStartupTimeoutMs("gemini");
+    let ready = workerContext
+      ? null
+      : await this.ensureReady({ waitForEditorMs: editorWaitMs });
+    if (
+      !workerContext &&
+      ["gen", "task"].includes(settings.source) &&
+      ready?.error === "EDITOR_NOT_FOUND" &&
+      Number.isInteger(ready.tabId)
+    ) {
+      const reveal = await window.MessageBridge?.revealHiddenSidebarProvider?.(
+        "gemini",
+        ready.tabId,
+        "status",
+      );
+      if (reveal?.revealed === true)
+        ready = await this.ensureReady({
+          createIfMissing: false,
+          activate: false,
+          forceCheck: true,
+          waitForEditorMs: editorWaitMs,
+        });
+    }
+    if (!workerContext && !ready?.ready)
+      throw new Error(ready?.error || "GEMINI_NOT_READY");
+    if (settings.source === "workflow" && !workerContext)
+      await window.MessageBridge?.revealHiddenWorkflowProvider?.(
+        "gemini",
+        ready.tabId,
+      );
+    checkStopped();
+    const pcm = window.ProviderConfigManager;
+    if (!pcm) throw new Error("CONFIG_UNAVAILABLE");
+    const maxRefs = this.getMaxRefImages({ modelValue: model });
+    const suppliedRefs = Array.isArray(refs) ? refs : [];
+    const imageCount = suppliedRefs.filter(
+      (x) => x?.base64 && !/^video\//i.test(x.type || ""),
+    ).length;
+    const videoCount =
+      suppliedRefs.filter((x) => x?.base64 && /^video\//i.test(x.type || ""))
+        .length + videoRefs.length;
+    this.validateModelReferences(model, imageCount, videoCount);
+    const images = [
+      ...suppliedRefs
+        .filter((x) => x?.base64 && !/^video\//i.test(x.type || ""))
+        .slice(0, maxRefs),
+      ...suppliedRefs.filter(
+        (x) => x?.base64 && /^video\//i.test(x.type || ""),
+      ),
+      ...videoRefs,
+    ];
+    let ratioPromptSuffix = "";
+    if (ratio) {
+      const ratios = pcm?.safeGetRatiosSync?.("gemini", mediaType);
+      const selected = Array.isArray(ratios)
+        ? ratios.find((item) => item.value === ratio || item.ui_name === ratio)
+        : null;
+      if (!selected) throw new Error("RATIO_CONFIG_MISSING");
+      ratioPromptSuffix = selected.prompt_suffix
+        ? `
 
-${selected.prompt_suffix}`:""}const registryModel=window.ModelRegistry?.findModel?.("gemini",model);if(!registryModel)throw new Error("MODEL_CONFIG_MISSING");const monitor=pcm.getApiConfigValueSync?.("gemini","generation_monitor")?.[mediaType];if(!monitor)throw new Error("MONITOR_CONFIG_MISSING");const absoluteMaxWaitMs=Number(monitor.absolute_max_wait_ms);if(!Number.isFinite(absoluteMaxWaitMs)||absoluteMaxWaitMs<=0)throw new Error("MONITOR_CONFIG_MISSING");const workerReady=workerContext?await this.ensureReady({workerContext,waitForEditorMs:editorWaitMs}):ready;if(!workerReady?.ready)throw new Error(workerReady?.error||"GEMINI_NOT_READY");const requestedTimeoutMs=Number(timeout);const effectiveTimeoutMs=Number.isFinite(requestedTimeoutMs)&&requestedTimeoutMs>0?Math.min(requestedTimeoutMs,absoluteMaxWaitMs):absoluteMaxWaitMs;let result;const submitOnce=(attempt,newChat,retryConversationPath=null)=>{checkStopped();return window.MessageBridge.geminiSubmitAndWait({text:prompt,images,timeout:effectiveTimeoutMs,tabId:workerReady.tabId,expect:mediaType,runId:workerContext?workerContext.workerAttempt?.attemptId:`${runId||`gemini-${Date.now()}`}-attempt-${attempt}`,settings:retryConversationPath?{...settings,retryConversationPath}:settings,model:{value:registryModel.value,domIdentity:registryModel.config?.dom_identity||null},ratio,ratioPromptSuffix,newChat,...workerContext&&{workerAttempt:workerContext.workerAttempt}})};try{result=await submitOnce(1,true);const retryable=new Set(["SEND_FAILED","COMPOSER_DIRTY","NEW_CHAT_FAILED","CONVERSATION_CHANGED","MODEL_TRIGGER_NOT_FOUND","MODEL_NOT_AVAILABLE","MODEL_UNAVAILABLE","TOOLS_MENU_NOT_FOUND","TOOL_NOT_AVAILABLE","TOOL_ACTIVATION_FAILED","MODEL_TOOL_VERIFY_FAILED","TOOL_VERIFY_FAILED","VIDEO_RATIO_TRIGGER_NOT_FOUND","VIDEO_RATIO_OPTION_NOT_FOUND","VIDEO_RATIO_VERIFY_FAILED","VIDEO_RATIO_MENU_CLOSE_FAILED"]);if(!workerContext&&!result?.success&&retryable.has(result?.error)){checkStopped();if(result.error==="SEND_FAILED"){const recovery=await window.GeminiSession?.reconnectAfterNavigation?.(Number(monitor.refresh_ready_timeout_ms));if(!recovery?.ready){const code=recovery?.error||"RECONNECT_READY_TIMEOUT";throw Object.assign(new Error(code),{code})}result=await submitOnce(2,false)}else if(result.error==="NEW_CHAT_FAILED"){const recovery=await window.GeminiSession?.forceRefresh?.(Number(monitor.refresh_ready_timeout_ms));if(!recovery?.ready){const code=recovery?.error||"REFRESH_READY_TIMEOUT";throw Object.assign(new Error(code),{code})}result=await submitOnce(2,false)}else{result=await submitOnce(2,true)}}if(!workerContext&&result?.error==="GEMINI_TEXT_ONLY_RESULT"){if(result.textOnlyConfirmed!==true||!window.RetryHelper?.recoverMediaTextOnly)result={...result,noRetry:true};else result=await window.RetryHelper.recoverMediaTextOnly(result,({retry,conversationPath})=>submitOnce(`text-${retry}`,false,conversationPath),{code:"GEMINI_TEXT_ONLY_RESULT",provider:"gemini",shouldStop})}}catch(error){if(error?.code!=="ABORTED"){try{window.EditorExecutor?._incrementDailyStat?.("gemini_fail")}catch(_){}}throw error}if(!result?.success){checkStopped();try{window.EditorExecutor?._incrementDailyStat?.("gemini_fail")}catch(_){}if(result?.error==="MODEL_NOT_AVAILABLE"&&result.diagnostic){console.warn("[GeminiAdapter] model_selection_unavailable",JSON.stringify(result.diagnostic))}const error=new Error(result?.message||result?.error||"GEMINI_MEDIA_FAILED");error.code=result?.error||"GEMINI_MEDIA_FAILED";error.noRetry=result?.noRetry===true;error.textOnlyConfirmed=result?.textOnlyConfirmed===true;if(["STARTUP_TIMEOUT","GENERATION_STALLED","ABSOLUTE_TIMEOUT"].includes(error.code))error.monitorDiagnostic=result?.diagnostic||null;throw error}try{window.EditorExecutor?._incrementDailyStat?.("gemini_prompt_total")}catch(_){}return{success:true,provider:"gemini",mediaType,model:registryModel.value,results:result.results||[],resultCount:Number(result.resultCount||result.results?.length||0),tabId:workerReady.tabId,runId,conversationUrl:result.conversationUrl||null,modelSelection:result.modelSelection||null}}}if(typeof window!=="undefined"){window.GeminiAdapter=GeminiAdapter}
+${selected.prompt_suffix}`
+        : "";
+    }
+    const registryModel = window.ModelRegistry?.findModel?.("gemini", model);
+    if (!registryModel) throw new Error("MODEL_CONFIG_MISSING");
+    const monitor = pcm.getApiConfigValueSync?.(
+      "gemini",
+      "generation_monitor",
+    )?.[mediaType];
+    if (!monitor) throw new Error("MONITOR_CONFIG_MISSING");
+    const absoluteMaxWaitMs = Number(monitor.absolute_max_wait_ms);
+    if (!Number.isFinite(absoluteMaxWaitMs) || absoluteMaxWaitMs <= 0)
+      throw new Error("MONITOR_CONFIG_MISSING");
+    const workerReady = workerContext
+      ? await this.ensureReady({ workerContext, waitForEditorMs: editorWaitMs })
+      : ready;
+    if (!workerReady?.ready)
+      throw new Error(workerReady?.error || "GEMINI_NOT_READY");
+    const requestedTimeoutMs = Number(timeout);
+    const effectiveTimeoutMs =
+      Number.isFinite(requestedTimeoutMs) && requestedTimeoutMs > 0
+        ? Math.min(requestedTimeoutMs, absoluteMaxWaitMs)
+        : absoluteMaxWaitMs;
+    let result;
+    const submitOnce = (attempt, newChat, retryConversationPath = null) => {
+      checkStopped();
+      return window.MessageBridge.geminiSubmitAndWait({
+        text: prompt,
+        images,
+        timeout: effectiveTimeoutMs,
+        tabId: workerReady.tabId,
+        expect: mediaType,
+        runId: workerContext
+          ? workerContext.workerAttempt?.attemptId
+          : `${runId || `gemini-${Date.now()}`}-attempt-${attempt}`,
+        settings: retryConversationPath
+          ? { ...settings, retryConversationPath }
+          : settings,
+        model: {
+          value: registryModel.value,
+          domIdentity: registryModel.config?.dom_identity || null,
+        },
+        ratio,
+        ratioPromptSuffix,
+        newChat,
+        ...(workerContext && { workerAttempt: workerContext.workerAttempt }),
+      });
+    };
+    try {
+      result = await submitOnce(1, true);
+      const retryable = new Set([
+        "SEND_FAILED",
+        "COMPOSER_DIRTY",
+        "NEW_CHAT_FAILED",
+        "CONVERSATION_CHANGED",
+        "MODEL_TRIGGER_NOT_FOUND",
+        "MODEL_NOT_AVAILABLE",
+        "MODEL_UNAVAILABLE",
+        "TOOLS_MENU_NOT_FOUND",
+        "TOOL_NOT_AVAILABLE",
+        "TOOL_ACTIVATION_FAILED",
+        "MODEL_TOOL_VERIFY_FAILED",
+        "TOOL_VERIFY_FAILED",
+        "VIDEO_RATIO_TRIGGER_NOT_FOUND",
+        "VIDEO_RATIO_OPTION_NOT_FOUND",
+        "VIDEO_RATIO_VERIFY_FAILED",
+        "VIDEO_RATIO_MENU_CLOSE_FAILED",
+      ]);
+      if (!workerContext && !result?.success && retryable.has(result?.error)) {
+        checkStopped();
+        if (result.error === "SEND_FAILED") {
+          const recovery =
+            await window.GeminiSession?.reconnectAfterNavigation?.(
+              Number(monitor.refresh_ready_timeout_ms),
+            );
+          if (!recovery?.ready) {
+            const code = recovery?.error || "RECONNECT_READY_TIMEOUT";
+            throw Object.assign(new Error(code), { code });
+          }
+          result = await submitOnce(2, false);
+        } else if (result.error === "NEW_CHAT_FAILED") {
+          const recovery = await window.GeminiSession?.forceRefresh?.(
+            Number(monitor.refresh_ready_timeout_ms),
+          );
+          if (!recovery?.ready) {
+            const code = recovery?.error || "REFRESH_READY_TIMEOUT";
+            throw Object.assign(new Error(code), { code });
+          }
+          result = await submitOnce(2, false);
+        } else {
+          result = await submitOnce(2, true);
+        }
+      }
+      if (!workerContext && result?.error === "GEMINI_TEXT_ONLY_RESULT") {
+        if (
+          result.textOnlyConfirmed !== true ||
+          !window.RetryHelper?.recoverMediaTextOnly
+        )
+          result = { ...result, noRetry: true };
+        else
+          result = await window.RetryHelper.recoverMediaTextOnly(
+            result,
+            ({ retry, conversationPath }) =>
+              submitOnce(`text-${retry}`, false, conversationPath),
+            { code: "GEMINI_TEXT_ONLY_RESULT", provider: "gemini", shouldStop },
+          );
+      }
+    } catch (error) {
+      if (error?.code !== "ABORTED") {
+        try {
+          window.EditorExecutor?._incrementDailyStat?.("gemini_fail");
+        } catch (_) {}
+      }
+      throw error;
+    }
+    if (!result?.success) {
+      checkStopped();
+      try {
+        window.EditorExecutor?._incrementDailyStat?.("gemini_fail");
+      } catch (_) {}
+      if (result?.error === "MODEL_NOT_AVAILABLE" && result.diagnostic) {
+        console.warn(
+          "[GeminiAdapter] model_selection_unavailable",
+          JSON.stringify(result.diagnostic),
+        );
+      }
+      const error = new Error(
+        result?.message || result?.error || "GEMINI_MEDIA_FAILED",
+      );
+      error.code = result?.error || "GEMINI_MEDIA_FAILED";
+      error.noRetry = result?.noRetry === true;
+      error.textOnlyConfirmed = result?.textOnlyConfirmed === true;
+      if (
+        ["STARTUP_TIMEOUT", "GENERATION_STALLED", "ABSOLUTE_TIMEOUT"].includes(
+          error.code,
+        )
+      )
+        error.monitorDiagnostic = result?.diagnostic || null;
+      throw error;
+    }
+    try {
+      window.EditorExecutor?._incrementDailyStat?.("gemini_prompt_total");
+    } catch (_) {}
+    return {
+      success: true,
+      provider: "gemini",
+      mediaType,
+      model: registryModel.value,
+      results: result.results || [],
+      resultCount: Number(result.resultCount || result.results?.length || 0),
+      tabId: workerReady.tabId,
+      runId,
+      conversationUrl: result.conversationUrl || null,
+      modelSelection: result.modelSelection || null,
+    };
+  }
+}
+if (typeof window !== "undefined") {
+  window.GeminiAdapter = GeminiAdapter;
+}

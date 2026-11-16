@@ -1,12 +1,217 @@
 // Paste into DevTools console on https://flow.google.com (project page).
 (() => {
-  const sel = {"slate_editor": {"selectors": ["flow-rich-text-editor [contenteditable=\"true\"]", "flow-base-prompt-box [contenteditable=\"true\"]"]}, "submit_button": {"selectors": ["flow-generate-icon-button button", "flow-base-prompt-box button[type=\"submit\"]"], "icon_text": "arrow_forward"}, "settings_button": {"selectors": ["flow-base-prompt-box button[class*=\"settings-\"]"]}, "flow_agent_toggle_button": {"selectors": ["flow-agent-mode-toggle-chip button", "button.agent-mode-chip"], "aria_pressed_on": "true"}, "agent_mode_active": {"selectors": ["button.agent-mode-chip[aria-pressed=\"true\"]"]}, "add_component_root": {"selectors": ["flow-add-menu"]}, "tile_container": {"selectors": ["flow-grid-tile-container"]}, "tile_image": {"selectors": ["flow-image-tile img[data-media-id]", "flow-image-tile img.image"], "attribute": "data-media-id"}, "tile_video": {"selectors": ["flow-video-tile video"]}, "tile_video_poster": {"selectors": ["flow-video-tile img.thumbnail"]}, "tile_video_owner": {"selectors": ["flow-video-tile"]}, "tile_pending": {"selectors": ["flow-grid-tile-container [role=\"progressbar\"]", "flow-grid-tile-container mat-progress-bar", "flow-grid-tile-container mat-spinner"]}, "flow_scroll_container": {"selectors": ["cdk-virtual-scroll-viewport"]}, "context_menu": {"selectors": [".mat-mdc-menu-panel", "[role=\"menu\"]"]}, "menu_item": {"selectors": [".mat-mdc-menu-item", "[role=\"menuitem\"]"]}, "download_menu_trigger": {"selectors": [".mat-mdc-menu-item", "[role=\"menuitem\"]"], "icon_text": "download"}, "download_submenu": {"selectors": [".mat-mdc-menu-panel", "[role=\"menu\"]"]}, "download_submenu_item": {"selectors": [".mat-mdc-menu-item", "[role=\"menuitem\"]"], "disabled_attributes": ["disabled", "aria-disabled"]}, "model_picker_panel": {"selectors": ["[role=\"listbox\"]", ".mat-mdc-menu-panel"]}, "model_picker_item": {"selectors": ["[role=\"option\"]", ".mat-mdc-menu-item"]}, "icon_element": {"selectors": ["mat-icon"]}, "ingredient_bar": {"selectors": ["flow-add-menu", "flow-base-prompt-box [class*=\"ingredient\"]"]}, "ingredient_remove_button": {"selectors": ["button[aria-label*=\"emove\"]", "button[aria-label*=\"Xóa\"]", "flow-add-menu button[aria-label*=\"close\"]"], "icon_text": "close"}, "ingredient_image_chip": {"selectors": ["flow-add-menu [class*=\"image\"]", "[data-ingredient-kind=\"image\"]"]}, "ingredient_video_chip": {"selectors": ["flow-add-menu [class*=\"video\"]", "[data-ingredient-kind=\"video\"]"]}, "ingredient_chip_thumbnail": {"selectors": ["flow-add-menu img"]}, "settings_panel_candidates": {"selectors": [".cdk-overlay-pane"]}, "settings_panel_marker": {"selectors": ["mat-button-toggle"]}, "settings_panel_root": {"selectors": [".cdk-overlay-pane"]}, "mode_tab_image": {"selectors": ["mat-button-toggle button[role=\"radio\"]"], "icon_text": "image"}, "mode_tab_video": {"selectors": ["mat-button-toggle button[role=\"radio\"]"], "icon_text": "videocam"}, "video_mode_frames": {"selectors": ["mat-button-toggle button[role=\"radio\"]"], "icon_text": "crop_free"}, "video_mode_ingredients": {"selectors": ["mat-button-toggle button[role=\"radio\"]"], "icon_text": "chrome_extension"}, "ratio_button": {"selectors": ["mat-button-toggle button[role=\"radio\"]"], "ratio_icons": {"16:9": "crop_16_9", "4:3": "crop_landscape", "1:1": "crop_square", "3:4": "crop_portrait", "9:16": "crop_9_16"}}, "quantity_button": {"selectors": ["mat-button-toggle button[role=\"radio\"]"], "text_format": "x{value}"}, "tab_button_generic": {"selectors": ["mat-button-toggle button[role=\"radio\"]"]}, "signed_out_indicator": {"selectors": ["a[href*=\"accounts.google.com/ServiceLogin\"]", "a[href*=\"accounts.google.com/signin\"]"]}, "project_card": {"selectors": ["a[href*=\"/project/\"]"]}, "project_link": {"selectors": ["a[href*=\"/project/\"]"]}, "projects_page": {"selectors": ["main"]}, "project_title": {"selectors": ["flow-editable-text"]}, "add_component_apply_button": {"selectors": ["[data-566flow-unmapped]"]}, "add_component_detail": {"selectors": ["[data-566flow-unmapped]"]}, "add_component_listbox": {"selectors": ["[data-566flow-unmapped]"]}, "add_component_mobile_close": {"selectors": ["[data-566flow-unmapped]"]}, "add_component_mobile_filter_list": {"selectors": ["[data-566flow-unmapped]"]}, "add_component_mobile_filter_trigger": {"selectors": ["[data-566flow-unmapped]"]}, "add_component_option": {"selectors": ["[data-566flow-unmapped]"]}, "add_menu_upload_tab": {"selectors": ["[data-566flow-unmapped]"]}, "add_to_prompt_menu_item": {"selectors": ["[data-566flow-unmapped]"]}, "advanced_menu_add_to_prompt_button": {"selectors": ["[data-566flow-unmapped]"]}, "advanced_menu_characters_tab": {"selectors": ["[data-566flow-unmapped]"]}, "advanced_menu_voices_tab": {"selectors": ["[data-566flow-unmapped]"]}, "agent_instruction_dialog": {"selectors": ["[data-566flow-unmapped]"]}, "agent_panel_close": {"selectors": ["[data-566flow-unmapped]"]}, "agent_panel_owner": {"selectors": ["[data-566flow-unmapped]"]}, "compact_layout_marker": {"selectors": ["[data-566flow-unmapped]"]}, "edit_link": {"selectors": ["[data-566flow-unmapped]"]}, "flow_agent_instruction_done_button": {"selectors": ["[data-566flow-unmapped]"]}, "flow_chat_agent_close_button": {"selectors": ["[data-566flow-unmapped]"]}, "flow_tab_slider_trigger": {"selectors": ["[data-566flow-unmapped]"]}, "grid_size_small_button": {"selectors": ["[data-566flow-unmapped]"]}, "mention_inline_chip": {"selectors": ["[data-566flow-unmapped]"]}, "page_settings_grid_size": {"selectors": ["[data-566flow-unmapped]"]}, "page_settings_grid_view": {"selectors": ["[data-566flow-unmapped]"]}, "page_settings_root": {"selectors": ["[data-566flow-unmapped]"]}, "page_settings_trigger": {"selectors": ["[data-566flow-unmapped]"]}, "reference_picker_project": {"selectors": ["[data-566flow-unmapped]"]}, "reference_picker_search": {"selectors": ["[data-566flow-unmapped]"]}, "reference_picker_thumbnail": {"selectors": ["[data-566flow-unmapped]"]}, "show_tile_details_setting": {"selectors": ["[data-566flow-unmapped]"]}, "tile_error_owner": {"selectors": ["[data-566flow-unmapped]"]}, "video_duration_slider": {"selectors": ["[data-566flow-unmapped]"]}, "video_duration_slider_value": {"selectors": ["[data-566flow-unmapped]"]}, "video_duration_tab": {"selectors": ["[data-566flow-unmapped]"]}, "video_resolution_tab": {"selectors": ["[data-566flow-unmapped]"]}, "video_upload_confirm": {"selectors": ["[data-566flow-unmapped]"]}, "warning_icon": {"selectors": ["[data-566flow-unmapped]"]}, "media_viewer_owner": {"selectors": ["[data-566flow-unmapped]"]}, "prompt_clear_button": {"selectors": ["[data-566flow-unmapped]"]}, "composer_advanced_menu_button": {"selectors": ["[data-566flow-unmapped]"]}, "tile_retry_button": {"selectors": ["[data-566flow-unmapped]"]}, "tile_error_message": {"selectors": ["[data-566flow-unmapped]"]}, "tile_display_name": {"selectors": ["[data-566flow-unmapped]"]}, "project_error_indicator": {"selectors": ["[data-566flow-unmapped]"]}, "flow_credit_limit_alert": {"selectors": ["[data-566flow-unmapped]"]}, "new_project_button": {"selectors": ["[data-566flow-unmapped]"]}, "model_picker_button": {"selectors": ["[data-566flow-unmapped]"]}, "add_menu_upload_media_button": {"selectors": ["[data-566flow-unmapped]"]}};
+  const sel = {
+    slate_editor: {
+      selectors: [
+        'flow-rich-text-editor [contenteditable="true"]',
+        'flow-base-prompt-box [contenteditable="true"]',
+      ],
+    },
+    submit_button: {
+      selectors: [
+        "flow-generate-icon-button button",
+        'flow-base-prompt-box button[type="submit"]',
+      ],
+      icon_text: "arrow_forward",
+    },
+    settings_button: {
+      selectors: ['flow-base-prompt-box button[class*="settings-"]'],
+    },
+    flow_agent_toggle_button: {
+      selectors: [
+        "flow-agent-mode-toggle-chip button",
+        "button.agent-mode-chip",
+      ],
+      aria_pressed_on: "true",
+    },
+    agent_mode_active: {
+      selectors: ['button.agent-mode-chip[aria-pressed="true"]'],
+    },
+    add_component_root: { selectors: ["flow-add-menu"] },
+    tile_container: { selectors: ["flow-grid-tile-container"] },
+    tile_image: {
+      selectors: [
+        "flow-image-tile img[data-media-id]",
+        "flow-image-tile img.image",
+      ],
+      attribute: "data-media-id",
+    },
+    tile_video: { selectors: ["flow-video-tile video"] },
+    tile_video_poster: { selectors: ["flow-video-tile img.thumbnail"] },
+    tile_video_owner: { selectors: ["flow-video-tile"] },
+    tile_pending: {
+      selectors: [
+        'flow-grid-tile-container [role="progressbar"]',
+        "flow-grid-tile-container mat-progress-bar",
+        "flow-grid-tile-container mat-spinner",
+      ],
+    },
+    flow_scroll_container: { selectors: ["cdk-virtual-scroll-viewport"] },
+    context_menu: { selectors: [".mat-mdc-menu-panel", '[role="menu"]'] },
+    menu_item: { selectors: [".mat-mdc-menu-item", '[role="menuitem"]'] },
+    download_menu_trigger: {
+      selectors: [".mat-mdc-menu-item", '[role="menuitem"]'],
+      icon_text: "download",
+    },
+    download_submenu: { selectors: [".mat-mdc-menu-panel", '[role="menu"]'] },
+    download_submenu_item: {
+      selectors: [".mat-mdc-menu-item", '[role="menuitem"]'],
+      disabled_attributes: ["disabled", "aria-disabled"],
+    },
+    model_picker_panel: {
+      selectors: ['[role="listbox"]', ".mat-mdc-menu-panel"],
+    },
+    model_picker_item: { selectors: ['[role="option"]', ".mat-mdc-menu-item"] },
+    icon_element: { selectors: ["mat-icon"] },
+    ingredient_bar: {
+      selectors: [
+        "flow-add-menu",
+        'flow-base-prompt-box [class*="ingredient"]',
+      ],
+    },
+    ingredient_remove_button: {
+      selectors: [
+        'button[aria-label*="emove"]',
+        'button[aria-label*="Xóa"]',
+        'flow-add-menu button[aria-label*="close"]',
+      ],
+      icon_text: "close",
+    },
+    ingredient_image_chip: {
+      selectors: [
+        'flow-add-menu [class*="image"]',
+        '[data-ingredient-kind="image"]',
+      ],
+    },
+    ingredient_video_chip: {
+      selectors: [
+        'flow-add-menu [class*="video"]',
+        '[data-ingredient-kind="video"]',
+      ],
+    },
+    ingredient_chip_thumbnail: { selectors: ["flow-add-menu img"] },
+    settings_panel_candidates: { selectors: [".cdk-overlay-pane"] },
+    settings_panel_marker: { selectors: ["mat-button-toggle"] },
+    settings_panel_root: { selectors: [".cdk-overlay-pane"] },
+    mode_tab_image: {
+      selectors: ['mat-button-toggle button[role="radio"]'],
+      icon_text: "image",
+    },
+    mode_tab_video: {
+      selectors: ['mat-button-toggle button[role="radio"]'],
+      icon_text: "videocam",
+    },
+    video_mode_frames: {
+      selectors: ['mat-button-toggle button[role="radio"]'],
+      icon_text: "crop_free",
+    },
+    video_mode_ingredients: {
+      selectors: ['mat-button-toggle button[role="radio"]'],
+      icon_text: "chrome_extension",
+    },
+    ratio_button: {
+      selectors: ['mat-button-toggle button[role="radio"]'],
+      ratio_icons: {
+        "16:9": "crop_16_9",
+        "4:3": "crop_landscape",
+        "1:1": "crop_square",
+        "3:4": "crop_portrait",
+        "9:16": "crop_9_16",
+      },
+    },
+    quantity_button: {
+      selectors: ['mat-button-toggle button[role="radio"]'],
+      text_format: "x{value}",
+    },
+    tab_button_generic: {
+      selectors: ['mat-button-toggle button[role="radio"]'],
+    },
+    signed_out_indicator: {
+      selectors: [
+        'a[href*="accounts.google.com/ServiceLogin"]',
+        'a[href*="accounts.google.com/signin"]',
+      ],
+    },
+    project_card: { selectors: ['a[href*="/project/"]'] },
+    project_link: { selectors: ['a[href*="/project/"]'] },
+    projects_page: { selectors: ["main"] },
+    project_title: { selectors: ["flow-editable-text"] },
+    add_component_apply_button: { selectors: ["[data-566flow-unmapped]"] },
+    add_component_detail: { selectors: ["[data-566flow-unmapped]"] },
+    add_component_listbox: { selectors: ["[data-566flow-unmapped]"] },
+    add_component_mobile_close: { selectors: ["[data-566flow-unmapped]"] },
+    add_component_mobile_filter_list: {
+      selectors: ["[data-566flow-unmapped]"],
+    },
+    add_component_mobile_filter_trigger: {
+      selectors: ["[data-566flow-unmapped]"],
+    },
+    add_component_option: { selectors: ["[data-566flow-unmapped]"] },
+    add_menu_upload_tab: { selectors: ["[data-566flow-unmapped]"] },
+    add_to_prompt_menu_item: { selectors: ["[data-566flow-unmapped]"] },
+    advanced_menu_add_to_prompt_button: {
+      selectors: ["[data-566flow-unmapped]"],
+    },
+    advanced_menu_characters_tab: { selectors: ["[data-566flow-unmapped]"] },
+    advanced_menu_voices_tab: { selectors: ["[data-566flow-unmapped]"] },
+    agent_instruction_dialog: { selectors: ["[data-566flow-unmapped]"] },
+    agent_panel_close: { selectors: ["[data-566flow-unmapped]"] },
+    agent_panel_owner: { selectors: ["[data-566flow-unmapped]"] },
+    compact_layout_marker: { selectors: ["[data-566flow-unmapped]"] },
+    edit_link: { selectors: ["[data-566flow-unmapped]"] },
+    flow_agent_instruction_done_button: {
+      selectors: ["[data-566flow-unmapped]"],
+    },
+    flow_chat_agent_close_button: { selectors: ["[data-566flow-unmapped]"] },
+    flow_tab_slider_trigger: { selectors: ["[data-566flow-unmapped]"] },
+    grid_size_small_button: { selectors: ["[data-566flow-unmapped]"] },
+    mention_inline_chip: { selectors: ["[data-566flow-unmapped]"] },
+    page_settings_grid_size: { selectors: ["[data-566flow-unmapped]"] },
+    page_settings_grid_view: { selectors: ["[data-566flow-unmapped]"] },
+    page_settings_root: { selectors: ["[data-566flow-unmapped]"] },
+    page_settings_trigger: { selectors: ["[data-566flow-unmapped]"] },
+    reference_picker_project: { selectors: ["[data-566flow-unmapped]"] },
+    reference_picker_search: { selectors: ["[data-566flow-unmapped]"] },
+    reference_picker_thumbnail: { selectors: ["[data-566flow-unmapped]"] },
+    show_tile_details_setting: { selectors: ["[data-566flow-unmapped]"] },
+    tile_error_owner: { selectors: ["[data-566flow-unmapped]"] },
+    video_duration_slider: { selectors: ["[data-566flow-unmapped]"] },
+    video_duration_slider_value: { selectors: ["[data-566flow-unmapped]"] },
+    video_duration_tab: { selectors: ["[data-566flow-unmapped]"] },
+    video_resolution_tab: { selectors: ["[data-566flow-unmapped]"] },
+    video_upload_confirm: { selectors: ["[data-566flow-unmapped]"] },
+    warning_icon: { selectors: ["[data-566flow-unmapped]"] },
+    media_viewer_owner: { selectors: ["[data-566flow-unmapped]"] },
+    prompt_clear_button: { selectors: ["[data-566flow-unmapped]"] },
+    composer_advanced_menu_button: { selectors: ["[data-566flow-unmapped]"] },
+    tile_retry_button: { selectors: ["[data-566flow-unmapped]"] },
+    tile_error_message: { selectors: ["[data-566flow-unmapped]"] },
+    tile_display_name: { selectors: ["[data-566flow-unmapped]"] },
+    project_error_indicator: { selectors: ["[data-566flow-unmapped]"] },
+    flow_credit_limit_alert: { selectors: ["[data-566flow-unmapped]"] },
+    new_project_button: { selectors: ["[data-566flow-unmapped]"] },
+    model_picker_button: { selectors: ["[data-566flow-unmapped]"] },
+    add_menu_upload_media_button: { selectors: ["[data-566flow-unmapped]"] },
+  };
   const rows = Object.entries(sel).map(([key, v]) => {
     let n = -1;
-    try { n = v.selectors.join(", ") === "[data-566flow-unmapped]" ? -2 : document.querySelectorAll(v.selectors.join(", ")).length; } catch (e) { n = -3; }
-    return { key, matches: n === -2 ? "(no selector yet)" : n === -3 ? "(invalid selector)" : n };
+    try {
+      n =
+        v.selectors.join(", ") === "[data-566flow-unmapped]"
+          ? -2
+          : document.querySelectorAll(v.selectors.join(", ")).length;
+    } catch (e) {
+      n = -3;
+    }
+    return {
+      key,
+      matches:
+        n === -2 ? "(no selector yet)" : n === -3 ? "(invalid selector)" : n,
+    };
   });
   console.table(rows);
-  const miss = rows.filter(r => r.matches === 0 || typeof r.matches === "string").map(r => r.key);
+  const miss = rows
+    .filter((r) => r.matches === 0 || typeof r.matches === "string")
+    .map((r) => r.key);
   console.log("NEEDS FIXING (" + miss.length + "):", miss.join(", "));
 })();
