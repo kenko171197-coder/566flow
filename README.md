@@ -44,3 +44,10 @@ printed on any flow.google.com tab console as `[566Diag] …` (see `diag-relay.j
 
 ## Load
 `chrome://extensions` → Developer mode → Load unpacked → select this folder.
+
+## Regeneration order (important)
+Run in this order — `gen_flow_config.py` now MERGES into `config/api.json` so it
+no longer wipes the ratios/resolutions written by `gen_flow_models.py`:
+1. `python3 tools/gen_flow_config.py`
+2. `python3 tools/gen_flow_models.py`
+3. `python3 tools/gen_gemini_config.py`

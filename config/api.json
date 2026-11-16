@@ -4,7 +4,112 @@
       "flow_v2_driver": {
         "enabled": true
       },
-      "radix_trigger_button_pattern": "button[id^='radix-'][id$='{suffix}']"
+      "radix_trigger_button_pattern": "button[id^='radix-'][id$='{suffix}']",
+      "ratios": {
+        "image": [
+          {
+            "value": "16:9",
+            "label": "16:9",
+            "is_default": true
+          },
+          {
+            "value": "4:3",
+            "label": "4:3"
+          },
+          {
+            "value": "1:1",
+            "label": "1:1"
+          },
+          {
+            "value": "3:4",
+            "label": "3:4"
+          },
+          {
+            "value": "9:16",
+            "label": "9:16"
+          }
+        ],
+        "video": [
+          {
+            "value": "16:9",
+            "label": "16:9",
+            "is_default": true
+          },
+          {
+            "value": "9:16",
+            "label": "9:16"
+          }
+        ]
+      },
+      "download_resolutions": {
+        "image": [
+          {
+            "value": "1K",
+            "menu_label": "1K",
+            "route": "native",
+            "is_default": true
+          },
+          {
+            "value": "2K",
+            "menu_label": "2K",
+            "route": "native"
+          },
+          {
+            "value": "4K",
+            "menu_label": "4K",
+            "route": "native"
+          }
+        ],
+        "video": [
+          {
+            "value": "720p",
+            "menu_label": "720p",
+            "route": "native",
+            "is_default": true
+          },
+          {
+            "value": "1080p",
+            "menu_label": "1080p",
+            "route": "native"
+          }
+        ],
+        "image_fallback_chain": [
+          "1K",
+          "2K",
+          "4K"
+        ],
+        "video_fallback_chain": [
+          "720p",
+          "1080p"
+        ]
+      },
+      "durations": [
+        {
+          "value": "4s",
+          "label": "4 giây"
+        },
+        {
+          "value": "6s",
+          "label": "6 giây"
+        },
+        {
+          "value": "8s",
+          "label": "8 giây"
+        },
+        {
+          "value": "10s",
+          "label": "10 giây",
+          "is_default": true
+        }
+      ],
+      "supports": {
+        "image_mode": true,
+        "video": true,
+        "humanized": false,
+        "ratio": true,
+        "ref_image": true,
+        "max_ref_images": 3
+      }
     }
   },
   "chatgpt": {

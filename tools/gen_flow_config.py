@@ -91,9 +91,12 @@ dom["flow"] = {"selectors": {}, "profiles": {"v2": {
 json.dump(dom, open(root/"config/dom.json", "w"), indent=2, ensure_ascii=False)
 
 api = json.load(open(root/"config/api.json"))
-api["flow"] = {"configs": {"flow_v2_driver": {"enabled": True},
-                           "radix_trigger_button_pattern": "button[id^='radix-'][id$='{suffix}']"}}
-json.dump(api, open(root/"config/api.json", "w"), indent=2)
+# merge (do NOT overwrite) so ratios/download_resolutions/supports from gen_flow_models.py survive
+api.setdefault("flow", {}).setdefault("configs", {})
+api["flow"]["configs"].setdefault("flow_v2_driver", {"enabled": True})
+api["flow"]["configs"].setdefault("radix_trigger_button_pattern",
+                                  "button[id^='radix-'][id$='{suffix}']")
+json.dump(api, open(root/"config/api.json", "w"), indent=2, ensure_ascii=False)
 
 check = """// Paste into DevTools console on https://flow.google.com (project page).
 (() => {
