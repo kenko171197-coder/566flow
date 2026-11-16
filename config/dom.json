@@ -382,6 +382,66 @@
             "selectors": [
               "[data-566flow-unmapped]"
             ]
+          },
+          "prompt_clear_button": {
+            "selectors": [
+              "[data-566flow-unmapped]"
+            ]
+          },
+          "composer_advanced_menu_button": {
+            "selectors": [
+              "[data-566flow-unmapped]"
+            ]
+          },
+          "tile_retry_button": {
+            "selectors": [
+              "[data-566flow-unmapped]"
+            ]
+          },
+          "tile_error_message": {
+            "selectors": [
+              "[data-566flow-unmapped]"
+            ]
+          },
+          "tile_display_name": {
+            "selectors": [
+              "[data-566flow-unmapped]"
+            ]
+          },
+          "project_error_indicator": {
+            "selectors": [
+              "[data-566flow-unmapped]"
+            ]
+          },
+          "flow_credit_limit_alert": {
+            "selectors": [
+              "[data-566flow-unmapped]"
+            ]
+          },
+          "new_project_button": {
+            "selectors": [
+              "[data-566flow-unmapped]"
+            ]
+          },
+          "model_picker_button": {
+            "selectors": [
+              "[data-566flow-unmapped]"
+            ]
+          },
+          "download_menu_trigger": {
+            "selectors": [
+              "[data-566flow-unmapped]"
+            ]
+          },
+          "add_menu_upload_media_button": {
+            "selectors": [
+              "[data-566flow-unmapped]"
+            ]
+          },
+          "ingredient_bar": {
+            "selectors": [
+              "[data-566flow-unmapped]"
+            ]
           }
         }
       }
