@@ -32,6 +32,8 @@
   }
   const origError = console.error.bind(console);
   console.error = (...args) => { record("console.error", args); origError(...args); };
+  const origWarn = console.warn.bind(console);
+  console.warn = (...args) => { record("warn", args); origWarn(...args); };
   globalThis.addEventListener?.("error", (e) => record("uncaught", [e.error || e.message]));
   globalThis.addEventListener?.("unhandledrejection", (e) => record("unhandledrejection", [e.reason]));
   record("start", ["loaded"]);
