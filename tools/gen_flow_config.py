@@ -48,6 +48,15 @@ flow_selectors = {
   "ingredient_image_chip": s('flow-add-menu [class*="image"]', '[data-ingredient-kind="image"]'),
   "ingredient_video_chip": s('flow-add-menu [class*="video"]', '[data-ingredient-kind="video"]'),
   "ingredient_chip_thumbnail": s('flow-add-menu img'),
+  # add-component menu / reference-image upload (verified live 2026-11-16)
+  "add_component_root": s('flow-add-menu', '.cdk-overlay-pane'),
+  "add_menu_upload_media_button": s('.cdk-overlay-pane button[mat-button]', 'flow-add-menu button',
+                                    icon_text="upload"),
+  "add_menu_upload_tab": s('.cdk-overlay-pane [role="tab"]', '.cdk-overlay-pane button'),
+  "add_component_apply_button": s('.cdk-overlay-pane button[mat-button]', icon_text=""),
+  "add_component_listbox": s('.cdk-overlay-pane [role="listbox"]', '.cdk-overlay-pane mat-list'),
+  "add_component_option": s('.cdk-overlay-pane [role="option"]', '.cdk-overlay-pane [mat-list-item]'),
+  "reference_picker_search": s('.cdk-overlay-pane input[type="text"]', '.cdk-overlay-pane input'),
   # settings panel + its radio controls (verified live 2026-11-16)
   "settings_panel_candidates": s('.cdk-overlay-pane'),
   "settings_panel_marker": s('mat-button-toggle'),
@@ -68,9 +77,9 @@ flow_selectors = {
   "project_title": s('flow-editable-text'),
 }
 # keys the code can request that we have no guess for yet: left empty (feature skipped)
-unknown = """add_component_apply_button add_component_detail add_component_listbox add_component_mobile_close
-add_component_mobile_filter_list add_component_mobile_filter_trigger add_component_option add_component_root
-add_menu_upload_tab add_to_prompt_menu_item advanced_menu_add_to_prompt_button advanced_menu_characters_tab
+unknown = """add_component_detail add_component_mobile_close
+add_component_mobile_filter_list add_component_mobile_filter_trigger
+add_to_prompt_menu_item advanced_menu_add_to_prompt_button advanced_menu_characters_tab
 advanced_menu_voices_tab agent_instruction_dialog agent_mode_active agent_panel_close agent_panel_owner
 compact_layout_marker edit_link flow_agent_instruction_done_button flow_agent_toggle_button
 flow_chat_agent_close_button flow_tab_slider_trigger grid_size_small_button icon_element ingredient_chip_thumbnail
@@ -81,7 +90,7 @@ tab_button_generic tile_error_owner tile_video_owner video_duration_slider video
 video_duration_tab video_mode_frames video_mode_ingredients video_resolution_tab video_upload_confirm
 warning_icon media_viewer_owner prompt_clear_button composer_advanced_menu_button tile_retry_button
 tile_error_message tile_display_name project_error_indicator flow_credit_limit_alert new_project_button
-model_picker_button add_menu_upload_media_button ingredient_bar""".split()
+model_picker_button ingredient_bar""".split()
 for k in unknown:
     flow_selectors.setdefault(k, s('[data-566flow-unmapped]'))
 

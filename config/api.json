@@ -73,8 +73,15 @@
             "route": "native"
           }
         ],
-        "image_fallback_chain": ["1K", "2K", "4K"],
-        "video_fallback_chain": ["720p", "1080p"]
+        "image_fallback_chain": [
+          "1K",
+          "2K",
+          "4K"
+        ],
+        "video_fallback_chain": [
+          "720p",
+          "1080p"
+        ]
       },
       "durations": [
         {
