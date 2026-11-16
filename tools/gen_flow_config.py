@@ -28,14 +28,16 @@ flow_selectors = {
   # Without `attribute` the tile selector resolved to null -> no tile was ever seen
   # -> every Task waited for the full timeout ("No new results after submit").
   "tile_container": s('flow-grid-tile-container', attribute="data-media-id",
-                      persistent_id_attribute="data-media-id"),
+                      persistent_id_attribute="data-media-id",
+                      # tile aria-label = file/display name (used to find our own upload)
+                      display_name_attribute="aria-label"),
   "tile_image": s('flow-image-tile img[data-media-id]', 'flow-image-tile img.image',
                   attribute="data-media-id", persistent_id_attribute="data-media-id"),
   "tile_video": s('flow-video-tile video'),
   "tile_video_poster": s('flow-video-tile img.thumbnail'),
   "tile_video_owner": s('flow-video-tile'),
-  "tile_pending": s('flow-grid-tile-container [role="progressbar"]', 'flow-grid-tile-container mat-progress-bar',
-                    'flow-grid-tile-container mat-spinner'),
+  # verified live 2026-11-16: uploads and generations show <flow-pending-tile> (x%) until done
+  "tile_pending": s('flow-pending-tile', 'flow-grid-tile-container [role="progressbar"]'),
   "flow_scroll_container": s('cdk-virtual-scroll-viewport'),
   "context_menu": s('.mat-mdc-menu-panel', '[role="menu"]'),
   "menu_item": s('.mat-mdc-menu-item', '[role="menuitem"]'),
@@ -132,6 +134,21 @@ flow_selectors = {
                                first_item_fallback={"enabled": True, "value": "small",
                                                     "group_selectors": ['flow-toggles[aria-label*="kích thước"]',
                                                                         'flow-toggles[aria-label*="size" i]']}),
+  # --- third pass (2026-11-16): upload/ref/error flow, from live DOM + Flow bundle ---
+  "tile_display_name": s('span.footer-title', '.footer-title'),
+  "tile_error_owner": s('flow-error-tile'),
+  "tile_error_message": s('.error-message-text', '.error-message'),
+  "tile_retry_button": s('flow-error-tile button', icon_text="refresh"),
+  "warning_icon": s('mat-icon', text_match=["warning"]),
+  # video upload shows "Quyền sử dụng video này" -> [Huỷ] [Tôi đồng ý, không hiện lại] [Tôi đồng ý];
+  # click the plain "Tôi đồng ý" (last button), never the "don't show again" one.
+  "video_upload_confirm": s('mat-dialog-container .agree-actions-group button:last-child',
+                            text_match=["Tôi đồng ý", "I agree"]),
+  "upload_consent_confirm": s('mat-dialog-container .agree-actions-group button:last-child',
+                              text_match=["Tôi đồng ý", "I agree"]),
+  # tile right-click menu -> "Thêm vào câu lệnh" (icon add_2): how references get attached
+  "add_to_prompt_menu_item": s('[role="menuitem"]', icon_text="add_2",
+                               text_match=["Thêm vào câu lệnh", "Add to prompt"]),
   "show_tile_details_setting": s('mat-slide-toggle button[aria-label*="chi tiết về ô"]',
                                  'mat-slide-toggle button[aria-label*="tile details" i]'),
 }

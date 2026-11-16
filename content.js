@@ -23279,18 +23279,32 @@ if (location.origin !== "https://flow.google.com") {
               return "project_changed";
             if ((live.routePrefix || "") !== (uploadTarget?.routePrefix || ""))
               return "route_changed";
-            if (
-              message.manualUpload === true
-                ? _flowStopEpoch !== uploadStopEpoch
-                : shouldStop
-            ) {
+            // 566Flow: only a stop issued AFTER this upload began cancels it.
+            // The global shouldStop flag stays true after any earlier run was
+            // stopped, which used to abort every later Motion/workflow upload.
+            if (_flowStopEpoch !== uploadStopEpoch) {
               return message.manualUpload === true
                 ? "stop_epoch_changed"
                 : "execution_stopped";
             }
             return null;
           };
-          const uploadStopped = () => uploadStopReason() !== null;
+          let uploadAbortLogged = false;
+          const uploadStopped = () => {
+            const reason = uploadStopReason();
+            if (reason !== null && !uploadAbortLogged) {
+              uploadAbortLogged = true;
+              console.warn(
+                "[FlowUploadAbort]",
+                JSON.stringify({
+                  reason,
+                  requestId: uploadRequestId || null,
+                  visibility: document.visibilityState,
+                }),
+              );
+            }
+            return reason !== null;
+          };
           const beforeUploadStopReason = uploadStopReason();
           console.log(
             "[FlowUploadStopScope]",
@@ -23649,9 +23663,12 @@ if (location.origin !== "https://flow.google.com") {
                       bubbles: true,
                     }),
                   );
-                  await _waitVideoConfirmModal();
+                  await _waitVideoConfirmModal(uploadStopped);
                 } else {
-                  const buttonUpload = await _uploadFileViaUploadButton(file);
+                  const buttonUpload = await _uploadFileViaUploadButton(
+                    file,
+                    uploadStopped,
+                  );
                   if (buttonUpload === true || buttonUpload?.success === true) {
                     console.log(
                       '[uploadFilesToFlow] video upload qua n\xFAt "T\u1EA3i n\u1ED9i dung nghe nh\xECn l\xEAn" OK',

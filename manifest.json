@@ -21,8 +21,13 @@
   },
   "content_scripts": [
     {
-      "matches": ["https://flow.google.com/*"],
-      "js": ["diag-relay.js"],
+      "matches": [
+        "https://flow.google.com/*"
+      ],
+      "js": [
+        "src/core/Diag566.js",
+        "diag-relay.js"
+      ],
       "run_at": "document_start"
     },
     {
@@ -30,7 +35,9 @@
         "src/core/ConfigSnapshotAccess.js",
         "src/core/FlowObserverConfigRelay.js"
       ],
-      "matches": ["https://flow.google.com/*"],
+      "matches": [
+        "https://flow.google.com/*"
+      ],
       "run_at": "document_start"
     },
     {
@@ -53,18 +60,29 @@
         "floating-tracker-flow.js",
         "media-intercept-bridge.js"
       ],
-      "matches": ["https://flow.google.com/*"],
+      "matches": [
+        "https://flow.google.com/*"
+      ],
       "run_at": "document_idle"
     },
     {
-      "js": ["media-interceptor.js", "flow-v2-correlation-observer.js"],
-      "matches": ["https://flow.google.com/*"],
+      "js": [
+        "media-interceptor.js",
+        "flow-v2-correlation-observer.js"
+      ],
+      "matches": [
+        "https://flow.google.com/*"
+      ],
       "run_at": "document_start",
       "world": "MAIN"
     },
     {
-      "js": ["slate-bridge.js"],
-      "matches": ["https://flow.google.com/*"],
+      "js": [
+        "slate-bridge.js"
+      ],
+      "matches": [
+        "https://flow.google.com/*"
+      ],
       "run_at": "document_start",
       "world": "MAIN"
     },
@@ -74,7 +92,9 @@
         "floating-tracker-chat.js",
         "chat-content-chatgpt.js"
       ],
-      "matches": ["*://chatgpt.com/*"],
+      "matches": [
+        "*://chatgpt.com/*"
+      ],
       "run_at": "document_idle"
     },
     {
@@ -83,7 +103,10 @@
         "floating-tracker-chat.js",
         "chat-content-grok.js"
       ],
-      "matches": ["https://grok.com/*", "https://*.grok.com/*"],
+      "matches": [
+        "https://grok.com/*",
+        "https://*.grok.com/*"
+      ],
       "run_at": "document_idle"
     },
     {
@@ -94,7 +117,9 @@
         "chat-content-gemini.js",
         "media-intercept-bridge.js"
       ],
-      "matches": ["*://gemini.google.com/*"],
+      "matches": [
+        "*://gemini.google.com/*"
+      ],
       "run_at": "document_idle"
     },
     {
@@ -103,12 +128,19 @@
         "floating-tracker-chat.js",
         "chat-content-muse.js"
       ],
-      "matches": ["https://muse.ai/*", "https://*.muse.ai/*"],
+      "matches": [
+        "https://muse.ai/*",
+        "https://*.muse.ai/*"
+      ],
       "run_at": "document_idle"
     },
     {
-      "js": ["media-interceptor.js"],
-      "matches": ["*://gemini.google.com/*"],
+      "js": [
+        "media-interceptor.js"
+      ],
+      "matches": [
+        "*://gemini.google.com/*"
+      ],
       "run_at": "document_start",
       "world": "MAIN"
     },
@@ -127,8 +159,13 @@
         "*://*.polar.sh/*",
         "*://*.sepay.vn/*"
       ],
-      "js": ["i2p-content.js"],
-      "matches": ["http://*/*", "https://*/*"],
+      "js": [
+        "i2p-content.js"
+      ],
+      "matches": [
+        "http://*/*",
+        "https://*/*"
+      ],
       "run_at": "document_idle"
     }
   ],
@@ -199,7 +236,10 @@
   "version": "1.3.165",
   "web_accessible_resources": [
     {
-      "matches": ["https://labs.google/*", "https://flow.google.com/*"],
+      "matches": [
+        "https://labs.google/*",
+        "https://flow.google.com/*"
+      ],
       "resources": [
         "sidebar.html",
         "workflow-editor.html",
@@ -224,8 +264,14 @@
       ]
     },
     {
-      "matches": ["http://*/*", "https://*/*"],
-      "resources": ["icons/icon-48.png", "icons/icon-128.png"]
+      "matches": [
+        "http://*/*",
+        "https://*/*"
+      ],
+      "resources": [
+        "icons/icon-48.png",
+        "icons/icon-128.png"
+      ]
     }
   ]
 }

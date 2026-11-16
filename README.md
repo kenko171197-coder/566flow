@@ -37,6 +37,17 @@ runs on-device via `src/core/LocalBackend.js`. All features unlocked, no quota.
 - Motion Studio lists only models with `supports_ref_video` (the Omni models).
 - Model picker selectors now read `.label` only (the retirement `.caption` broke matching).
 
+### Third pass — Studio/Motion + reference images (live-verified on Flow)
+- Uploads: own tile is found by `aria-label` / `span.footer-title`; progress is
+  `<flow-pending-tile>`; errors are `<flow-error-tile>` (retry icon `refresh`).
+- Video upload rights dialog ("Quyền sử dụng video này") → clicks plain "Tôi đồng ý".
+- References attach via tile right-click → "Thêm vào câu lệnh" (`add_2`).
+- Uploads are cancelled only by a stop issued after they start (a stale stop flag
+  used to abort every later upload → `UPLOAD_ABORTED`). Abort reason is logged.
+- Missing system timeouts added (`flow_ref_scan_timeout_ms`, …).
+- Motion profile has transcription prompts (Gemini/ChatGPT web, no server).
+- `566Diag` now also records the extension's own warnings on flow.google.com.
+
 ### Not tested yet
 Auto-download, Angles, Effects. Tile error detection (`tile_error_*`) is still unmapped:
 a failed tile is only noticed at the timeout.

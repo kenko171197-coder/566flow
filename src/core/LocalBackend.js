@@ -184,6 +184,15 @@
           api_timeout_ms: 30000,
           image_timeout_ms: 180000,
           video_timeout_ms: 600000,
+          // 566Flow: keys the UI reads but the old server sent; missing ones
+          // made SystemConfig return 0 -> "*_TIMEOUT_CONFIG_UNAVAILABLE".
+          flow_ref_scan_timeout_ms: 60000,
+          tile_completion_timeout_ms: 600000,
+          video_download_timeout_ms: 180000,
+          thumbnail_cache_max_size: 300,
+          workflow_image_preview_cache_max_bytes: 52428800,
+          workflow_image_preview_fetch_concurrency: 4,
+          workflow_image_preview_timeout_ms: 30000,
           chatgpt_timeout_ms: 180000,
           sse_heartbeat_timeout_ms: 60000,
           sse_max_delay_ms: 30000,
@@ -193,7 +202,7 @@
           broadcast_heartbeat_ms: 2000,
           broadcast_leader_timeout_ms: 6000,
         },
-        { version: 1 },
+        { version: 2 },
       );
 
     // ---- execution tokens (issued locally)

@@ -70,7 +70,8 @@
       "supports_frames": true,
       "max_ref_images": {
         "video": 1
-      }
+      },
+      "max_edit_video_duration": 8
     }
   },
   {
@@ -105,6 +106,7 @@
       "max_ref_images": {
         "video": 1
       },
+      "max_edit_video_duration": 8,
       "deprecated": "2026-12-05"
     }
   },

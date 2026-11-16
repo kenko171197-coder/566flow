@@ -48,7 +48,8 @@
               "flow-grid-tile-container"
             ],
             "attribute": "data-media-id",
-            "persistent_id_attribute": "data-media-id"
+            "persistent_id_attribute": "data-media-id",
+            "display_name_attribute": "aria-label"
           },
           "tile_image": {
             "selectors": [
@@ -75,9 +76,8 @@
           },
           "tile_pending": {
             "selectors": [
-              "flow-grid-tile-container [role=\"progressbar\"]",
-              "flow-grid-tile-container mat-progress-bar",
-              "flow-grid-tile-container mat-spinner"
+              "flow-pending-tile",
+              "flow-grid-tile-container [role=\"progressbar\"]"
             ]
           },
           "flow_scroll_container": {
@@ -433,6 +433,65 @@
               ]
             }
           },
+          "tile_display_name": {
+            "selectors": [
+              "span.footer-title",
+              ".footer-title"
+            ]
+          },
+          "tile_error_owner": {
+            "selectors": [
+              "flow-error-tile"
+            ]
+          },
+          "tile_error_message": {
+            "selectors": [
+              ".error-message-text",
+              ".error-message"
+            ]
+          },
+          "tile_retry_button": {
+            "selectors": [
+              "flow-error-tile button"
+            ],
+            "icon_text": "refresh"
+          },
+          "warning_icon": {
+            "selectors": [
+              "mat-icon"
+            ],
+            "text_match": [
+              "warning"
+            ]
+          },
+          "video_upload_confirm": {
+            "selectors": [
+              "mat-dialog-container .agree-actions-group button:last-child"
+            ],
+            "text_match": [
+              "Tôi đồng ý",
+              "I agree"
+            ]
+          },
+          "upload_consent_confirm": {
+            "selectors": [
+              "mat-dialog-container .agree-actions-group button:last-child"
+            ],
+            "text_match": [
+              "Tôi đồng ý",
+              "I agree"
+            ]
+          },
+          "add_to_prompt_menu_item": {
+            "selectors": [
+              "[role=\"menuitem\"]"
+            ],
+            "icon_text": "add_2",
+            "text_match": [
+              "Thêm vào câu lệnh",
+              "Add to prompt"
+            ]
+          },
           "show_tile_details_setting": {
             "selectors": [
               "mat-slide-toggle button[aria-label*=\"chi tiết về ô\"]",
@@ -455,11 +514,6 @@
             ]
           },
           "add_component_mobile_filter_trigger": {
-            "selectors": [
-              "[data-566flow-unmapped]"
-            ]
-          },
-          "add_to_prompt_menu_item": {
             "selectors": [
               "[data-566flow-unmapped]"
             ]
@@ -529,11 +583,6 @@
               "[data-566flow-unmapped]"
             ]
           },
-          "tile_error_owner": {
-            "selectors": [
-              "[data-566flow-unmapped]"
-            ]
-          },
           "video_duration_slider": {
             "selectors": [
               "[data-566flow-unmapped]"
@@ -544,32 +593,7 @@
               "[data-566flow-unmapped]"
             ]
           },
-          "video_upload_confirm": {
-            "selectors": [
-              "[data-566flow-unmapped]"
-            ]
-          },
-          "warning_icon": {
-            "selectors": [
-              "[data-566flow-unmapped]"
-            ]
-          },
           "media_viewer_owner": {
-            "selectors": [
-              "[data-566flow-unmapped]"
-            ]
-          },
-          "tile_retry_button": {
-            "selectors": [
-              "[data-566flow-unmapped]"
-            ]
-          },
-          "tile_error_message": {
-            "selectors": [
-              "[data-566flow-unmapped]"
-            ]
-          },
-          "tile_display_name": {
             "selectors": [
               "[data-566flow-unmapped]"
             ]

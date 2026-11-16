@@ -13,7 +13,9 @@
   const where =
     typeof document === "undefined"
       ? "sw"
-      : (location.pathname.split("/").pop() || "page").replace(".html", "");
+      : location.protocol.startsWith("http")
+        ? "flow-page"
+        : (location.pathname.split("/").pop() || "page").replace(".html", "");
   const text = (v) => {
     if (v instanceof Error)
       return `${v.name}: ${v.message} @ ${(v.stack || "").split("\n").slice(1, 3).join(" ").trim()}`;
@@ -27,9 +29,12 @@
   let queue = Promise.resolve();
   const NOISE =
     /\[SSE\]|\[Watermark\]|\[WM\]|Motion Studio|MCP status check|mcp\/tokens|workflow-templates|Model catalog not ready/;
+  const ON_PAGE = typeof location !== "undefined" && location.protocol.startsWith("http");
   function record(kind, args) {
     const joined = args.map(text).join(" ");
     if (NOISE.test(joined)) return;
+    // On flow.google.com only keep the extension's own tagged logs ([Xxx] ...).
+    if (ON_PAGE && !/^\[[A-Za-z0-9:_ -]+\]/.test(joined)) return;
     const entry = {
       t: new Date().toISOString().slice(11, 19),
       where,
