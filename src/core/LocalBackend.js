@@ -183,6 +183,24 @@
     if (path.startsWith("usage/") || path === "mcp/executor-heartbeat") return ok({});
     if (path.startsWith("sse/")) return fail("SSE_DISABLED", 404);
 
+    // ---- public/admin-provided defaults: nothing to override locally
+    if (path === "default-settings") return ok({}, { version: 1 });
+    if (
+      path === "workflow-node-types" ||
+      path === "providers" ||
+      path === "provider-voices" ||
+      path === "workflows/shared-with-me"
+    )
+      return ok([]);
+    if (
+      path === "location/me" ||
+      path === "validation-rules" ||
+      path === "announcement" ||
+      path === "provider-models/presentation" ||
+      path.startsWith("i18n/")
+    )
+      return ok({});
+
     // ---- user settings
     if (path === "settings") {
       const db = await readDb();

@@ -69,7 +69,7 @@ tab_button_generic tile_error_owner tile_video_owner video_duration_slider video
 video_duration_tab video_mode_frames video_mode_ingredients video_resolution_tab video_upload_confirm
 warning_icon media_viewer_owner""".split()
 for k in unknown:
-    flow_selectors.setdefault(k, s())
+    flow_selectors.setdefault(k, s('[data-566flow-unmapped]'))
 
 dom = json.load(open(root/"config/dom.json"))
 dom["flow"] = {"selectors": {}, "profiles": {"v2": {
@@ -86,7 +86,7 @@ check = """// Paste into DevTools console on https://flow.google.com (project pa
   const sel = %s;
   const rows = Object.entries(sel).map(([key, v]) => {
     let n = -1;
-    try { n = v.selectors.length ? document.querySelectorAll(v.selectors.join(", ")).length : -2; } catch (e) { n = -3; }
+    try { n = v.selectors.join(", ") === "[data-566flow-unmapped]" ? -2 : document.querySelectorAll(v.selectors.join(", ")).length; } catch (e) { n = -3; }
     return { key, matches: n === -2 ? "(no selector yet)" : n === -3 ? "(invalid selector)" : n };
   });
   console.table(rows);

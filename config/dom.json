@@ -184,160 +184,264 @@
             ]
           },
           "add_component_apply_button": {
-            "selectors": []
+            "selectors": [
+              "[data-566flow-unmapped]"
+            ]
           },
           "add_component_detail": {
-            "selectors": []
+            "selectors": [
+              "[data-566flow-unmapped]"
+            ]
           },
           "add_component_listbox": {
-            "selectors": []
+            "selectors": [
+              "[data-566flow-unmapped]"
+            ]
           },
           "add_component_mobile_close": {
-            "selectors": []
+            "selectors": [
+              "[data-566flow-unmapped]"
+            ]
           },
           "add_component_mobile_filter_list": {
-            "selectors": []
+            "selectors": [
+              "[data-566flow-unmapped]"
+            ]
           },
           "add_component_mobile_filter_trigger": {
-            "selectors": []
+            "selectors": [
+              "[data-566flow-unmapped]"
+            ]
           },
           "add_component_option": {
-            "selectors": []
+            "selectors": [
+              "[data-566flow-unmapped]"
+            ]
           },
           "add_component_root": {
-            "selectors": []
+            "selectors": [
+              "[data-566flow-unmapped]"
+            ]
           },
           "add_menu_upload_tab": {
-            "selectors": []
+            "selectors": [
+              "[data-566flow-unmapped]"
+            ]
           },
           "add_to_prompt_menu_item": {
-            "selectors": []
+            "selectors": [
+              "[data-566flow-unmapped]"
+            ]
           },
           "advanced_menu_add_to_prompt_button": {
-            "selectors": []
+            "selectors": [
+              "[data-566flow-unmapped]"
+            ]
           },
           "advanced_menu_characters_tab": {
-            "selectors": []
+            "selectors": [
+              "[data-566flow-unmapped]"
+            ]
           },
           "advanced_menu_voices_tab": {
-            "selectors": []
+            "selectors": [
+              "[data-566flow-unmapped]"
+            ]
           },
           "agent_instruction_dialog": {
-            "selectors": []
+            "selectors": [
+              "[data-566flow-unmapped]"
+            ]
           },
           "agent_mode_active": {
-            "selectors": []
+            "selectors": [
+              "[data-566flow-unmapped]"
+            ]
           },
           "agent_panel_close": {
-            "selectors": []
+            "selectors": [
+              "[data-566flow-unmapped]"
+            ]
           },
           "agent_panel_owner": {
-            "selectors": []
+            "selectors": [
+              "[data-566flow-unmapped]"
+            ]
           },
           "compact_layout_marker": {
-            "selectors": []
+            "selectors": [
+              "[data-566flow-unmapped]"
+            ]
           },
           "edit_link": {
-            "selectors": []
+            "selectors": [
+              "[data-566flow-unmapped]"
+            ]
           },
           "flow_agent_instruction_done_button": {
-            "selectors": []
+            "selectors": [
+              "[data-566flow-unmapped]"
+            ]
           },
           "flow_agent_toggle_button": {
-            "selectors": []
+            "selectors": [
+              "[data-566flow-unmapped]"
+            ]
           },
           "flow_chat_agent_close_button": {
-            "selectors": []
+            "selectors": [
+              "[data-566flow-unmapped]"
+            ]
           },
           "flow_tab_slider_trigger": {
-            "selectors": []
+            "selectors": [
+              "[data-566flow-unmapped]"
+            ]
           },
           "grid_size_small_button": {
-            "selectors": []
+            "selectors": [
+              "[data-566flow-unmapped]"
+            ]
           },
           "icon_element": {
-            "selectors": []
+            "selectors": [
+              "[data-566flow-unmapped]"
+            ]
           },
           "ingredient_chip_thumbnail": {
-            "selectors": []
+            "selectors": [
+              "[data-566flow-unmapped]"
+            ]
           },
           "ingredient_image_chip": {
-            "selectors": []
+            "selectors": [
+              "[data-566flow-unmapped]"
+            ]
           },
           "ingredient_remove_button": {
-            "selectors": []
+            "selectors": [
+              "[data-566flow-unmapped]"
+            ]
           },
           "ingredient_video_chip": {
-            "selectors": []
+            "selectors": [
+              "[data-566flow-unmapped]"
+            ]
           },
           "mention_inline_chip": {
-            "selectors": []
+            "selectors": [
+              "[data-566flow-unmapped]"
+            ]
           },
           "page_settings_grid_size": {
-            "selectors": []
+            "selectors": [
+              "[data-566flow-unmapped]"
+            ]
           },
           "page_settings_grid_view": {
-            "selectors": []
+            "selectors": [
+              "[data-566flow-unmapped]"
+            ]
           },
           "page_settings_root": {
-            "selectors": []
+            "selectors": [
+              "[data-566flow-unmapped]"
+            ]
           },
           "page_settings_trigger": {
-            "selectors": []
+            "selectors": [
+              "[data-566flow-unmapped]"
+            ]
           },
           "reference_picker_project": {
-            "selectors": []
+            "selectors": [
+              "[data-566flow-unmapped]"
+            ]
           },
           "reference_picker_search": {
-            "selectors": []
+            "selectors": [
+              "[data-566flow-unmapped]"
+            ]
           },
           "reference_picker_thumbnail": {
-            "selectors": []
+            "selectors": [
+              "[data-566flow-unmapped]"
+            ]
           },
           "settings_panel_candidates": {
-            "selectors": []
+            "selectors": [
+              "[data-566flow-unmapped]"
+            ]
           },
           "settings_panel_marker": {
-            "selectors": []
+            "selectors": [
+              "[data-566flow-unmapped]"
+            ]
           },
           "show_tile_details_setting": {
-            "selectors": []
+            "selectors": [
+              "[data-566flow-unmapped]"
+            ]
           },
           "tab_button_generic": {
-            "selectors": []
+            "selectors": [
+              "[data-566flow-unmapped]"
+            ]
           },
           "tile_error_owner": {
-            "selectors": []
+            "selectors": [
+              "[data-566flow-unmapped]"
+            ]
           },
           "tile_video_owner": {
-            "selectors": []
+            "selectors": [
+              "[data-566flow-unmapped]"
+            ]
           },
           "video_duration_slider": {
-            "selectors": []
+            "selectors": [
+              "[data-566flow-unmapped]"
+            ]
           },
           "video_duration_slider_value": {
-            "selectors": []
+            "selectors": [
+              "[data-566flow-unmapped]"
+            ]
           },
           "video_duration_tab": {
-            "selectors": []
+            "selectors": [
+              "[data-566flow-unmapped]"
+            ]
           },
           "video_mode_frames": {
-            "selectors": []
+            "selectors": [
+              "[data-566flow-unmapped]"
+            ]
           },
           "video_mode_ingredients": {
-            "selectors": []
+            "selectors": [
+              "[data-566flow-unmapped]"
+            ]
           },
           "video_resolution_tab": {
-            "selectors": []
+            "selectors": [
+              "[data-566flow-unmapped]"
+            ]
           },
           "video_upload_confirm": {
-            "selectors": []
+            "selectors": [
+              "[data-566flow-unmapped]"
+            ]
           },
           "warning_icon": {
-            "selectors": []
+            "selectors": [
+              "[data-566flow-unmapped]"
+            ]
           },
           "media_viewer_owner": {
-            "selectors": []
+            "selectors": [
+              "[data-566flow-unmapped]"
+            ]
           }
         }
       }
