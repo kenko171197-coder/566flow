@@ -227,6 +227,15 @@
       path === "workflows/shared-with-me"
     )
       return ok([]);
+    // deep tools fall back to their built-in presets/effects/node types
+    if (
+      path === "angle-presets" ||
+      path === "image-effects" ||
+      path === "workflow-node-types" ||
+      path === "creator-templates" ||
+      path.startsWith("creator-templates/")
+    )
+      return ok([]);
     if (
       path === "location/me" ||
       path === "validation-rules" ||
