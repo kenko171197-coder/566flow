@@ -55,7 +55,7 @@ flow_selectors = {
   "video_mode_frames": s('mat-button-toggle button[role="radio"]', icon_text="crop_free"),
   "video_mode_ingredients": s('mat-button-toggle button[role="radio"]', icon_text="chrome_extension"),
   "ratio_button": s('mat-button-toggle button[role="radio"]',
-                    ratio_icons={"16:9": "crop_16_9", "9:16": "crop_9_16", "1:1": "crop_square"}),
+                    ratio_icons={"16:9": "crop_16_9", "4:3": "crop_landscape", "1:1": "crop_square", "3:4": "crop_portrait", "9:16": "crop_9_16"}),
   "quantity_button": s('mat-button-toggle button[role="radio"]', text_format="x{value}"),
   "tab_button_generic": s('mat-button-toggle button[role="radio"]'),
   # page state

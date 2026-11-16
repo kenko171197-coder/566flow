@@ -11,8 +11,9 @@ def model(value, name, media, default=False):
             "is_default": default, "config": {"dom_value": name, "dom_aliases": [name]}}
 
 models = [
-    model("omni-1.2-flash", "Omni 1.2 Flash", "image", True),
-    model("omni-1.1-flash", "Omni 1.1 Flash", "image"),
+    model("nano-banana-pro", "Nano Banana Pro", "image", True),
+    model("nano-banana-2-lite", "Nano Banana 2 Lite", "image"),
+    model("nano-banana-2.1", "Nano Banana 2.1", "image"),
     model("veo-3.1-lite", "Veo 3.1 - Lite", "video", True),
     model("veo-3.1-fast", "Veo 3.1 - Fast", "video"),
     model("veo-3.1-quality", "Veo 3.1 - Quality", "video"),
@@ -20,7 +21,8 @@ models = [
 (root / "config/models.json").write_text(json.dumps(models, indent=2, ensure_ascii=False) + "\n")
 
 ratios = {
-    "image": [{"value": "16:9", "label": "16:9", "is_default": True}, {"value": "9:16", "label": "9:16"}],
+    "image": [{"value": v, "label": v, **({"is_default": True} if v == "16:9" else {})}
+              for v in ["16:9", "4:3", "1:1", "3:4", "9:16"]],
     "video": [{"value": "16:9", "label": "16:9", "is_default": True}, {"value": "9:16", "label": "9:16"}],
 }
 res = {

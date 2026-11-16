@@ -1,27 +1,40 @@
 [
   {
     "provider": "flow",
-    "value": "omni-1.2-flash",
-    "name": "Omni 1.2 Flash",
+    "value": "nano-banana-pro",
+    "name": "Nano Banana Pro",
     "media_type": "image",
     "is_default": true,
     "config": {
-      "dom_value": "Omni 1.2 Flash",
+      "dom_value": "Nano Banana Pro",
       "dom_aliases": [
-        "Omni 1.2 Flash"
+        "Nano Banana Pro"
       ]
     }
   },
   {
     "provider": "flow",
-    "value": "omni-1.1-flash",
-    "name": "Omni 1.1 Flash",
+    "value": "nano-banana-2-lite",
+    "name": "Nano Banana 2 Lite",
     "media_type": "image",
     "is_default": false,
     "config": {
-      "dom_value": "Omni 1.1 Flash",
+      "dom_value": "Nano Banana 2 Lite",
       "dom_aliases": [
-        "Omni 1.1 Flash"
+        "Nano Banana 2 Lite"
+      ]
+    }
+  },
+  {
+    "provider": "flow",
+    "value": "nano-banana-2.1",
+    "name": "Nano Banana 2.1",
+    "media_type": "image",
+    "is_default": false,
+    "config": {
+      "dom_value": "Nano Banana 2.1",
+      "dom_aliases": [
+        "Nano Banana 2.1"
       ]
     }
   },
