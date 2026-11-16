@@ -66,7 +66,10 @@ api["flow"]["configs"].update({
     "radix_trigger_button_pattern": "button[id^='radix-'][id$='{suffix}']",
     "ratios": ratios, "download_resolutions": res, "durations": durations,
     "supports": {"image_mode": True, "video": True, "humanized": False,
-                 "ratio": True, "ref_image": True, "max_ref_images": 3},
+                 "ratio": True, "quantity": True, "ref_image": True, "max_ref_images": 3},
+    # Without this key every model resolved to 0 reference images
+    # ("Model no ref support" in Gen and Motion).
+    "max_ref_images": {"image": 3, "video_ingredients": 3, "video": 1},
 })
 json.dump(api, open(root / "config/api.json", "w"), indent=2, ensure_ascii=False)
 print("models:", len(models), "| api.flow.configs keys:", list(api["flow"]["configs"]))

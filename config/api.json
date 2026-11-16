@@ -112,6 +112,7 @@
         "video": true,
         "humanized": false,
         "ratio": true,
+        "quantity": true,
         "ref_image": true,
         "max_ref_images": 3
       },
@@ -136,6 +137,11 @@
         "captcha_text": "captcha|xác minh rằng bạn không phải|verify you are human",
         "upload_blocked_text": "không thể tải lên|tải lên thất bại|upload failed|couldn't upload|can't upload",
         "image_load_failed_text": "failed to load|không tải được"
+      },
+      "max_ref_images": {
+        "image": 3,
+        "video_ingredients": 3,
+        "video": 1
       }
     }
   },
