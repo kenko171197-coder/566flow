@@ -2,7 +2,8 @@
   "workflow": {
     "max_retries": 2,
     "flow_api_enabled": false,
-    "delay_nodes_sec": 5
+    "delay_nodes_sec": 5,
+    "timeout_sec": 900
   },
   "queue": {
     "batch_size": 4,
