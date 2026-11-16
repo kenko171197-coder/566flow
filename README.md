@@ -48,6 +48,17 @@ runs on-device via `src/core/LocalBackend.js`. All features unlocked, no quota.
 - Motion profile has transcription prompts (Gemini/ChatGPT web, no server).
 - `566Diag` now also records the extension's own warnings on flow.google.com.
 
+### Motion local server (`src/core/LocalMotionBackend.js`)
+Motion Studio was written against the original server's project state machine. It is
+now reproduced locally: settings/references/pause/run mode, source draft, split attempt,
+source commit, per-frame checkpoints (split/transcribe/upload/submit/monitor/persist),
+transcripts, frame rerun/recut/source/result edits, transcript rerun, finalize,
+generation-complete, reset, bulk-item, batch-snapshot, and the provider-web
+reservation calls used for Gemini/ChatGPT transcription. Writes are serialized.
+Old rows saved by the generic store are migrated on read.
+Test: `node tools/tests/motion-backend.test.js "$PWD"` (uses the client's own
+`MotionRunJournal.isGenerationComplete` and `MotionBatchSnapshot.classify`).
+
 ### Not tested yet
 Auto-download, Angles, Effects. Tile error detection (`tile_error_*`) is still unmapped:
 a failed tile is only noticed at the timeout.

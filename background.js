@@ -1,4 +1,8 @@
-importScripts("src/core/Diag566.js", "src/core/LocalBackend.js");
+importScripts(
+  "src/core/Diag566.js",
+  "src/core/LocalMotionBackend.js",
+  "src/core/LocalBackend.js",
+);
 LocalBackend.ensureLocalUser().catch(() => {});
 importScripts(
   "src/core/DeviceKeyStore.js",

@@ -142,6 +142,21 @@
     const data = message.data || {};
     const parts = path.split("/");
 
+    // ---- Motion Studio project state machine (see LocalMotionBackend.js)
+    if (self.LocalMotionBackend) {
+      const motion = await self.LocalMotionBackend.handle({
+        method,
+        path,
+        query,
+        data,
+        readDb,
+        writeDb,
+        ok,
+        fail,
+      });
+      if (motion) return motion;
+    }
+
     // ---- connectivity / enrollment (kept so legacy callers stay happy)
     if (path === "health") return ok({ status: "ok", mode: "local" });
     if (path === "enroll")
@@ -345,11 +360,6 @@
     if (path === "tools/motion-studio/templates/categories") return ok([]);
     if (path === "tools/motion-studio/templates" && method === "GET")
       return ok({ items: [], next_page: null, total: 0 });
-    if (
-      path === "tools/motion-studio/projects/batch-snapshot" ||
-      path === "tools/motion-studio/projects/bulk-item"
-    )
-      return ok({ data: [], items: [], projects: [] });
 
     // ---- generic local REST store for every other resource
     return genericStore(method, path, query, data);

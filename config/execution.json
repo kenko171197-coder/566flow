@@ -1,7 +1,8 @@
 {
   "workflow": {
     "max_retries": 2,
-    "flow_api_enabled": false
+    "flow_api_enabled": false,
+    "delay_nodes_sec": 5
   },
   "queue": {
     "batch_size": 4,
@@ -30,6 +31,7 @@
     ],
     "provider_web_muse_startup_timeout_ms": 60000,
     "provider_web_chatgpt_startup_timeout_ms": 60000,
-    "provider_web_gemini_startup_timeout_ms": 60000
+    "provider_web_gemini_startup_timeout_ms": 60000,
+    "provider_web_motion_enabled": true
   }
 }
