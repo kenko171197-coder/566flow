@@ -9,99 +9,123 @@
         "selectors": {
           "slate_editor": {
             "selectors": [
-              "div[data-slate-editor=\"true\"][contenteditable=\"true\"]",
-              "[role=\"textbox\"][contenteditable=\"true\"]"
+              "flow-rich-text-editor [contenteditable=\"true\"]",
+              "flow-base-prompt-box [contenteditable=\"true\"]"
             ]
           },
           "submit_button": {
             "selectors": [
-              "button[aria-label=\"Create\"]",
-              "button[aria-label=\"Generate\"]",
-              "button[type=\"submit\"]"
+              "flow-generate-icon-button button",
+              "flow-base-prompt-box button[type=\"submit\"]"
             ],
-            "icon_text": "arrow_forward",
-            "button_text": "Create"
+            "icon_text": "arrow_forward"
           },
-          "prompt_clear_button": {
+          "settings_button": {
             "selectors": [
-              "button[aria-label=\"Clear\"]",
-              "button[aria-label=\"Clear prompt\"]"
+              "flow-base-prompt-box button[class*=\"settings-\"]"
             ]
           },
-          "composer_advanced_menu_button": {
+          "flow_agent_toggle_button": {
             "selectors": [
-              "button[aria-haspopup=\"menu\"][aria-label*=\"dvanced\"]"
+              "flow-agent-mode-toggle-chip button",
+              "button.agent-mode-chip"
+            ],
+            "aria_pressed_on": "true"
+          },
+          "agent_mode_active": {
+            "selectors": [
+              "button.agent-mode-chip[aria-pressed=\"true\"]"
+            ]
+          },
+          "add_component_root": {
+            "selectors": [
+              "flow-add-menu"
             ]
           },
           "tile_container": {
             "selectors": [
-              "[data-tile-id]",
-              "div[data-index] [data-tile-id]"
-            ]
-          },
-          "tile_pending": {
-            "selectors": [
-              "[data-tile-id] [role=\"progressbar\"]",
-              "[data-tile-id] [aria-busy=\"true\"]"
+              "flow-grid-tile-container"
             ]
           },
           "tile_image": {
             "selectors": [
-              "[data-tile-id] img"
-            ]
+              "flow-image-tile img[data-media-id]",
+              "flow-image-tile img.image"
+            ],
+            "attribute": "data-media-id"
           },
           "tile_video": {
             "selectors": [
-              "[data-tile-id] video"
+              "flow-video-tile video"
             ]
           },
           "tile_video_poster": {
             "selectors": [
-              "[data-tile-id] video[poster]"
+              "flow-video-tile img.thumbnail"
             ]
           },
-          "tile_retry_button": {
+          "tile_video_owner": {
             "selectors": [
-              "[data-tile-id] button[aria-label*=\"etry\"]"
+              "flow-video-tile"
             ]
           },
-          "tile_error_message": {
+          "tile_pending": {
             "selectors": [
-              "[data-tile-id] [role=\"alert\"]"
+              "flow-grid-tile-container [role=\"progressbar\"]",
+              "flow-grid-tile-container mat-progress-bar",
+              "flow-grid-tile-container mat-spinner"
             ]
           },
-          "tile_display_name": {
+          "flow_scroll_container": {
             "selectors": [
-              "[data-tile-id] [data-name]"
+              "cdk-virtual-scroll-viewport"
+            ]
+          },
+          "context_menu": {
+            "selectors": [
+              ".mat-mdc-menu-panel",
+              "[role=\"menu\"]"
+            ]
+          },
+          "menu_item": {
+            "selectors": [
+              ".mat-mdc-menu-item",
+              "[role=\"menuitem\"]"
+            ]
+          },
+          "download_submenu": {
+            "selectors": [
+              ".mat-mdc-menu-panel",
+              "[role=\"menu\"]"
+            ]
+          },
+          "download_submenu_item": {
+            "selectors": [
+              ".mat-mdc-menu-item",
+              "[role=\"menuitem\"]"
+            ]
+          },
+          "model_picker_panel": {
+            "selectors": [
+              "[role=\"listbox\"]",
+              ".mat-mdc-menu-panel"
+            ]
+          },
+          "model_picker_item": {
+            "selectors": [
+              "[role=\"option\"]",
+              ".mat-mdc-menu-item"
+            ]
+          },
+          "icon_element": {
+            "selectors": [
+              "mat-icon"
             ]
           },
           "signed_out_indicator": {
             "selectors": [
               "a[href*=\"accounts.google.com/ServiceLogin\"]",
               "a[href*=\"accounts.google.com/signin\"]"
-            ]
-          },
-          "project_error_indicator": {
-            "selectors": [
-              "[data-error-page]"
-            ]
-          },
-          "flow_credit_limit_alert": {
-            "selectors": [
-              "[role=\"alert\"]",
-              "[role=\"alertdialog\"]"
-            ]
-          },
-          "flow_scroll_container": {
-            "selectors": [
-              "[data-virtuoso-scroller=\"true\"]",
-              "main"
-            ]
-          },
-          "new_project_button": {
-            "selectors": [
-              "button[aria-label*=\"New project\"]",
-              "button[aria-label*=\"new project\"]"
             ]
           },
           "project_card": {
@@ -121,66 +145,7 @@
           },
           "project_title": {
             "selectors": [
-              "[data-project-title]",
-              "h1"
-            ]
-          },
-          "settings_button": {
-            "selectors": [
-              "button[aria-label*=\"etting\"]",
-              "button[aria-haspopup=\"dialog\"][aria-label*=\"etting\"]"
-            ]
-          },
-          "model_picker_button": {
-            "selectors": [
-              "button[aria-label*=\"odel\"]"
-            ]
-          },
-          "model_picker_panel": {
-            "selectors": [
-              "[role=\"listbox\"]",
-              "[role=\"menu\"]"
-            ]
-          },
-          "model_picker_item": {
-            "selectors": [
-              "[role=\"option\"]",
-              "[role=\"menuitemradio\"]"
-            ]
-          },
-          "menu_item": {
-            "selectors": [
-              "[role=\"menuitem\"]"
-            ]
-          },
-          "context_menu": {
-            "selectors": [
-              "[role=\"menu\"]"
-            ]
-          },
-          "download_menu_trigger": {
-            "selectors": [
-              "button[aria-label*=\"ownload\"]"
-            ]
-          },
-          "download_submenu": {
-            "selectors": [
-              "[role=\"menu\"]"
-            ]
-          },
-          "download_submenu_item": {
-            "selectors": [
-              "[role=\"menuitem\"]"
-            ]
-          },
-          "add_menu_upload_media_button": {
-            "selectors": [
-              "button[aria-label*=\"pload\"]"
-            ]
-          },
-          "ingredient_bar": {
-            "selectors": [
-              "[data-ingredient-bar]"
+              "flow-editable-text"
             ]
           },
           "add_component_apply_button": {
@@ -218,11 +183,6 @@
               "[data-566flow-unmapped]"
             ]
           },
-          "add_component_root": {
-            "selectors": [
-              "[data-566flow-unmapped]"
-            ]
-          },
           "add_menu_upload_tab": {
             "selectors": [
               "[data-566flow-unmapped]"
@@ -253,11 +213,6 @@
               "[data-566flow-unmapped]"
             ]
           },
-          "agent_mode_active": {
-            "selectors": [
-              "[data-566flow-unmapped]"
-            ]
-          },
           "agent_panel_close": {
             "selectors": [
               "[data-566flow-unmapped]"
@@ -283,11 +238,6 @@
               "[data-566flow-unmapped]"
             ]
           },
-          "flow_agent_toggle_button": {
-            "selectors": [
-              "[data-566flow-unmapped]"
-            ]
-          },
           "flow_chat_agent_close_button": {
             "selectors": [
               "[data-566flow-unmapped]"
@@ -299,11 +249,6 @@
             ]
           },
           "grid_size_small_button": {
-            "selectors": [
-              "[data-566flow-unmapped]"
-            ]
-          },
-          "icon_element": {
             "selectors": [
               "[data-566flow-unmapped]"
             ]
@@ -389,11 +334,6 @@
             ]
           },
           "tile_error_owner": {
-            "selectors": [
-              "[data-566flow-unmapped]"
-            ]
-          },
-          "tile_video_owner": {
             "selectors": [
               "[data-566flow-unmapped]"
             ]

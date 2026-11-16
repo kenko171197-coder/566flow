@@ -14,46 +14,38 @@ def s(*selectors, **extra):
     return d
 
 flow_selectors = {
-  # prompt composer
-  "slate_editor": s('div[data-slate-editor="true"][contenteditable="true"]',
-                    '[role="textbox"][contenteditable="true"]'),
-  "submit_button": s('button[aria-label="Create"]', 'button[aria-label="Generate"]',
-                     'button[type="submit"]', icon_text="arrow_forward", button_text="Create"),
-  "prompt_clear_button": s('button[aria-label="Clear"]', 'button[aria-label="Clear prompt"]'),
-  "composer_advanced_menu_button": s('button[aria-haspopup="menu"][aria-label*="dvanced"]'),
-  # tiles (generated results)
-  "tile_container": s('[data-tile-id]', 'div[data-index] [data-tile-id]'),
-  "tile_pending": s('[data-tile-id] [role="progressbar"]', '[data-tile-id] [aria-busy="true"]'),
-  "tile_image": s('[data-tile-id] img'),
-  "tile_video": s('[data-tile-id] video'),
-  "tile_video_poster": s('[data-tile-id] video[poster]'),
-  "tile_retry_button": s('[data-tile-id] button[aria-label*="etry"]'),
-  "tile_error_message": s('[data-tile-id] [role="alert"]'),
-  "tile_display_name": s('[data-tile-id] [data-name]'),
+  # Verified on flow.google.com (2026-11-16): Angular custom elements, locale-independent.
+  "slate_editor": s('flow-rich-text-editor [contenteditable="true"]',
+                    'flow-base-prompt-box [contenteditable="true"]'),
+  "submit_button": s('flow-generate-icon-button button', 'flow-base-prompt-box button[type="submit"]',
+                     icon_text="arrow_forward"),
+  "settings_button": s('flow-base-prompt-box button[class*="settings-"]'),
+  "flow_agent_toggle_button": s('flow-agent-mode-toggle-chip button', 'button.agent-mode-chip',
+                                aria_pressed_on="true"),
+  "agent_mode_active": s('button.agent-mode-chip[aria-pressed="true"]'),
+  "add_component_root": s('flow-add-menu'),
+  "tile_container": s('flow-grid-tile-container'),
+  "tile_image": s('flow-image-tile img[data-media-id]', 'flow-image-tile img.image',
+                  attribute="data-media-id"),
+  "tile_video": s('flow-video-tile video'),
+  "tile_video_poster": s('flow-video-tile img.thumbnail'),
+  "tile_video_owner": s('flow-video-tile'),
+  "tile_pending": s('flow-grid-tile-container [role="progressbar"]', 'flow-grid-tile-container mat-progress-bar',
+                    'flow-grid-tile-container mat-spinner'),
+  "flow_scroll_container": s('cdk-virtual-scroll-viewport'),
+  "context_menu": s('.mat-mdc-menu-panel', '[role="menu"]'),
+  "menu_item": s('.mat-mdc-menu-item', '[role="menuitem"]'),
+  "download_submenu": s('.mat-mdc-menu-panel', '[role="menu"]'),
+  "download_submenu_item": s('.mat-mdc-menu-item', '[role="menuitem"]'),
+  "model_picker_panel": s('[role="listbox"]', '.mat-mdc-menu-panel'),
+  "model_picker_item": s('[role="option"]', '.mat-mdc-menu-item'),
+  "icon_element": s('mat-icon'),
   # page state
-  "signed_out_indicator": s('a[href*="accounts.google.com/ServiceLogin"]',
-                            'a[href*="accounts.google.com/signin"]'),
-  "project_error_indicator": s('[data-error-page]'),
-  "flow_credit_limit_alert": s('[role="alert"]', '[role="alertdialog"]'),
-  "flow_scroll_container": s('[data-virtuoso-scroller="true"]', 'main'),
-  # navigation / projects
-  "new_project_button": s('button[aria-label*="New project"]', 'button[aria-label*="new project"]'),
+  "signed_out_indicator": s('a[href*="accounts.google.com/ServiceLogin"]', 'a[href*="accounts.google.com/signin"]'),
   "project_card": s('a[href*="/project/"]'),
   "project_link": s('a[href*="/project/"]'),
   "projects_page": s('main'),
-  "project_title": s('[data-project-title]', 'h1'),
-  # settings / model
-  "settings_button": s('button[aria-label*="etting"]', 'button[aria-haspopup="dialog"][aria-label*="etting"]'),
-  "model_picker_button": s('button[aria-label*="odel"]'),
-  "model_picker_panel": s('[role="listbox"]', '[role="menu"]'),
-  "model_picker_item": s('[role="option"]', '[role="menuitemradio"]'),
-  "menu_item": s('[role="menuitem"]'),
-  "context_menu": s('[role="menu"]'),
-  "download_menu_trigger": s('button[aria-label*="ownload"]'),
-  "download_submenu": s('[role="menu"]'),
-  "download_submenu_item": s('[role="menuitem"]'),
-  "add_menu_upload_media_button": s('button[aria-label*="pload"]'),
-  "ingredient_bar": s('[data-ingredient-bar]'),
+  "project_title": s('flow-editable-text'),
 }
 # keys the code can request that we have no guess for yet: left empty (feature skipped)
 unknown = """add_component_apply_button add_component_detail add_component_listbox add_component_mobile_close
@@ -95,4 +87,4 @@ check = """// Paste into DevTools console on https://flow.google.com (project pa
 })();
 """ % json.dumps(flow_selectors, ensure_ascii=False)
 open(root/"tools/flow-selector-check.js", "w").write(check)
-print("keys:", len(flow_selectors), "guessed:", len(flow_selectors)-len(unknown))
+print("keys:", len(flow_selectors), "guessed:", sum(1 for v in flow_selectors.values() if v['selectors']!=['[data-566flow-unmapped]']))
