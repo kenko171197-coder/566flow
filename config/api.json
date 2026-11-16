@@ -44,24 +44,43 @@
       "download_resolutions": {
         "image": [
           {
-            "value": "360p",
-            "label": "360p",
-            "menu_label": "360p"
+            "value": "1K",
+            "menu_label": "1K",
+            "route": "native",
+            "is_default": true
           },
           {
-            "value": "720p",
-            "label": "720p",
-            "menu_label": "720p",
-            "is_default": true
+            "value": "2K",
+            "menu_label": "2K",
+            "route": "native"
+          },
+          {
+            "value": "4K",
+            "menu_label": "4K",
+            "route": "native"
           }
         ],
         "video": [
           {
             "value": "720p",
-            "label": "720p",
             "menu_label": "720p",
+            "route": "native",
             "is_default": true
+          },
+          {
+            "value": "1080p",
+            "menu_label": "1080p",
+            "route": "native"
           }
+        ],
+        "image_fallback_chain": [
+          "1K",
+          "2K",
+          "4K"
+        ],
+        "video_fallback_chain": [
+          "720p",
+          "1080p"
         ]
       },
       "durations": [
