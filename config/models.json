@@ -40,15 +40,87 @@
   },
   {
     "provider": "flow",
+    "value": "omni-1.2-flash",
+    "name": "Omni 1.2 Flash",
+    "media_type": "video",
+    "is_default": true,
+    "config": {
+      "dom_value": "Omni 1.2 Flash",
+      "dom_aliases": [
+        "Omni 1.2 Flash"
+      ],
+      "duration_tier": "default",
+      "generation_resolutions": {
+        "enabled": true,
+        "default": "720p",
+        "options": [
+          {
+            "value": "360p",
+            "label": "360p",
+            "dom_value": "360p"
+          },
+          {
+            "value": "720p",
+            "label": "720p",
+            "dom_value": "720p"
+          }
+        ]
+      },
+      "supports_ref_video": true,
+      "supports_frames": true,
+      "max_ref_images": {
+        "video": 1
+      }
+    }
+  },
+  {
+    "provider": "flow",
+    "value": "omni-1.1-flash",
+    "name": "Omni 1.1 Flash",
+    "media_type": "video",
+    "is_default": false,
+    "config": {
+      "dom_value": "Omni 1.1 Flash",
+      "dom_aliases": [
+        "Omni 1.1 Flash"
+      ],
+      "generation_resolutions": {
+        "enabled": true,
+        "default": "720p",
+        "options": [
+          {
+            "value": "360p",
+            "label": "360p",
+            "dom_value": "360p"
+          },
+          {
+            "value": "720p",
+            "label": "720p",
+            "dom_value": "720p"
+          }
+        ]
+      },
+      "supports_ref_video": true,
+      "supports_frames": true,
+      "max_ref_images": {
+        "video": 1
+      },
+      "deprecated": "2026-12-05"
+    }
+  },
+  {
+    "provider": "flow",
     "value": "veo-3.1-lite",
     "name": "Veo 3.1 - Lite",
     "media_type": "video",
-    "is_default": true,
+    "is_default": false,
     "config": {
       "dom_value": "Veo 3.1 - Lite",
       "dom_aliases": [
         "Veo 3.1 - Lite"
-      ]
+      ],
+      "duration_tier": "default",
+      "supports_frames": true
     }
   },
   {
@@ -61,7 +133,10 @@
       "dom_value": "Veo 3.1 - Fast",
       "dom_aliases": [
         "Veo 3.1 - Fast"
-      ]
+      ],
+      "duration_tier": "default",
+      "supports_frames": true,
+      "deprecated": "2026-12-05"
     }
   },
   {
@@ -74,7 +149,10 @@
       "dom_value": "Veo 3.1 - Quality",
       "dom_aliases": [
         "Veo 3.1 - Quality"
-      ]
+      ],
+      "duration_tier": "default",
+      "supports_frames": true,
+      "deprecated": "2026-12-05"
     }
   }
 ]

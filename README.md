@@ -30,6 +30,13 @@ runs on-device via `src/core/LocalBackend.js`. All features unlocked, no quota.
   the bulk modal rejected object ratios (`MOTION_BULK_CONFIG_UNAVAILABLE`). Fixed.
 - Startup config prefetch no longer fails because the AI-tools config (server feature) is empty.
 
+### Models (verified on flow.google.com 2026-11-16)
+- Image: Nano Banana Pro (default), Nano Banana 2 Lite, Nano Banana 2.1.
+- Video: **Omni 1.2 Flash (default)**, Omni 1.1 Flash, Veo 3.1 Lite/Fast/Quality.
+  Omni 1.1, Veo Fast, Veo Quality retire on Dec 5. Omni: 360p/720p; Omni 1.1 also 4–10s.
+- Motion Studio lists only models with `supports_ref_video` (the Omni models).
+- Model picker selectors now read `.label` only (the retirement `.caption` broke matching).
+
 ### Not tested yet
 Auto-download, Angles, Effects. Tile error detection (`tile_error_*`) is still unmapped:
 a failed tile is only noticed at the timeout.

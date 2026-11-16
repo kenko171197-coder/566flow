@@ -15174,7 +15174,10 @@ if (location.origin !== "https://flow.google.com") {
           continue;
         }
         const tab = tabs.find((el) => {
-          const text = (el.textContent || "").trim().toLowerCase();
+          const labelEl = resCfg?.label_selector
+            ? el.querySelector(resCfg.label_selector)
+            : null;
+          const text = ((labelEl || el).textContent || "").trim().toLowerCase();
           const id = el.id || "";
           const controls = el.getAttribute("aria-controls") || "";
           return (

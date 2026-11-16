@@ -120,17 +120,29 @@
               "aria-disabled"
             ]
           },
+          "model_picker_button": {
+            "selectors": [
+              "button.mat-mdc-menu-trigger:has(.model-select-trigger-content)",
+              ".settings-content button.mat-mdc-menu-trigger"
+            ]
+          },
           "model_picker_panel": {
             "selectors": [
-              "[role=\"listbox\"]",
+              ".flow-model-picker-panel",
               ".mat-mdc-menu-panel"
             ]
           },
           "model_picker_item": {
             "selectors": [
-              "[role=\"option\"]",
-              ".mat-mdc-menu-item"
-            ]
+              "flow-menu-item.model-select-option button",
+              ".flow-model-picker-panel .mat-mdc-menu-item"
+            ],
+            "label_selector": ".item-text .label",
+            "ignored_text_selectors": [
+              ".caption"
+            ],
+            "selected_owner": "flow-menu-item",
+            "class_selected": "selected"
           },
           "icon_element": {
             "selectors": [
@@ -262,6 +274,18 @@
             "selectors": [
               "mat-button-toggle button[role=\"radio\"]"
             ]
+          },
+          "video_resolution_tab": {
+            "selectors": [
+              "mat-button-toggle button[role=\"radio\"]"
+            ],
+            "label_selector": ".toggle-text"
+          },
+          "video_duration_tab": {
+            "selectors": [
+              "mat-button-toggle button[role=\"radio\"]"
+            ],
+            "label_selector": ".toggle-text"
           },
           "signed_out_indicator": {
             "selectors": [
@@ -520,16 +544,6 @@
               "[data-566flow-unmapped]"
             ]
           },
-          "video_duration_tab": {
-            "selectors": [
-              "[data-566flow-unmapped]"
-            ]
-          },
-          "video_resolution_tab": {
-            "selectors": [
-              "[data-566flow-unmapped]"
-            ]
-          },
           "video_upload_confirm": {
             "selectors": [
               "[data-566flow-unmapped]"
@@ -566,11 +580,6 @@
             ]
           },
           "flow_credit_limit_alert": {
-            "selectors": [
-              "[data-566flow-unmapped]"
-            ]
-          },
-          "model_picker_button": {
             "selectors": [
               "[data-566flow-unmapped]"
             ]

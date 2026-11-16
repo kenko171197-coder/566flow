@@ -43,8 +43,15 @@ flow_selectors = {
   "download_submenu": s('.mat-mdc-menu-panel', '[role="menu"]'),
   "download_submenu_item": s('.mat-mdc-menu-item', '[role="menuitem"]',
                              disabled_attributes=["disabled", "aria-disabled"]),
-  "model_picker_panel": s('[role="listbox"]', '.mat-mdc-menu-panel'),
-  "model_picker_item": s('[role="option"]', '.mat-mdc-menu-item'),
+  # model picker (verified live 2026-11-16): trigger lives in the composer settings
+  # popover; items carry the name in .label and a retirement note in .caption, so
+  # matching must read .label only (exact-label match otherwise fails).
+  "model_picker_button": s('button.mat-mdc-menu-trigger:has(.model-select-trigger-content)',
+                           '.settings-content button.mat-mdc-menu-trigger'),
+  "model_picker_panel": s('.flow-model-picker-panel', '.mat-mdc-menu-panel'),
+  "model_picker_item": s('flow-menu-item.model-select-option button', '.flow-model-picker-panel .mat-mdc-menu-item',
+                         label_selector='.item-text .label', ignored_text_selectors=['.caption'],
+                         selected_owner='flow-menu-item', class_selected='selected'),
   "icon_element": s('mat-icon'),
   "ingredient_bar": s('flow-add-menu', 'flow-base-prompt-box [class*="ingredient"]'),
   "ingredient_remove_button": s('button[aria-label*="emove"]', 'button[aria-label*="X\u00f3a"]',
@@ -73,6 +80,10 @@ flow_selectors = {
                     ratio_icons={"16:9": "crop_16_9", "4:3": "crop_landscape", "1:1": "crop_square", "3:4": "crop_portrait", "9:16": "crop_9_16"}),
   "quantity_button": s('mat-button-toggle button[role="radio"]', text_format="x{value}"),
   "tab_button_generic": s('mat-button-toggle button[role="radio"]'),
+  # video resolution (Omni: 360p/720p) and duration (Omni 1.1: 4/6/8/10 giây) radios.
+  # 360p carries an "info" icon, so read only .toggle-text.
+  "video_resolution_tab": s('mat-button-toggle button[role="radio"]', label_selector='.toggle-text'),
+  "video_duration_tab": s('mat-button-toggle button[role="radio"]', label_selector='.toggle-text'),
   # page state
   "signed_out_indicator": s('a[href*="accounts.google.com/ServiceLogin"]', 'a[href*="accounts.google.com/signin"]'),
   "project_card": s('a[href*="/project/"]'),

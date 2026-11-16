@@ -6,17 +6,35 @@ Ratios 16:9, 9:16. Image res 360p/720p. Video durations 4/6/8/10s."""
 import json, pathlib
 root = pathlib.Path(__file__).resolve().parent.parent
 
-def model(value, name, media, default=False):
+def model(value, name, media, default=False, **cfg):
+    config = {"dom_value": name, "dom_aliases": [name]}
+    config.update(cfg)
     return {"provider": "flow", "value": value, "name": name, "media_type": media,
-            "is_default": default, "config": {"dom_value": name, "dom_aliases": [name]}}
+            "is_default": default, "config": config}
 
+# Flow video menu, verified live 2026-11-16 (vi UI). Omni 1.1 Flash, Veo 3.1 Fast and
+# Veo 3.1 Quality show "Sẽ ngừng hoạt động vào ngày 5 thg 12" (retiring Dec 5).
+#  - Omni 1.2 Flash : resolution 360p/720p, no duration picker
+#  - Omni 1.1 Flash : resolution 360p/720p, duration 4/6/8/10s
+#  - Veo 3.1 *      : no resolution / duration picker (fixed 8s)
+OMNI_RES = {"enabled": True, "default": "720p", "options": [
+    {"value": "360p", "label": "360p", "dom_value": "360p"},
+    {"value": "720p", "label": "720p", "dom_value": "720p"}]}
 models = [
     model("nano-banana-pro", "Nano Banana Pro", "image", True),
     model("nano-banana-2-lite", "Nano Banana 2 Lite", "image"),
     model("nano-banana-2.1", "Nano Banana 2.1", "image"),
-    model("veo-3.1-lite", "Veo 3.1 - Lite", "video", True),
-    model("veo-3.1-fast", "Veo 3.1 - Fast", "video"),
-    model("veo-3.1-quality", "Veo 3.1 - Quality", "video"),
+    model("omni-1.2-flash", "Omni 1.2 Flash", "video", True, duration_tier="default",
+          generation_resolutions=OMNI_RES, supports_ref_video=True, supports_frames=True,
+          max_ref_images={"video": 1}),
+    model("omni-1.1-flash", "Omni 1.1 Flash", "video", generation_resolutions=OMNI_RES,
+          supports_ref_video=True, supports_frames=True, max_ref_images={"video": 1},
+          deprecated="2026-12-05"),
+    model("veo-3.1-lite", "Veo 3.1 - Lite", "video", duration_tier="default", supports_frames=True),
+    model("veo-3.1-fast", "Veo 3.1 - Fast", "video", duration_tier="default", supports_frames=True,
+          deprecated="2026-12-05"),
+    model("veo-3.1-quality", "Veo 3.1 - Quality", "video", duration_tier="default", supports_frames=True,
+          deprecated="2026-12-05"),
 ]
 (root / "config/models.json").write_text(json.dumps(models, indent=2, ensure_ascii=False) + "\n")
 

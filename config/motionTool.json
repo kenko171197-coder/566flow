@@ -4,7 +4,7 @@
   "revision": 1,
   "prompt_variant": "timeline",
   "settings": {
-    "flow_model": "veo-3.1-fast",
+    "flow_model": "omni-1.2-flash",
     "flow_duration": "8s",
     "flow_resolution": "720p",
     "execution_mode": "sequential",
