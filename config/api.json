@@ -4,7 +4,73 @@
       "flow_v2_driver": {
         "enabled": true
       },
-      "radix_trigger_button_pattern": "button[id^='radix-'][id$='{suffix}']"
+      "radix_trigger_button_pattern": "button[id^='radix-'][id$='{suffix}']",
+      "ratios": {
+        "image": [
+          {
+            "value": "16:9",
+            "label": "16:9",
+            "is_default": true
+          },
+          {
+            "value": "9:16",
+            "label": "9:16"
+          }
+        ],
+        "video": [
+          {
+            "value": "16:9",
+            "label": "16:9",
+            "is_default": true
+          },
+          {
+            "value": "9:16",
+            "label": "9:16"
+          }
+        ]
+      },
+      "download_resolutions": {
+        "image": [
+          {
+            "value": "360p",
+            "label": "360p",
+            "menu_label": "360p"
+          },
+          {
+            "value": "720p",
+            "label": "720p",
+            "menu_label": "720p",
+            "is_default": true
+          }
+        ],
+        "video": [
+          {
+            "value": "720p",
+            "label": "720p",
+            "menu_label": "720p",
+            "is_default": true
+          }
+        ]
+      },
+      "durations": [
+        {
+          "value": "4s",
+          "label": "4 giây"
+        },
+        {
+          "value": "6s",
+          "label": "6 giây"
+        },
+        {
+          "value": "8s",
+          "label": "8 giây"
+        },
+        {
+          "value": "10s",
+          "label": "10 giây",
+          "is_default": true
+        }
+      ]
     }
   },
   "chatgpt": {

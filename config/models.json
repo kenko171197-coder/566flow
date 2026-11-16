@@ -1,1 +1,67 @@
-{}
+[
+  {
+    "provider": "flow",
+    "value": "omni-1.2-flash",
+    "name": "Omni 1.2 Flash",
+    "media_type": "image",
+    "is_default": true,
+    "config": {
+      "dom_value": "Omni 1.2 Flash",
+      "dom_aliases": [
+        "Omni 1.2 Flash"
+      ]
+    }
+  },
+  {
+    "provider": "flow",
+    "value": "omni-1.1-flash",
+    "name": "Omni 1.1 Flash",
+    "media_type": "image",
+    "is_default": false,
+    "config": {
+      "dom_value": "Omni 1.1 Flash",
+      "dom_aliases": [
+        "Omni 1.1 Flash"
+      ]
+    }
+  },
+  {
+    "provider": "flow",
+    "value": "veo-3.1-lite",
+    "name": "Veo 3.1 - Lite",
+    "media_type": "video",
+    "is_default": true,
+    "config": {
+      "dom_value": "Veo 3.1 - Lite",
+      "dom_aliases": [
+        "Veo 3.1 - Lite"
+      ]
+    }
+  },
+  {
+    "provider": "flow",
+    "value": "veo-3.1-fast",
+    "name": "Veo 3.1 - Fast",
+    "media_type": "video",
+    "is_default": false,
+    "config": {
+      "dom_value": "Veo 3.1 - Fast",
+      "dom_aliases": [
+        "Veo 3.1 - Fast"
+      ]
+    }
+  },
+  {
+    "provider": "flow",
+    "value": "veo-3.1-quality",
+    "name": "Veo 3.1 - Quality",
+    "media_type": "video",
+    "is_default": false,
+    "config": {
+      "dom_value": "Veo 3.1 - Quality",
+      "dom_aliases": [
+        "Veo 3.1 - Quality"
+      ]
+    }
+  }
+]
