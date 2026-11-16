@@ -40,6 +40,12 @@ flow_selectors = {
   "model_picker_panel": s('[role="listbox"]', '.mat-mdc-menu-panel'),
   "model_picker_item": s('[role="option"]', '.mat-mdc-menu-item'),
   "icon_element": s('mat-icon'),
+  "ingredient_bar": s('flow-add-menu', 'flow-base-prompt-box [class*="ingredient"]'),
+  "ingredient_remove_button": s('button[aria-label*="emove"]', 'button[aria-label*="X\u00f3a"]',
+                                'flow-add-menu button[aria-label*="close"]', icon_text="close"),
+  "ingredient_image_chip": s('flow-add-menu [class*="image"]', '[data-ingredient-kind="image"]'),
+  "ingredient_video_chip": s('flow-add-menu [class*="video"]', '[data-ingredient-kind="video"]'),
+  "ingredient_chip_thumbnail": s('flow-add-menu img'),
   # page state
   "signed_out_indicator": s('a[href*="accounts.google.com/ServiceLogin"]', 'a[href*="accounts.google.com/signin"]'),
   "project_card": s('a[href*="/project/"]'),

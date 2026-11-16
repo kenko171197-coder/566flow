@@ -70,7 +70,15 @@
           "label": "10 giây",
           "is_default": true
         }
-      ]
+      ],
+      "supports": {
+        "image_mode": true,
+        "video": true,
+        "humanized": false,
+        "ratio": true,
+        "ref_image": true,
+        "max_ref_images": 3
+      }
     }
   },
   "chatgpt": {

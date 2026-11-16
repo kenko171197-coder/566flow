@@ -37,6 +37,8 @@ api["flow"]["configs"].update({
     "flow_v2_driver": {"enabled": True},
     "radix_trigger_button_pattern": "button[id^='radix-'][id$='{suffix}']",
     "ratios": ratios, "download_resolutions": res, "durations": durations,
+    "supports": {"image_mode": True, "video": True, "humanized": False,
+                 "ratio": True, "ref_image": True, "max_ref_images": 3},
 })
 json.dump(api, open(root / "config/api.json", "w"), indent=2, ensure_ascii=False)
 print("models:", len(models), "| api.flow.configs keys:", list(api["flow"]["configs"]))

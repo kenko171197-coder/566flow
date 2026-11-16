@@ -122,6 +122,37 @@
               "mat-icon"
             ]
           },
+          "ingredient_bar": {
+            "selectors": [
+              "flow-add-menu",
+              "flow-base-prompt-box [class*=\"ingredient\"]"
+            ]
+          },
+          "ingredient_remove_button": {
+            "selectors": [
+              "button[aria-label*=\"emove\"]",
+              "button[aria-label*=\"Xóa\"]",
+              "flow-add-menu button[aria-label*=\"close\"]"
+            ],
+            "icon_text": "close"
+          },
+          "ingredient_image_chip": {
+            "selectors": [
+              "flow-add-menu [class*=\"image\"]",
+              "[data-ingredient-kind=\"image\"]"
+            ]
+          },
+          "ingredient_video_chip": {
+            "selectors": [
+              "flow-add-menu [class*=\"video\"]",
+              "[data-ingredient-kind=\"video\"]"
+            ]
+          },
+          "ingredient_chip_thumbnail": {
+            "selectors": [
+              "flow-add-menu img"
+            ]
+          },
           "signed_out_indicator": {
             "selectors": [
               "a[href*=\"accounts.google.com/ServiceLogin\"]",
@@ -249,26 +280,6 @@
             ]
           },
           "grid_size_small_button": {
-            "selectors": [
-              "[data-566flow-unmapped]"
-            ]
-          },
-          "ingredient_chip_thumbnail": {
-            "selectors": [
-              "[data-566flow-unmapped]"
-            ]
-          },
-          "ingredient_image_chip": {
-            "selectors": [
-              "[data-566flow-unmapped]"
-            ]
-          },
-          "ingredient_remove_button": {
-            "selectors": [
-              "[data-566flow-unmapped]"
-            ]
-          },
-          "ingredient_video_chip": {
             "selectors": [
               "[data-566flow-unmapped]"
             ]
@@ -434,11 +445,6 @@
             ]
           },
           "add_menu_upload_media_button": {
-            "selectors": [
-              "[data-566flow-unmapped]"
-            ]
-          },
-          "ingredient_bar": {
             "selectors": [
               "[data-566flow-unmapped]"
             ]
