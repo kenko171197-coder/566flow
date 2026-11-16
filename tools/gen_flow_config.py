@@ -35,8 +35,10 @@ flow_selectors = {
   "flow_scroll_container": s('cdk-virtual-scroll-viewport'),
   "context_menu": s('.mat-mdc-menu-panel', '[role="menu"]'),
   "menu_item": s('.mat-mdc-menu-item', '[role="menuitem"]'),
+  "download_menu_trigger": s('.mat-mdc-menu-item', '[role="menuitem"]', icon_text="download"),
   "download_submenu": s('.mat-mdc-menu-panel', '[role="menu"]'),
-  "download_submenu_item": s('.mat-mdc-menu-item', '[role="menuitem"]'),
+  "download_submenu_item": s('.mat-mdc-menu-item', '[role="menuitem"]',
+                             disabled_attributes=["disabled", "aria-disabled"]),
   "model_picker_panel": s('[role="listbox"]', '.mat-mdc-menu-panel'),
   "model_picker_item": s('[role="option"]', '.mat-mdc-menu-item'),
   "icon_element": s('mat-icon'),
@@ -79,7 +81,7 @@ tab_button_generic tile_error_owner tile_video_owner video_duration_slider video
 video_duration_tab video_mode_frames video_mode_ingredients video_resolution_tab video_upload_confirm
 warning_icon media_viewer_owner prompt_clear_button composer_advanced_menu_button tile_retry_button
 tile_error_message tile_display_name project_error_indicator flow_credit_limit_alert new_project_button
-model_picker_button download_menu_trigger add_menu_upload_media_button ingredient_bar""".split()
+model_picker_button add_menu_upload_media_button ingredient_bar""".split()
 for k in unknown:
     flow_selectors.setdefault(k, s('[data-566flow-unmapped]'))
 

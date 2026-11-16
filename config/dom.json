@@ -93,6 +93,13 @@
               "[role=\"menuitem\"]"
             ]
           },
+          "download_menu_trigger": {
+            "selectors": [
+              ".mat-mdc-menu-item",
+              "[role=\"menuitem\"]"
+            ],
+            "icon_text": "download"
+          },
           "download_submenu": {
             "selectors": [
               ".mat-mdc-menu-panel",
@@ -103,6 +110,10 @@
             "selectors": [
               ".mat-mdc-menu-item",
               "[role=\"menuitem\"]"
+            ],
+            "disabled_attributes": [
+              "disabled",
+              "aria-disabled"
             ]
           },
           "model_picker_panel": {
@@ -472,11 +483,6 @@
             ]
           },
           "model_picker_button": {
-            "selectors": [
-              "[data-566flow-unmapped]"
-            ]
-          },
-          "download_menu_trigger": {
             "selectors": [
               "[data-566flow-unmapped]"
             ]
