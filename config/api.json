@@ -47,17 +47,20 @@
             "value": "1K",
             "menu_label": "1K",
             "route": "native",
-            "is_default": true
+            "is_default": true,
+            "label": "1K"
           },
           {
             "value": "2K",
             "menu_label": "2K",
-            "route": "native"
+            "route": "native",
+            "label": "2K"
           },
           {
             "value": "4K",
             "menu_label": "4K",
-            "route": "native"
+            "route": "native",
+            "label": "4K"
           }
         ],
         "video": [
@@ -65,12 +68,14 @@
             "value": "720p",
             "menu_label": "720p",
             "route": "native",
-            "is_default": true
+            "is_default": true,
+            "label": "720p"
           },
           {
             "value": "1080p",
             "menu_label": "1080p",
-            "route": "native"
+            "route": "native",
+            "label": "1080p"
           }
         ],
         "image_fallback_chain": [

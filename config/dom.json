@@ -46,14 +46,17 @@
           "tile_container": {
             "selectors": [
               "flow-grid-tile-container"
-            ]
+            ],
+            "attribute": "data-media-id",
+            "persistent_id_attribute": "data-media-id"
           },
           "tile_image": {
             "selectors": [
               "flow-image-tile img[data-media-id]",
               "flow-image-tile img.image"
             ],
-            "attribute": "data-media-id"
+            "attribute": "data-media-id",
+            "persistent_id_attribute": "data-media-id"
           },
           "tile_video": {
             "selectors": [

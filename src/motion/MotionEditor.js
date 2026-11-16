@@ -6451,7 +6451,7 @@
       select.value = MotionResolutionPolicy.preferredValue(resolutions, stored);
       select.disabled = scopeInvalid || busy || motionSettingsRunLocked();
       $("savePreferences").disabled = select.disabled;
-      ratios = ProviderConfigManager.getRatiosSync("flow", "video").filter(
+      ratios = ProviderConfigManager.getRatiosSync("flow", "video").map((r) => (typeof r === "string" ? r : r?.value)).filter(
         (value) =>
           typeof value === "string" && /^[0-9]{1,2}:[0-9]{1,2}$/.test(value),
       );

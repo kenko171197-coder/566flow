@@ -26,6 +26,7 @@ ratios = {
     "video": [{"value": "16:9", "label": "16:9", "is_default": True}, {"value": "9:16", "label": "9:16"}],
 }
 res = {
+    # NOTE: each item gets "label" below (Motion Studio requires value+label)
     "image": [{"value": "1K", "menu_label": "1K", "route": "native", "is_default": True},
               {"value": "2K", "menu_label": "2K", "route": "native"},
               {"value": "4K", "menu_label": "4K", "route": "native"}],
@@ -34,6 +35,9 @@ res = {
     "image_fallback_chain": ["1K", "2K", "4K"],
     "video_fallback_chain": ["720p", "1080p"],
 }
+for _k in ("image", "video"):
+    for _it in res[_k]:
+        _it.setdefault("label", _it["menu_label"])
 durations = [{"value": "4s", "label": "4 giây"}, {"value": "6s", "label": "6 giây"},
              {"value": "8s", "label": "8 giây"}, {"value": "10s", "label": "10 giây", "is_default": True}]
 

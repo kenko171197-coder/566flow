@@ -24,9 +24,13 @@ flow_selectors = {
                                 aria_pressed_on="true"),
   "agent_mode_active": s('button.agent-mode-chip[aria-pressed="true"]'),
   "add_component_root": s('flow-add-menu'),
-  "tile_container": s('flow-grid-tile-container'),
+  # the tile element has no id of its own; the id is <img data-media-id> inside it.
+  # Without `attribute` the tile selector resolved to null -> no tile was ever seen
+  # -> every Task waited for the full timeout ("No new results after submit").
+  "tile_container": s('flow-grid-tile-container', attribute="data-media-id",
+                      persistent_id_attribute="data-media-id"),
   "tile_image": s('flow-image-tile img[data-media-id]', 'flow-image-tile img.image',
-                  attribute="data-media-id"),
+                  attribute="data-media-id", persistent_id_attribute="data-media-id"),
   "tile_video": s('flow-video-tile video'),
   "tile_video_poster": s('flow-video-tile img.thumbnail'),
   "tile_video_owner": s('flow-video-tile'),

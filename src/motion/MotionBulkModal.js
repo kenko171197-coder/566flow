@@ -348,6 +348,7 @@ const _MotionBulkModal = class _MotionBulkModal {
     const ratios =
       pcm
         ?.getRatiosSync?.("flow", "video")
+        ?.map((r) => (typeof r === "string" ? r : r?.value))
         ?.filter(
           (value) =>
             typeof value === "string" && /^[0-9]{1,2}:[0-9]{1,2}$/.test(value),
@@ -1215,7 +1216,7 @@ const _MotionBulkModal = class _MotionBulkModal {
     MotionBulkCreator._context(this.userId, this.flowProjectId);
     const pcm = window.ProviderConfigManager;
     if (
-      !pcm.getRatiosSync("flow", "video")?.includes(settings.ratio) ||
+      !pcm.getRatiosSync("flow", "video")?.map((r) => (typeof r === "string" ? r : r?.value))?.includes(settings.ratio) ||
       !pcm
         .getDownloadResolutionsSync("flow")
         ?.video?.some(

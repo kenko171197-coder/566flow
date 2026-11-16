@@ -22,6 +22,14 @@ runs on-device via `src/core/LocalBackend.js`. All features unlocked, no quota.
 - **New project button**, **page settings** (grid/size/tile details), prompt clear button.
 - Error banner patterns (`error_patterns`), titles "566Flow", no "FREE" badge.
 
+### Second pass (same evening)
+- **Tasks still slow**: real cause found — `tile_container` had no `attribute`, so the
+  tile selector resolved to null and no result tile was ever seen. Now the tile id is read
+  from the inner `<img data-media-id>`.
+- **Studio**: now fails later at `flow_download_resolutions` (items lacked `label`) and
+  the bulk modal rejected object ratios (`MOTION_BULK_CONFIG_UNAVAILABLE`). Fixed.
+- Startup config prefetch no longer fails because the AI-tools config (server feature) is empty.
+
 ### Not tested yet
 Auto-download, Angles, Effects. Tile error detection (`tile_error_*`) is still unmapped:
 a failed tile is only noticed at the timeout.

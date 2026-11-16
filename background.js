@@ -23769,7 +23769,9 @@ async function _prefetchAllConfigs() {
         ProtectedConfigClient.fetch("private"),
         ProtectedConfigClient.fetch("models"),
         _fetchExecutionConfig(),
-        _aiToolsGetConfig(),
+        // 566Flow: AI tools (Prompt Assistant / Image-to-Prompt) need a server that
+        // does not exist yet; their empty config must not block the other configs.
+        _aiToolsGetConfig().catch(() => null),
       ]);
       if (!results[0] || !results[1] || !ProtectedConfigClient.status().ready)
         return false;
