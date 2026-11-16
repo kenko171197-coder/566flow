@@ -327,9 +327,13 @@
 
   // Make sure the UI always finds a signed-in local user with a routable base URL.
   async function ensureLocalUser() {
-    const stored = await chrome.storage.local.get(["af_auth"]);
+    const stored = await chrome.storage.local.get(["af_auth", "af_entitlements"]);
     const auth = stored.af_auth;
-    if (auth?.token === LOCAL_TOKEN && auth?.apiBaseUrl === LOCAL_API_BASE)
+    if (
+      auth?.token === LOCAL_TOKEN &&
+      auth?.apiBaseUrl === LOCAL_API_BASE &&
+      stored.af_entitlements?.entitlements?.pipeline_queue_enabled
+    )
       return;
     await chrome.storage.local.set({
       af_auth: {
