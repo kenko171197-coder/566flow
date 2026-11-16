@@ -20,13 +20,16 @@
     try { return JSON.stringify(v); } catch (_) { return String(v); }
   };
   let queue = Promise.resolve();
+  const NOISE = /\[SSE\]|\[Watermark\]|\[WM\]|Motion Studio|MCP status check|mcp\/tokens|workflow-templates|Model catalog not ready/;
   function record(kind, args) {
-    const entry = { t: new Date().toISOString().slice(11, 19), where, kind, msg: args.map(text).join(" ").slice(0, 600) };
+    const joined = args.map(text).join(" ");
+    if (NOISE.test(joined)) return;
+    const entry = { t: new Date().toISOString().slice(11, 19), where, kind, msg: joined.slice(0, 600) };
     queue = queue.then(async () => {
       try {
         const cur = (await chrome.storage.local.get([KEY]))[KEY] || [];
         cur.push(entry);
-        await chrome.storage.local.set({ [KEY]: cur.slice(-40) });
+        await chrome.storage.local.set({ [KEY]: cur.slice(-200) });
       } catch (_) {}
     });
   }
