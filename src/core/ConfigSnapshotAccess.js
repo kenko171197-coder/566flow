@@ -1,566 +1,93 @@
+/**
+ * 566Flow ConfigSnapshotAccess (local).
+ *
+ * Content scripts read provider selectors / API config from chrome.storage.local
+ * snapshots. The original added device-bound leases on top of that; 566Flow has
+ * no remote service, so access is always granted and `ensure()` just asks the
+ * service worker to (re)publish the local config snapshots from /config.
+ *
+ * Public surface is unchanged so existing callers keep working.
+ */
 (() => {
   "use strict";
   if (globalThis.ConfigSnapshotAccess) return;
-  const protectedKeys = new Set([
-    "toby_provider_configs",
-    "toby_provider_api_configs",
-    "toby_provider_models",
-    "toby_provider_dom_selectors",
-    "_tobyConfigsReady",
-    "af_chatgpt_config",
-    "af_grok_config",
-    "af_execution_config",
-  ]);
-  const privateProviders = new Set(["chatgpt", "grok", "gemini", "muse"]);
+
+  const OPERATIONS = ["dom", "api", "models", "execution"];
   let provider = null;
-  let epoch = 0;
-  let flight = null;
-  let lease = null;
-  let code = "AUTH_REQUIRED";
-  let ensureReason = "NOT_STARTED";
-  let retryAt = 0;
-  let flowDom = null;
-  let flowApi = null;
+  let ready = null;
   const listeners = new Set();
-  const failureSignatures = new Map();
-  const safeCode = (value) =>
-    typeof value === "string" && /^[A-Z][A-Z0-9_]{0,80}$/.test(value)
-      ? value
-      : null;
-  function reportFailure(stage, reason, result = null, elapsedMs = null) {
-    const detail = {
-      provider,
-      stage,
-      reason,
-      code: safeCode(code),
-      httpStatus: Number.isInteger(result?.httpStatus)
-        ? result.httpStatus
-        : null,
-      retryable: result?.retryable === true,
-    };
-    const keyRead = result?.error || result;
-    if (
-      code === "KEY_MISSING" &&
-      /^[a-z_]{1,40}$/.test(keyRead?.keyReadStage || "") &&
-      /^[A-Z_]{1,80}$/.test(keyRead?.keyReadReason || "")
-    ) {
-      detail.keyReadStage = keyRead.keyReadStage;
-      detail.keyReadReason = keyRead.keyReadReason;
-    }
-    if (
-      [
-        "EXTENSION_CONTEXT_INVALIDATED",
-        "RUNTIME_UNAVAILABLE",
-        "UNKNOWN_EXCEPTION",
-      ].includes(result?.exceptionReason)
-    )
-      detail.exceptionReason = result.exceptionReason;
-    const fingerprint = JSON.stringify(detail);
-    if (failureSignatures.get(stage) === fingerprint) return;
-    failureSignatures.set(stage, fingerprint);
-    const expected =
-      (stage === "invalidated" && code === "CONFIG_SCOPE_CHANGED") ||
-      detail.exceptionReason === "EXTENSION_CONTEXT_INVALIDATED";
-    try {
-      console[expected ? "info" : "warn"]?.(
-        "[ConfigSnapshotAccess]",
-        JSON.stringify({ ...detail, elapsedMs }),
-      );
-    } catch (_) {}
+
+  async function publish(force = false) {
+    const results = await Promise.all(
+      OPERATIONS.map((operation) =>
+        chrome.runtime
+          .sendMessage({ action: "FETCH_PROTECTED_CONFIG", operation, force })
+          .catch(() => null),
+      ),
+    );
+    return results.every((r) => r?.success === true);
   }
-  const exceptionReason = (error) =>
-    /Extension context invalidated/i.test(error?.message || "")
-      ? "EXTENSION_CONTEXT_INVALIDATED"
-      : error?.name === "TypeError" &&
-          /sendMessage|chrome\.runtime/.test(error?.message || "")
-        ? "RUNTIME_UNAVAILABLE"
-        : "UNKNOWN_EXCEPTION";
-  const leaseNow = () => globalThis.performance?.now?.() ?? Date.now();
-  const sameAccess = (a, b) =>
-    a?.contract === "device-v1" &&
-    b?.contract === "device-v1" &&
-    a.client_id === b.client_id &&
-    a.key_id === b.key_id &&
-    a.key_revision === b.key_revision &&
-    String(a.user_id) === String(b.user_id) &&
-    a.product_id === b.product_id;
-  function invalidate(reason, diagnostics = null) {
-    epoch++;
-    lease = null;
-    flight = null;
-    flowDom = flowApi = null;
-    code = reason || "CONFIG_ACCESS_REQUIRED";
-    ensureReason = "INVALIDATED";
-    reportFailure("invalidated", safeCode(reason), diagnostics);
-    for (const listener of listeners) listener(code);
-  }
+
   async function ensure() {
-    if (
-      lease &&
-      leaseNow() < lease.until &&
-      (provider !== "flow" || (flowDom && flowApi))
-    ) {
-      ensureReason = null;
-      return true;
-    }
-    if (flight) return flight;
-    if (!provider || Date.now() < retryAt) {
-      if (!provider) ensureReason = "PROVIDER_NOT_STARTED";
-      else if (!ensureReason) ensureReason = "RETRY_BACKOFF";
-      return false;
-    }
-    const started = epoch;
-    const startedAt = Date.now();
-    const task = (async () => {
-      try {
-        const dom = await chrome.runtime.sendMessage({
-          action: "getProviderConfigs",
-          provider,
-        });
-        const api = dom?.success
-          ? await chrome.runtime.sendMessage({
-              action: "getProviderApiConfigs",
-              provider,
-            })
-          : dom;
-        const access = api?.meta?.access;
-        if (started !== epoch) {
-          ensureReason = "EPOCH_CHANGED";
-          return false;
-        }
-        const domAccess = dom?.meta?.access;
-        if (
-          !dom?.success ||
-          !api?.success ||
-          !(access?.authorization_ttl_sec > 0) ||
-          !sameAccess(domAccess, access) ||
-          (provider === "flow" && (!dom.data || !api.data))
-        ) {
-          ensureReason = !dom?.success
-            ? "DOM_RPC_FAILED"
-            : !api?.success
-              ? "API_RPC_FAILED"
-              : !(access?.authorization_ttl_sec > 0)
-                ? "LEASE_TTL_INVALID"
-                : !sameAccess(domAccess, access)
-                  ? "DOM_API_ACCESS_MISMATCH"
-                  : "FLOW_RPC_ROW_MISSING";
-          code = api?.error?.code || "CONFIG_ACCESS_REQUIRED";
-          lease = null;
-          flowDom = flowApi = null;
-          retryAt = Date.now() + 1e3;
-          reportFailure(
-            "ensure_failed",
-            ensureReason,
-            api,
-            Date.now() - startedAt,
-          );
-          return false;
-        }
-        lease = {
-          access,
-          until: leaseNow() + access.authorization_ttl_sec * 1e3,
-        };
-        if (provider === "flow") {
-          flowDom = dom.data;
-          flowApi = api.data;
-        }
-        code = null;
-        ensureReason = null;
-        failureSignatures.clear();
-        return true;
-      } catch (error) {
-        if (started === epoch) {
-          lease = null;
-          flowDom = flowApi = null;
-          code = "CONFIG_CONTRACT_UNAVAILABLE";
-          ensureReason = "ENSURE_EXCEPTION";
-          retryAt = Date.now() + 1e3;
-          reportFailure(
-            "ensure_failed",
-            ensureReason,
-            { exceptionReason: exceptionReason(error) },
-            Date.now() - startedAt,
-          );
-        }
-        return false;
-      }
-    })();
-    flight = task;
-    try {
-      return await task;
-    } finally {
-      if (flight === task) flight = null;
-    }
-  }
-  async function read(keys, callback, diagnostics) {
-    let readReason = null;
-    let failedEnsureReason = null;
-    const result = await (async () => {
-      const list =
-        typeof keys === "string"
-          ? [keys]
-          : Array.isArray(keys)
-            ? keys
-            : Object.keys(keys || {});
-      const needsConfig =
-        keys === null || list.some((key) => protectedKeys.has(key));
-      const authorized = needsConfig ? await ensure() : false;
-      failedEnsureReason = !authorized ? ensureReason : null;
-      const started = epoch;
-      const stored = await chrome.storage.local.get([
-        ...new Set([
-          ...list,
-          "toby_config_access_scope",
-          "af_auth",
-          "toby_client_enrollment",
-        ]),
-      ]);
-      const sidecar = stored.toby_config_access_scope;
-      const access = lease?.access;
-      const tokenHash =
-        needsConfig && stored.af_auth?.token
-          ? Array.from(
-              new Uint8Array(
-                await crypto.subtle.digest(
-                  "SHA-256",
-                  new TextEncoder().encode(stored.af_auth.token),
-                ),
-              ),
-              (byte) => byte.toString(16).padStart(2, "0"),
-            ).join("")
-          : null;
-      const current = needsConfig
-        ? await chrome.storage.local.get([
-            "af_auth",
-            "toby_client_enrollment",
-            "toby_config_access_scope",
-          ])
-        : null;
-      const ownerStillCurrent =
-        !needsConfig ||
-        (current.af_auth?.token === stored.af_auth?.token &&
-          String(current.af_auth?.user?.id) ===
-            String(stored.af_auth?.user?.id) &&
-          current.af_auth?.apiBaseUrl === stored.af_auth?.apiBaseUrl &&
-          current.toby_client_enrollment?.client_id ===
-            stored.toby_client_enrollment?.client_id &&
-          current.toby_config_access_scope?.auth_epoch ===
-            sidecar?.auth_epoch &&
-          current.toby_config_access_scope?.token_hash === sidecar?.token_hash);
-      if (diagnostics && needsConfig) {
-        const checks = [
-          ["ENSURE_NOT_READY", authorized],
-          ["EPOCH_CHANGED", started === epoch],
-          ["OWNER_CHANGED_DURING_READ", ownerStillCurrent],
-          ["LEASE_MISSING", !!access],
-          ["LEASE_EXPIRED", !!access && leaseNow() < lease.until],
-          ["SIDECAR_CONTRACT_MISMATCH", sidecar?.contract === "device-v1"],
-          ["SIDECAR_CLIENT_MISMATCH", sidecar?.client_id === access?.client_id],
-          ["SIDECAR_KEY_MISMATCH", sidecar?.key_id === access?.key_id],
-          [
-            "SIDECAR_REVISION_MISMATCH",
-            sidecar?.key_revision === access?.key_revision,
-          ],
-          [
-            "SIDECAR_PRODUCT_MISMATCH",
-            sidecar?.product_id === access?.product_id,
-          ],
-          [
-            "AUTH_USER_MISMATCH",
-            String(stored.af_auth?.user?.id) === String(access?.user_id),
-          ],
-          ["TOKEN_HASH_MISMATCH", sidecar?.token_hash === tokenHash],
-          [
-            "ENROLLMENT_CLIENT_MISMATCH",
-            stored.toby_client_enrollment?.client_id === access?.client_id,
-          ],
-        ];
-        readReason = checks.find(([, passed]) => !passed)?.[0] || null;
-      }
-      const sameScope =
-        authorized &&
-        started === epoch &&
-        ownerStillCurrent &&
-        access &&
-        leaseNow() < lease.until &&
-        sidecar?.contract === "device-v1" &&
-        sidecar.client_id === access.client_id &&
-        sidecar.key_id === access.key_id &&
-        sidecar.key_revision === access.key_revision &&
-        sidecar.product_id === access.product_id &&
-        String(stored.af_auth?.user?.id) === String(access.user_id) &&
-        sidecar.token_hash === tokenHash &&
-        stored.toby_client_enrollment?.client_id === access.client_id;
-      const output = {};
-      for (const key of list) {
-        let value = stored[key];
-        if (key === "toby_provider_api_configs" && value?.data)
-          value = {
-            ...value,
-            data: Object.fromEntries(
-              Object.entries(value.data).map(([slug, row]) => [
-                slug,
-                privateProviders.has(slug) ? { ...row, configs: {} } : row,
-              ]),
-            ),
-          };
-        if (protectedKeys.has(key)) {
-          const scope =
-            key === "af_execution_config" || key === "_tobyConfigsReady"
-              ? sidecar
-              : value?.scope;
-          if (diagnostics && sameScope && !value && !readReason)
-            readReason = "SNAPSHOT_MISSING";
-          if (diagnostics && sameScope && value && !readReason) {
-            const scopeChecks = [
-              ["SNAPSHOT_CONTRACT_MISMATCH", scope?.contract === "device-v1"],
-              [
-                "SNAPSHOT_CLIENT_MISMATCH",
-                scope?.client_id === access.client_id,
-              ],
-              ["SNAPSHOT_KEY_MISMATCH", scope?.key_id === access.key_id],
-              [
-                "SNAPSHOT_REVISION_MISMATCH",
-                scope?.key_revision === access.key_revision,
-              ],
-              [
-                "SNAPSHOT_USER_MISMATCH",
-                String(scope?.user_id) === String(access.user_id),
-              ],
-              [
-                "SNAPSHOT_PRODUCT_MISMATCH",
-                scope?.product_id === access.product_id,
-              ],
-              ["SNAPSHOT_TOKEN_MISMATCH", scope?.token_hash === tokenHash],
-              [
-                "SNAPSHOT_EPOCH_MISMATCH",
-                scope?.auth_epoch === sidecar.auth_epoch,
-              ],
-              [
-                "SNAPSHOT_AUDIENCE_MISMATCH",
-                scope?.audience === sidecar.audience,
-              ],
-            ];
-            readReason = scopeChecks.find(([, passed]) => !passed)?.[0] || null;
-          }
-          if (
-            !sameScope ||
-            scope?.contract !== "device-v1" ||
-            scope.client_id !== access.client_id ||
-            scope.key_id !== access.key_id ||
-            scope.key_revision !== access.key_revision ||
-            String(scope.user_id) !== String(access.user_id) ||
-            scope.product_id !== access.product_id ||
-            scope.token_hash !== tokenHash ||
-            scope.auth_epoch !== sidecar.auth_epoch ||
-            scope.audience !== sidecar.audience
-          )
-            value = void 0;
-          if (
-            value &&
-            provider === "flow" &&
-            (key === "toby_provider_configs" ||
-              key === "toby_provider_api_configs")
-          ) {
-            const flow = key === "toby_provider_configs" ? flowDom : flowApi;
-            if (diagnostics && !flow && !readReason)
-              readReason = "FLOW_RAM_ROW_MISSING";
-            value = flow ? { ...value, data: { ...value.data, flow } } : void 0;
-          }
-        }
-        output[key] = value;
-      }
-      return output;
-    })().catch((error) => {
-      invalidate("LOCAL_STORAGE_UNAVAILABLE", {
-        exceptionReason: exceptionReason(error),
+    if (!ready) {
+      ready = publish().then((ok) => {
+        if (!ok) ready = null; // retry on next call
+        return ok;
       });
-      readReason = "LOCAL_STORAGE_UNAVAILABLE";
-      const list =
-        typeof keys === "string"
-          ? [keys]
-          : Array.isArray(keys)
-            ? keys
-            : Object.keys(keys || {});
-      return Object.fromEntries(list.map((key) => [key, void 0]));
-    });
-    if (diagnostics && typeof diagnostics === "object") {
-      diagnostics.readReason = readReason;
-      diagnostics.ensureReason =
-        readReason === "ENSURE_NOT_READY" ? failedEnsureReason : null;
     }
-    if (callback) callback(result);
+    return ready;
+  }
+
+  async function read(keys, callback) {
+    await ensure();
+    const result = await chrome.storage.local.get(
+      typeof keys === "string" ? [keys] : keys,
+    );
+    if (typeof callback === "function") callback(result);
     return result;
   }
+
   async function privateApi(providerSlug, options = {}) {
-    if (
-      providerSlug !== provider ||
-      !["chatgpt", "grok", "gemini", "muse"].includes(providerSlug) ||
-      !(await ensure())
-    )
-      return null;
-    const started = epoch;
+    if (!["chatgpt", "grok", "gemini", "muse"].includes(providerSlug)) return null;
     try {
       const response = await chrome.runtime.sendMessage({
         action: "getProviderPrivateConfigs",
         provider: providerSlug,
         force: options.force === true,
       });
-      if (
-        started !== epoch ||
-        !response?.success ||
-        !lease ||
-        leaseNow() >= lease.until ||
-        !sameAccess(response.meta?.access, lease.access)
-      )
-        return null;
-      return response.data || null;
+      return response?.success ? response.data || null : null;
     } catch (_) {
       return null;
     }
   }
-  async function recheckAfterBrokerRefresh() {
-    if (provider !== "flow") return false;
-    retryAt = 0;
-    return ensure();
-  }
-  function acceptChange(snapshot) {
-    const access = lease?.access;
-    return (
-      !!access &&
-      leaseNow() < lease.until &&
-      sameAccess(snapshot?.scope, access)
-    );
-  }
-  async function updateOverlay(overlay) {
-    if (!overlay || !code) return;
-    const group =
-      code === "AUTH_REQUIRED"
-        ? "login"
-        : ["KEY_MISSING", "KEY_MISMATCH", "DEVICE_KEY_REQUIRED"].includes(code)
-          ? "key"
-          : /DEVICE_(UNREGISTERED|LIMIT|REVOKED)|EXTENSION_DEVICE_(LIMIT|REVOKED)/.test(
-                code,
-              )
-            ? "device"
-            : /BANNED|BLOCKED|DISABLED|KEY_REVOKED|NOT_AUTHORIZED/.test(code)
-              ? "blocked"
-              : "service";
-    const locale =
-      (await chrome.storage.local.get("af_locale")).af_locale || "en";
-    const cached = (await chrome.storage.local.get(`toby_i18n_${locale}`))[
-      `toby_i18n_${locale}`
-    ]?.data;
-    const message = cached?.[`configAccess.${group}`];
-    const icon = overlay.querySelector(".tobyflow-cfg-err-icon");
-    if (icon) {
-      if (!icon.dataset.networkSvg) icon.dataset.networkSvg = icon.innerHTML;
-      icon.innerHTML =
-        group === "device"
-          ? '<svg width="48" height="48" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.5" stroke-linecap="round" stroke-linejoin="round" aria-hidden="true"><rect x="3" y="4" width="18" height="13" rx="2"></rect><path d="M8 21h8M12 17v4"></path></svg>'
-          : icon.dataset.networkSvg;
-    }
-    const description = overlay.querySelector("p");
-    if (message) {
-      const title = overlay.querySelector("h3");
-      if (title) title.textContent = message;
-      if (description) description.textContent = "";
-    }
-    if (group !== "service") {
-      const button = overlay.querySelector("button");
-      if (button) {
-        const next = button.cloneNode(true);
-        const targetTab = group === "device" ? "devices" : null;
-        const actionText =
-          group === "login"
-            ? cached?.["auth.login"]
-            : targetTab
-              ? cached?.["configAccess.devices"]
-              : cached?.["configAccess.settings"];
-        if (actionText) next.textContent = actionText;
-        next.addEventListener("click", () =>
-          chrome.runtime
-            .sendMessage(
-              group === "login"
-                ? { action: "openLoginSidePanel" }
-                : {
-                    action: "openSettings",
-                    ...(targetTab ? { tab: targetTab } : {}),
-                  },
-            )
-            .then((result) => {
-              if (group === "login" && result?.ok === false && description)
-                description.textContent = result.error || "SIDEBAR_OPEN_FAILED";
-            })
-            .catch((error) => {
-              if (group === "login" && description)
-                description.textContent =
-                  error?.message || "SIDEBAR_OPEN_FAILED";
-            }),
-        );
-        button.replaceWith(next);
-      }
-    }
-  }
+
   globalThis.ConfigSnapshotAccess = Object.freeze({
     read,
     privateApi,
     ensure,
-    recheckAfterBrokerRefresh,
-    acceptChange,
-    updateOverlay,
+    recheckAfterBrokerRefresh: async () => ensure(),
+    acceptChange: () => true,
+    updateOverlay: async () => {},
     start: (value) => {
       provider = value;
       ensure().catch(() => {});
     },
-    active: () => !!lease && leaseNow() < lease.until,
-    code: () => code,
+    active: () => true,
+    code: () => null,
     onInvalidated: (listener) => listeners.add(listener),
   });
-  chrome.runtime.onMessage.addListener((message) => {
-    if (message.type === "CONFIG_ACCESS_INVALIDATED")
-      invalidate(message.code, message);
-    if (message.type === "CONFIG_ACCESS_RECOVERED") {
-      retryAt = 0;
-      read(["toby_provider_configs", "toby_provider_api_configs"])
-        .then((snapshot) => {
-          const api = snapshot.toby_provider_api_configs?.data?.[provider];
-          if (
-            snapshot.toby_provider_configs?.data?.[provider] &&
-            api &&
-            lease &&
-            leaseNow() < lease.until &&
-            (provider !== "flow" ||
-              api.configs?.flow_v2_driver?.enabled === true)
-          ) {
-            globalThis.document
-              ?.getElementById?.("tobyflow-config-error-overlay")
-              ?.remove();
-          }
-        })
-        .catch(() => {});
-    }
-  });
+
+  // Config changes made in storage (e.g. from the options page) are picked up
+  // by listeners that registered through onInvalidated().
   chrome.storage.onChanged.addListener((changes, area) => {
-    const auth = changes.af_auth;
-    const authChanged =
-      auth &&
-      (auth.oldValue?.token !== auth.newValue?.token ||
-        String(auth.oldValue?.user?.id) !== String(auth.newValue?.user?.id) ||
-        auth.oldValue?.apiBaseUrl !== auth.newValue?.apiBaseUrl);
-    const client = changes.toby_client_enrollment;
-    if (area === "local" && provider === "flow") {
-      if (changes.toby_provider_configs) flowDom = null;
-      if (changes.toby_provider_api_configs) flowApi = null;
+    if (area !== "local") return;
+    if (Object.keys(changes).some((key) => key.startsWith("local566_config_"))) {
+      ready = null;
+      for (const listener of listeners) {
+        try {
+          listener();
+        } catch (_) {}
+      }
     }
-    if (
-      area === "local" &&
-      (authChanged ||
-        (client && client.oldValue?.client_id !== client.newValue?.client_id) ||
-        (changes.toby_config_access_scope &&
-          !changes.toby_config_access_scope.newValue))
-    )
-      invalidate("CONFIG_SCOPE_CHANGED");
   });
 })();

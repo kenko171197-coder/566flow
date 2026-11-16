@@ -1,6 +1,11 @@
 {
   "flow": {
-    "configs": {}
+    "configs": {
+      "flow_v2_driver": {
+        "enabled": true
+      },
+      "radix_trigger_button_pattern": "button[id^='radix-'][id$='{suffix}']"
+    }
   },
   "chatgpt": {
     "configs": {}
