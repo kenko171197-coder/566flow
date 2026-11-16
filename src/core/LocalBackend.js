@@ -201,6 +201,9 @@
           video_timeout_ms: 600000,
           // 566Flow: keys the UI reads but the old server sent; missing ones
           // made SystemConfig return 0 -> "*_TIMEOUT_CONFIG_UNAVAILABLE".
+          // 566Flow has no Flow API (v2) server config yet: force Web mode
+          // everywhere (Gen, Motion, Workflow, MCP). Remove when API mode lands.
+          flow_api_driver: "disabled",
           flow_ref_scan_timeout_ms: 60000,
           tile_completion_timeout_ms: 600000,
           video_download_timeout_ms: 180000,
@@ -217,7 +220,7 @@
           broadcast_heartbeat_ms: 2000,
           broadcast_leader_timeout_ms: 6000,
         },
-        { version: 2 },
+        { version: 3 },
       );
 
     // ---- execution tokens (issued locally)

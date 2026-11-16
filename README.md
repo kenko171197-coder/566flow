@@ -59,6 +59,12 @@ Old rows saved by the generic store are migrated on read.
 Test: `node tools/tests/motion-backend.test.js "$PWD"` (uses the client's own
 `MotionRunJournal.isGenerationComplete` and `MotionBatchSnapshot.classify`).
 
+### Flow API mode is disabled
+`system-settings/public` returns `flow_api_driver: "disabled"`: the "Max Speed API" route
+(FlowApiV2Driver) needs `flow_api_v2_*` server configs we do not have, and with it on,
+Motion/Gen rejected every model ("Model … is unavailable for this Google Flow account",
+`V2_MODEL_UNSUPPORTED`). Everything runs in Web mode until the API configs exist.
+
 ### Not tested yet
 Auto-download, Angles, Effects. Tile error detection (`tile_error_*`) is still unmapped:
 a failed tile is only noticed at the timeout.
