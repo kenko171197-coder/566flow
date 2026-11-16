@@ -190,6 +190,25 @@ api["flow"]["configs"]["reference_picker_policy"] = {
     "enabled": True, "poll_ms": 100, "settle_ms": 450, "open_timeout_ms": 4000,
     "ack_timeout_ms": 8000, "max_scroll_steps": 40,
     "asb_origins": ["https://flow.google.com"]}
+# Network observer: Flow's RPC endpoint (read live from flow.google.com 2026-11-16).
+# Motion web runs require a "strong" correlation receipt from this observer.
+api["flow"]["configs"]["flow_v2_observer_transport"] = {
+    "version": 1, "paths": ["/_/AiSandboxAngularFrontend/data/batchexecute"]}
+# Correlation broker: observe gen/task/workflow (Motion runs as "gen"), but keep
+# batches sequential (observation_only) so Gen/Tasks behaviour is unchanged.
+api["flow"]["configs"]["flow_v2_web_correlation"] = {
+    "schema_version": 1,
+    "allowed_surfaces": ["gen", "task", "workflow"],
+    "allowed_media_types": ["image", "video"],
+    "parallel_surfaces": [], "parallel_media_types": [],
+    "parallel_max_quantity": {"image": 0, "video": 0},
+    "observation_only": True,
+    "max_active_operations": 1,
+    "observer_ack_timeout_ms": 8000,
+    "receipt_timeout_ms": 120000,
+    "request_bind_timeout_ms": 30000,
+    "attempt_ttl_ms": 1200000,
+}
 # error banners on Flow (pipe-separated, case-insensitive substring match)
 api["flow"]["configs"]["error_patterns"] = {
     "policy_text": "vi phạm chính sách|không thể tạo|policy|violat|couldn't generate|could not generate",

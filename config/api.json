@@ -142,6 +142,36 @@
         "image": 3,
         "video_ingredients": 3,
         "video": 1
+      },
+      "flow_v2_observer_transport": {
+        "version": 1,
+        "paths": [
+          "/_/AiSandboxAngularFrontend/data/batchexecute"
+        ]
+      },
+      "flow_v2_web_correlation": {
+        "schema_version": 1,
+        "allowed_surfaces": [
+          "gen",
+          "task",
+          "workflow"
+        ],
+        "allowed_media_types": [
+          "image",
+          "video"
+        ],
+        "parallel_surfaces": [],
+        "parallel_media_types": [],
+        "parallel_max_quantity": {
+          "image": 0,
+          "video": 0
+        },
+        "observation_only": true,
+        "max_active_operations": 1,
+        "observer_ack_timeout_ms": 8000,
+        "receipt_timeout_ms": 120000,
+        "request_bind_timeout_ms": 30000,
+        "attempt_ttl_ms": 1200000
       }
     }
   },
