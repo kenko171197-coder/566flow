@@ -287,17 +287,23 @@
     return fail("LOCAL_MODE_UNSUPPORTED", 404, `Not available in local mode: ${path}`);
   }
 
-  // Make sure the UI always finds a signed-in local user.
+  // Base URL kept on a non-routable host so the page fetch shim can intercept
+  // every direct fetch() and forward it to this backend.
+  const LOCAL_API_BASE = "https://local.566flow.invalid/api/v1";
+
+  // Make sure the UI always finds a signed-in local user with a routable base URL.
   async function ensureLocalUser() {
     const stored = await chrome.storage.local.get(["af_auth"]);
-    if (stored.af_auth?.token === LOCAL_TOKEN) return;
+    const auth = stored.af_auth;
+    if (auth?.token === LOCAL_TOKEN && auth?.apiBaseUrl === LOCAL_API_BASE) return;
     await chrome.storage.local.set({
       af_auth: {
         token: LOCAL_TOKEN,
         user: LOCAL_USER,
-        apiBaseUrl: "local",
+        apiBaseUrl: LOCAL_API_BASE,
         savedAt: Date.now(),
       },
+      af_api_url: LOCAL_API_BASE,
     });
   }
 

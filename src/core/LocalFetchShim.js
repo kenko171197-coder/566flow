@@ -5,13 +5,20 @@
  */
 (() => {
   "use strict";
-  const PREFIX = "https://local.566flow.invalid/";
+  const LOCAL_HOST = "local.566flow.invalid";
   const nativeFetch = window.fetch.bind(window);
   window.fetch = async (input, init) => {
     const url = typeof input === "string" ? input : input?.url;
-    if (!url || !url.startsWith(PREFIX)) return nativeFetch(input, init);
-    const parsed = new URL(url);
-    const endpoint = parsed.pathname.replace(/^\/api\/v1\//, "") + parsed.search;
+    let parsed;
+    try {
+      parsed = new URL(url, location.href);
+    } catch (_) {
+      return nativeFetch(input, init);
+    }
+    const isLocal =
+      parsed.hostname === LOCAL_HOST || /\/api\/v1\//.test(parsed.pathname);
+    if (!isLocal) return nativeFetch(input, init);
+    const endpoint = parsed.pathname.replace(/^.*?\/api\/v1\//, "") + parsed.search;
     let data;
     try {
       if (typeof init?.body === "string") data = JSON.parse(init.body);
