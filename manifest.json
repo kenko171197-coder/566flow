@@ -110,6 +110,7 @@
       },
       {
          "js": [
+            "src/core/Diag566.js",
             "src/core/ConfigSnapshotAccess.js",
             "floating-tracker-chat.js",
             "chat-content-gemini.js",

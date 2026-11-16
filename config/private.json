@@ -1,6 +1,17 @@
 {
   "chatgpt": {},
   "grok": {},
-  "gemini": {},
+  "gemini": {
+    "configs": {
+      "ai_agent_prefix": {
+        "en": "Generate an image: ",
+        "vi": "Tạo một hình ảnh: "
+      }
+    },
+    "ratios": {
+      "image": [],
+      "video": []
+    }
+  },
   "muse": {}
 }

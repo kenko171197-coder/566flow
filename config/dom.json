@@ -499,7 +499,153 @@
     "profiles": {}
   },
   "gemini": {
-    "selectors": {},
+    "selectors": {
+      "composer": {
+        "selectors": [
+          "rich-textarea .ql-editor[contenteditable=\"true\"]",
+          "rich-textarea [contenteditable=\"true\"]",
+          "div[data-test-id=\"textarea-wrapper\"] [contenteditable=\"true\"]"
+        ]
+      },
+      "response_text": {
+        "selectors": [
+          "message-content .markdown",
+          "message-content",
+          ".model-response-text"
+        ]
+      },
+      "screen_reader_label": {
+        "selectors": [
+          ".model-response-label-announcer"
+        ]
+      },
+      "image_result": {
+        "selectors": [
+          "single-image img.image",
+          "generated-image img",
+          "single-image img"
+        ]
+      },
+      "image_result_container": {
+        "selectors": [
+          "single-image",
+          "generated-image"
+        ]
+      },
+      "generation_busy_indicator": {
+        "selectors": [
+          "button[aria-label*=\"Ngừng\"]",
+          "button[aria-label*=\"Stop\"]",
+          ".model-response-label-announcer[aria-busy=\"true\"]"
+        ]
+      },
+      "stop_button": {
+        "selectors": [
+          "button[aria-label*=\"Ngừng\"]",
+          "button[aria-label*=\"Stop\"]"
+        ]
+      },
+      "model_switcher_button": {
+        "selectors": [
+          "button[data-test-id=\"bard-mode-menu-button\"]"
+        ]
+      },
+      "model_trigger_label": {
+        "selectors": [
+          "button[data-test-id=\"bard-mode-menu-button\"]"
+        ]
+      },
+      "model_option_button": {
+        "selectors": [
+          "[role=\"menuitemradio\"]",
+          "button[role=\"menuitem\"]"
+        ]
+      },
+      "model_option_label": {
+        "selectors": [
+          "[role=\"menuitemradio\"] .title",
+          "[role=\"menuitemradio\"]",
+          "[role=\"menuitem\"]"
+        ]
+      },
+      "model_option_selected": {
+        "selectors": [
+          "[role=\"menuitemradio\"][aria-checked=\"true\"]",
+          "[aria-selected=\"true\"]"
+        ]
+      },
+      "upload_in_progress": {
+        "selectors": [
+          "uploader-file-preview mat-progress-spinner",
+          "[data-test-id=\"uploading-indicator\"]"
+        ]
+      },
+      "image_download_button": {
+        "selectors": [
+          "download-generated-image-button button",
+          "single-image button[aria-label*=\"Tải\"]",
+          "single-image button[aria-label*=\"Download\"]"
+        ]
+      },
+      "image_more_menu_button": {
+        "selectors": [
+          "single-image button[aria-label*=\"Thêm\"]",
+          "single-image button[aria-label*=\"More\"]"
+        ]
+      },
+      "image_menu_download_item": {
+        "selectors": [
+          "[role=\"menuitem\"]"
+        ]
+      },
+      "video_result": {
+        "selectors": [
+          "[data-566flow-unmapped]"
+        ]
+      },
+      "video_result_container": {
+        "selectors": [
+          "[data-566flow-unmapped]"
+        ]
+      },
+      "video_download_button": {
+        "selectors": [
+          "[data-566flow-unmapped]"
+        ]
+      },
+      "video_more_menu_button": {
+        "selectors": [
+          "[data-566flow-unmapped]"
+        ]
+      },
+      "video_menu_download_item": {
+        "selectors": [
+          "[data-566flow-unmapped]"
+        ]
+      },
+      "motion_audio_user_turn": {
+        "selectors": [
+          "[data-566flow-unmapped]"
+        ]
+      },
+      "motion_audio_sent_file": {
+        "selectors": [
+          "[data-566flow-unmapped]"
+        ]
+      },
+      "delete_confirm_identity": {
+        "selectors": [
+          "[role=\"dialog\"]",
+          "mat-dialog-container"
+        ]
+      },
+      "delete_confirm_action": {
+        "selectors": [
+          "[role=\"dialog\"] button",
+          "mat-dialog-container button"
+        ]
+      }
+    },
     "profiles": {}
   },
   "muse": {
