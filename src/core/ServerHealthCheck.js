@@ -12,6 +12,10 @@ var __publicField = (obj, key, value) =>
   __defNormalProp(obj, typeof key !== "symbol" ? key + "" : key, value);
 class ServerHealthCheck {
   static async check(forceRefresh = false) {
+    // 566Flow: backend is in-extension, always reachable.
+    this._lastResult = true;
+    this._lastCheckTime = Date.now();
+    return true;
     if (
       !forceRefresh &&
       this._lastResult !== null &&

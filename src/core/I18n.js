@@ -146,6 +146,18 @@ class I18n {
     return supported.includes(browserLang) ? browserLang : "vi";
   }
   static async _loadTranslations(locale = this._currentLocale) {
+    // 566Flow: dictionary ships with the extension (config/i18n.json).
+    try {
+      const dict = await fetch(chrome.runtime.getURL("config/i18n.json")).then(
+        (r) => (r.ok ? r.json() : null),
+      );
+      if (dict) {
+        this._mergeTranslations(locale, dict);
+        if (locale !== this._fallbackLocale)
+          this._mergeTranslations(this._fallbackLocale, dict);
+        return;
+      }
+    } catch (_) {}
     try {
       const cached = await this._readStorageCache(locale);
       if (cached?.data) {
@@ -161,6 +173,7 @@ class I18n {
     }
   }
   static async _fetchServerTranslations(locale) {
+    return false; // 566Flow: no translation server
     try {
       if (
         !window.RequestSigner?.ensureEnrollment ||

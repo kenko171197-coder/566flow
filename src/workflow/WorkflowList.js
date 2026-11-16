@@ -758,12 +758,22 @@ class WorkflowList {
     const wfId = window.IdGenerator
       ? window.IdGenerator.next("wf")
       : `wf_${Date.now()}_${crypto.randomUUID().split("-")[0]}`;
-    const workflow = await window.authManager._apiCall("POST", "workflows", {
+    const createPayload = {
       wf_id: wfId,
       wf_name: trimmed,
       project_id: selectedProjectId,
       require_project: true,
-    });
+    };
+    // 566Flow: workflows live in local storage (no server).
+    const workflow =
+      window.storageManager?.mode !== "api"
+        ? await window.storageManager.saveWorkflow({
+            wf_id: wfId,
+            wf_name: trimmed,
+            project_id: selectedProjectId,
+            status: "draft",
+          })
+        : await window.authManager._apiCall("POST", "workflows", createPayload);
     if (
       !workflow?.wf_id ||
       workflow.wf_id !== wfId ||

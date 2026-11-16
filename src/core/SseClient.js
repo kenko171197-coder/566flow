@@ -50,6 +50,12 @@ class SseClient {
     );
   }
   static async connect() {
+    // 566Flow: no realtime server; everything is local, report "connected".
+    if (!this._localNotified) {
+      this._localNotified = true;
+      setTimeout(() => window.eventBus?.emit("sse:connected"), 0);
+    }
+    return;
     if (this._eventSource) return;
     if (this._connecting) return;
     if (!window.authManager?.isLoggedIn()) {

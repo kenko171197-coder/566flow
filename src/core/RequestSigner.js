@@ -146,6 +146,7 @@ class RequestSigner {
     }
   }
   static async headers(method, path, body = "") {
+    return {}; // 566Flow: local backend, no request signing
     let enrollment = await this._getEnrollment();
     const expiry = enrollment?.expires_at
       ? Date.parse(enrollment.expires_at)

@@ -179,6 +179,8 @@
           maintenance_mode: false,
           email_verification_required: false,
           app_name: "566Flow",
+          workflow_web_mode: false,
+          api_mode_enabled: false,
           api_timeout_ms: 30000,
           image_timeout_ms: 180000,
           video_timeout_ms: 600000,
@@ -224,11 +226,7 @@
       path === "workflow-node-types" ||
       path === "providers" ||
       path === "provider-voices" ||
-      path === "workflows/shared-with-me" ||
-      path === "workflows" ||
-      path === "tasks" ||
-      path === "albums" ||
-      path === "snippets"
+      path === "workflows/shared-with-me"
     )
       return ok([]);
     // deep tools fall back to their built-in presets/effects/node types
@@ -331,19 +329,137 @@
       }
     }
 
-    // Benign fallback: every other endpoint returns an empty success so no
-    // feature hard-errors in local mode. Writes echo back a created record;
-    // reads return an empty collection; deletes succeed.
-    console.debug("[LocalBackend] default local response:", method, path);
-    if (method === "POST" || method === "PUT" || method === "PATCH") {
-      const db = await readDb();
-      const row = { ...data, id: data.id ?? db.seq++, created_at: new Date().toISOString() };
+    // ---- Motion Studio specials
+    if (path === "tools/motion-studio/projects/quota")
+      return ok({ used: 0, limit: -1, remaining: -1, unlimited: true });
+    if (path === "tools/motion-studio/templates/categories") return ok([]);
+    if (path === "tools/motion-studio/templates" && method === "GET")
+      return ok({ items: [], next_page: null, total: 0 });
+    if (
+      path === "tools/motion-studio/projects/batch-snapshot" ||
+      path === "tools/motion-studio/projects/bulk-item"
+    )
+      return ok({ data: [], items: [], projects: [] });
+
+    // ---- generic local REST store for every other resource
+    return genericStore(method, path, query, data);
+  }
+
+  const ID_RE =
+    /^(\d+|[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}|[a-z]{1,8}_[A-Za-z0-9_-]{4,})$/i;
+  const MOTION = "tools/motion-studio/projects";
+
+  function newRecord(collection, data, db) {
+    const now = new Date().toISOString();
+    const row = { ...data, id: data.id ?? db.seq++, created_at: now, updated_at: now };
+    if (collection === MOTION) {
+      row.tool_project_id = crypto.randomUUID();
+      row.status ||= "draft";
+      row.revision = 1;
+      row.deleted_at = null;
+      row.data_json = {
+        frames: [],
+        preferences: {},
+        references: [],
+        source_revision: 0,
+        paused: false,
+        ...(data.data_json || {}),
+      };
+    }
+    return row;
+  }
+  function recordKey(row) {
+    return String(row.tool_project_id ?? row.wf_id ?? row.task_id ?? row.uuid ?? row.id);
+  }
+  function mergeRecord(row, data) {
+    const next = { ...row, ...data, updated_at: new Date().toISOString() };
+    if (row.data_json && data && typeof data.data_json === "object")
+      next.data_json = { ...row.data_json, ...data.data_json };
+    if (data && data.preferences && row.data_json)
+      next.data_json = {
+        ...next.data_json,
+        preferences: { ...(row.data_json.preferences || {}), ...data.preferences },
+      };
+    if (typeof row.revision === "number") next.revision = row.revision + 1;
+    return next;
+  }
+
+  async function genericStore(method, path, query, data) {
+    const parts = path.split("/").filter(Boolean);
+    const idIdx = parts.findIndex((seg) => ID_RE.test(seg));
+    const collection = (idIdx < 0 ? parts : parts.slice(0, idIdx)).join("/");
+    const id = idIdx < 0 ? null : decodeURIComponent(parts[idIdx]);
+    const action = idIdx < 0 ? "" : parts.slice(idIdx + 1).join("/");
+    const db = await readDb();
+    db.store ||= {};
+    const rows = (db.store[collection] ||= []);
+    const isMotion = collection === MOTION;
+
+    if (id === null) {
+      if (method === "GET") {
+        let items = rows.filter((r) => !r.deleted_at || query.get("include_deleted"));
+        for (const key of ["flow_project_id", "project_id", "platform", "type"]) {
+          const v = query.get(key);
+          if (v) items = items.filter((r) => r[key] === undefined || String(r[key]) === v);
+        }
+        items = [...items].sort((a, b) => String(b.updated_at).localeCompare(String(a.updated_at)));
+        if (isMotion) {
+          const perPage = Number(query.get("per_page")) || 30;
+          const current = Number(query.get("page")) || 1;
+          return ok({
+            data: items.slice((current - 1) * perPage, current * perPage),
+            current_page: current,
+            per_page: perPage,
+            total: items.length,
+            last_page: Math.max(1, Math.ceil(items.length / perPage)),
+          });
+        }
+        return page(items, query);
+      }
+      if (method === "POST") {
+        const row = newRecord(collection, data, db);
+        rows.unshift(row);
+        await writeDb(db);
+        return ok(row);
+      }
+      if (method === "DELETE") {
+        db.store[collection] = [];
+        await writeDb(db);
+        return ok({});
+      }
+      return ok({});
+    }
+
+    const idx = rows.findIndex((r) => recordKey(r) === id || String(r.id) === id);
+    if (idx < 0) {
+      if (method === "GET") return fail("NOT_FOUND", 404, "Not found");
+      if (method === "DELETE") return ok({});
+      // upsert for writes on unknown ids (client-generated ids)
+      const row = newRecord(collection, data, db);
+      if (!isMotion) row.id = /^\d+$/.test(id) ? Number(id) : id;
+      rows.unshift(row);
       await writeDb(db);
       return ok(row);
     }
-    if (method === "DELETE") return ok({});
-    // GET: arrays are safe for list UIs; object-expecting callers read .foo (undefined) harmlessly
-    return ok([]);
+    if (method === "GET") return ok(action ? { ...rows[idx], items: [] } : rows[idx]);
+    if (method === "DELETE" && !action) {
+      if (isMotion) rows[idx] = { ...rows[idx], deleted_at: new Date().toISOString() };
+      else rows.splice(idx, 1);
+      await writeDb(db);
+      return ok({});
+    }
+    // PUT/PATCH/POST on the record or one of its sub-actions
+    let patch = data;
+    if (action === "batch-enabled")
+      patch = { data_json: { batch_enabled: !!(data.enabled ?? data.batch_enabled) } };
+    else if (action === "source" || action === "source-draft")
+      patch = { data_json: { [action === "source" ? "source" : "source_draft"]: data } };
+    else if (action === "reset")
+      patch = { data_json: { frames: [], frames_cleared: true, paused: false } };
+    else if (action) patch = {};
+    rows[idx] = mergeRecord(rows[idx], patch);
+    await writeDb(db);
+    return ok(rows[idx]);
   }
 
   // Base URL kept on a non-routable host so the page fetch shim can intercept
