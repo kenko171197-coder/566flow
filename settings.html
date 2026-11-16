@@ -1493,7 +1493,7 @@
               <div class="mcp-command-label" data-i18n="settings.mcpServerLabel">MCP Server</div>
               <div class="telegram-otp-card mcp-config-card">
                 <div class="telegram-otp-box">
-                  <code id="mcpServerUrl" class="mcp-config-code">https://mcp.labs.toby.vn/mcp</code>
+                  <code id="mcpServerUrl" class="mcp-config-code">https://mcp.local.566flow.invalid/mcp</code>
                   <button class="s-btn s-btn-secondary s-btn-sm mcp-config-copy-btn" type="button" data-copy-target="mcpServerUrl" title="Copy" data-i18n-title="settings.copy">
                     <svg width="14" height="14" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="9" y="9" width="13" height="13" rx="2"></rect><path d="M5 15H4a2 2 0 0 1-2-2V4a2 2 0 0 1 2-2h9a2 2 0 0 1 2 2v1"></path></svg>
                   </button>
@@ -1534,7 +1534,7 @@
   "mcpServers": {
     "tobyflow": {
       "command": "npx",
-      "args": ["-y", "mcp-remote", "https://mcp.labs.toby.vn/mcp", "--header", "Authorization:Bearer &lt;token&gt;"]
+      "args": ["-y", "mcp-remote", "https://mcp.local.566flow.invalid/mcp", "--header", "Authorization:Bearer &lt;token&gt;"]
     }
   }
 }</code>
@@ -1564,7 +1564,7 @@
               <div class="telegram-otp-card mcp-config-card">
                 <div class="telegram-otp-box" style="align-items: flex-start;">
                   <code id="mcpCodexConnectConfig" class="mcp-config-code">[mcp_servers.tobyflow]
-url = "https://mcp.labs.toby.vn/mcp"
+url = "https://mcp.local.566flow.invalid/mcp"
 bearer_token_env_var = "TOBYFLOW_MCP_TOKEN"
 enabled = true</code>
                   <button class="s-btn s-btn-secondary s-btn-sm mcp-config-copy-btn" type="button" data-copy-target="mcpCodexConnectConfig" title="Copy" data-i18n-title="settings.copy">
@@ -1584,7 +1584,7 @@ enabled = true</code>
 
 Connection details:
 - Server name: tobyflow
-- MCP URL: https://mcp.labs.toby.vn/mcp
+- MCP URL: https://mcp.local.566flow.invalid/mcp
 - Access token placeholder: &lt;TOBYFLOW_MCP_TOKEN&gt;
 
 Instructions:
@@ -1592,7 +1592,7 @@ Instructions:
 2. Prefer a direct remote HTTP MCP connection. Store the token in a secure environment variable named TOBYFLOW_MCP_TOKEN whenever the client supports environment-backed secrets. Never print, log, commit, or expose the token in your final answer.
 3. If this client supports remote MCP headers but not environment-backed bearer-token fields, configure the Authorization header as: Bearer &lt;TOBYFLOW_MCP_TOKEN&gt;.
 4. If this client supports only stdio MCP servers, use the client-compatible equivalent of:
-   npx -y mcp-remote https://mcp.labs.toby.vn/mcp --header "Authorization:Bearer &lt;TOBYFLOW_MCP_TOKEN&gt;"
+   npx -y mcp-remote https://mcp.local.566flow.invalid/mcp --header "Authorization:Bearer &lt;TOBYFLOW_MCP_TOKEN&gt;"
 5. Do not invent configuration fields. Preserve existing MCP servers and settings. Before editing a configuration file, make a recoverable backup. Ask for my approval before installing packages, restarting applications, or making changes outside the client configuration.
 6. If you can safely configure it yourself, do so. Otherwise, give me exact client- and OS-specific steps, including the full file path, configuration block, where to put the token, and whether a restart is required.
 7. Verify the connection after setup by listing the available 566Flow tools and calling get_provider_status. Do not trigger paid image/video generation merely as a connection test unless I explicitly request it.
@@ -1903,7 +1903,7 @@ Start by checking whether this client can configure MCP automatically. If a toke
 
   <script src="src/core/EventBus.js"></script>
   <script src="src/core/I18n.js"></script>
-  <script src="src/core/ApiBaseConfig.js"></script>
+  <script src="src/core/LocalFetchShim.js"></script><script src="src/core/ApiBaseConfig.js"></script>
   <script src="src/core/SystemConfig.js"></script>
   <!-- FLOW_API_BRIDGE_PLAN — TobyBridge status cho panel guide Flow mode -->
   <script src="src/core/BridgeClient.js"></script>

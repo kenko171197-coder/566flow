@@ -1,0 +1,22 @@
+{
+  "flow": {
+    "selectors": {},
+    "profiles": {}
+  },
+  "chatgpt": {
+    "selectors": {},
+    "profiles": {}
+  },
+  "grok": {
+    "selectors": {},
+    "profiles": {}
+  },
+  "gemini": {
+    "selectors": {},
+    "profiles": {}
+  },
+  "muse": {
+    "selectors": {},
+    "profiles": {}
+  }
+}

@@ -1,0 +1,26 @@
+{
+  "workflow": {
+    "max_retries": 2,
+    "flow_api_enabled": false
+  },
+  "queue": {},
+  "timing": {},
+  "flow_recovery": {
+    "captcha_recovery_mode": "pause_resume"
+  },
+  "parallel": {
+    "web_resubmit_enabled": false,
+    "flow_v2_web_enabled": false,
+    "provider_web_enabled": true,
+    "provider_web_max_concurrent_workers": 2,
+    "provider_web_enabled_providers": [
+      "muse",
+      "grok",
+      "chatgpt",
+      "gemini"
+    ],
+    "provider_web_muse_startup_timeout_ms": 60000,
+    "provider_web_chatgpt_startup_timeout_ms": 60000,
+    "provider_web_gemini_startup_timeout_ms": 60000
+  }
+}
