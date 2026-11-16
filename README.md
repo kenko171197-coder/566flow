@@ -4,34 +4,31 @@ Personal Chrome extension (Manifest V3) based on an MIT-licensed codebase
 (see `LICENSE`; original copyright preserved). No remote service: everything
 runs on-device via `src/core/LocalBackend.js`. All features unlocked, no quota.
 
-## Status (2026-11-16)
+## Status (2026-11-16, evening)
 
 ### Working — verified on the live site
+- Google Flow gen: Nano Banana images, Veo 3.1 video, ratio, quantity,
+  Multi-Prompt + Pipeline Queue.
+- Workflow editor opens and saves locally; Tasks save and run locally.
 
-- **Google Flow – single image** (Nano Banana) and **single video** (Veo):
-  auto-fill prompt, auto-submit, result appears in Flow. Mode switch
-  image/video, model pick, ratio (16:9 … 9:16) and quantity all apply.
-- **Gemini – image**: selectors written and verified against the live DOM
-  (composer, send via Enter, result `<single-image><img>`, stop/busy, download).
+### Fixed in this pass, needs re-test
+- **Studio (Motion)**: editor crashed (`MOTION-DCFD992FC`, `reading 'length'`) because
+  local projects stored `references`/`frames` as arrays, and `config/motionTool.json`
+  was empty (`INVALID_TOOL_PROFILE`). Both fixed; old projects are repaired on read.
+- **Tasks slow / "No new results"**: `image_url_pattern` was missing, so every prompt
+  waited for config and then watched results blind until the 120s timeout.
+- **Reference images**: picker/chip selectors were guesses; now mapped from the live DOM
+  (`flow-add-menu-popover-content`, `flow-ingredient-bar`, `reference_picker_policy`).
+- **New project button**, **page settings** (grid/size/tile details), prompt clear button.
+- Error banner patterns (`error_patterns`), titles "566Flow", no "FREE" badge.
 
-### Needs your test (code pushed, not yet run end-to-end)
+### Not tested yet
+Auto-download, Angles, Effects. Tile error detection (`tile_error_*`) is still unmapped:
+a failed tile is only noticed at the timeout.
 
-Reload the extension, then try each and send logs if something fails:
-
-1. **Flow batch / multi-prompt** — turn on Multi-Prompt, paste 2–3 prompts, Generate.
-2. **Gemini image** — pick the Gemini provider, image mode, type a prompt, Generate.
-   (Gemini generates with its default mode; the extension does not force a model.)
-3. Flow **Workflow / Tasks / Angles / Effects** — each may need selector fixes.
-
-### Not available (needs a server — out of scope for the local build)
-
-Watermark removal, realtime (SSE), Motion Studio, Prompt Assistant, workflow
-templates & sharing, Telegram, MCP, cross-device sync, accounts/quota/upgrade.
-
-### Not done yet
-
-ChatGPT, Grok, Muse providers (only Google Flow + Gemini so far).
-Gemini does images only (no video).
+### Needs a server (later, Cloudflare)
+Prompt Assistant / AI script writing, Motion Studio *run* (transcription), sync,
+Telegram, MCP. Watermark removal: not planned.
 
 ## Config (selectors live outside the code, so pages can change without a rebuild)
 

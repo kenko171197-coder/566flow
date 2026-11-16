@@ -109,6 +109,28 @@
         "ratio": true,
         "ref_image": true,
         "max_ref_images": 3
+      },
+      "image_url_pattern": {
+        "url_substring": "/asb/"
+      },
+      "reference_picker_policy": {
+        "enabled": true,
+        "poll_ms": 100,
+        "settle_ms": 450,
+        "open_timeout_ms": 4000,
+        "ack_timeout_ms": 8000,
+        "max_scroll_steps": 40,
+        "asb_origins": [
+          "https://flow.google.com"
+        ]
+      },
+      "error_patterns": {
+        "policy_text": "vi phạm chính sách|không thể tạo|policy|violat|couldn't generate|could not generate",
+        "quota_text": "hết lượt|hết tín dụng|không đủ tín dụng|quota|out of credits|not enough credits",
+        "rate_limit_text": "quá nhiều yêu cầu|thử lại sau|too many requests|try again later|rate limit",
+        "captcha_text": "captcha|xác minh rằng bạn không phải|verify you are human",
+        "upload_blocked_text": "không thể tải lên|tải lên thất bại|upload failed|couldn't upload|can't upload",
+        "image_load_failed_text": "failed to load|không tải được"
       }
     }
   },

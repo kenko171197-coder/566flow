@@ -75,6 +75,50 @@ flow_selectors = {
   "project_link": s('a[href*="/project/"]'),
   "projects_page": s('main'),
   "project_title": s('flow-editable-text'),
+  # --- verified live 2026-11-16 (second pass) ---------------------------------
+  # homepage "+ Dự án mới" FAB
+  "new_project_button": s('button.mat-mdc-fab', 'button.mdc-fab',
+                          icon_text=["add"], text_match=["Dự án mới", "New project"]),
+  # composer "+" that opens the add-component popover
+  "composer_advanced_menu_button": s('flow-base-prompt-box button', icon_text="add"),
+  "add_component_root": s('flow-add-menu-popover-content', 'flow-add-menu'),
+  "add_component_image_tab": s('flow-add-menu-side-nav [role="tab"]', icon_text="image",
+                               attribute_selected="aria-selected"),
+  "add_component_video_tab": s('flow-add-menu-side-nav [role="tab"]', icon_text="videocam",
+                               attribute_selected="aria-selected"),
+  "add_component_voice_tab": s('flow-add-menu-side-nav [role="tab"]', icon_text="voice_selection",
+                               attribute_selected="aria-selected"),
+  "add_component_character_tab": s('flow-add-menu-side-nav [role="tab"]', icon_text="accessibility_new",
+                                   attribute_selected="aria-selected"),
+  "add_component_listbox": s('flow-add-menu-asset-list cdk-virtual-scroll-viewport',
+                             'flow-add-menu-asset-list'),
+  "add_component_option": s('button.asset-item[role="option"]', 'flow-add-menu-asset-list [role="option"]'),
+  "reference_picker_search": s('input.search-input', 'flow-add-menu-popover-content input'),
+  "reference_picker_thumbnail": s('img.asset-thumbnail-image'),
+  "reference_picker_project": s('.sidebar-project-selector .mat-mdc-select-value-text'),
+  # desktop layout only: a selector that never matches the desktop popover
+  "reference_picker_mobile_root": s('flow-add-menu-popover-content.mobile-layout'),
+  # reference chips shown above the prompt after attaching
+  "ingredient_bar": s('flow-ingredient-bar'),
+  "ingredient_image_chip": s('flow-image-ingredient-chip'),
+  "ingredient_video_chip": s('flow-video-ingredient-chip'),
+  "ingredient_chip_thumbnail": s('img.chip-image'),
+  "ingredient_remove_button": s('.hover-icon-overlay', 'button.chip-container', icon_text="cancel"),
+  "prompt_clear_button": s('button[aria-label="Xoá câu lệnh"]', 'button[aria-label="Xóa câu lệnh"]',
+                           'button[aria-label="Clear prompt"]', icon_text="close"),
+  # project page "Cài đặt" (settings_2) menu: view mode / grid size / tile details
+  "page_settings_trigger": s('button.mat-mdc-icon-button', icon_text="settings_2"),
+  "page_settings_root": s('flow-tile-view-settings'),
+  "page_settings_grid_view": s('mat-button-toggle button[role="radio"]', icon_text="dashboard",
+                               attribute_selected="aria-checked"),
+  "page_settings_grid_size": s('mat-button-toggle button[role="radio"]', attribute_selected="aria-checked",
+                               values={"small": ["N", "S", "Nhỏ", "Small"],
+                                       "medium": ["TB", "M", "Medium"], "large": ["L", "Lớn", "Large"]},
+                               first_item_fallback={"enabled": True, "value": "small",
+                                                    "group_selectors": ['flow-toggles[aria-label*="kích thước"]',
+                                                                        'flow-toggles[aria-label*="size" i]']}),
+  "show_tile_details_setting": s('mat-slide-toggle button[aria-label*="chi tiết về ô"]',
+                                 'mat-slide-toggle button[aria-label*="tile details" i]'),
 }
 # keys the code can request that we have no guess for yet: left empty (feature skipped)
 unknown = """add_component_detail add_component_mobile_close
@@ -105,6 +149,24 @@ api.setdefault("flow", {}).setdefault("configs", {})
 api["flow"]["configs"].setdefault("flow_v2_driver", {"enabled": True})
 api["flow"]["configs"].setdefault("radix_trigger_button_pattern",
                                   "button[id^='radix-'][id$='{suffix}']")
+# Flow v2 media is served from flow.google.com/asb/... (images) and
+# flow-content.google/{image,video}/<uuid>. Without this key every prompt waited
+# 5s for config and then watched results blind until the 120s timeout.
+api["flow"]["configs"]["image_url_pattern"] = {"url_substring": "/asb/"}
+# needed by the reference-image picker (otherwise "picker_config_missing")
+api["flow"]["configs"]["reference_picker_policy"] = {
+    "enabled": True, "poll_ms": 100, "settle_ms": 450, "open_timeout_ms": 4000,
+    "ack_timeout_ms": 8000, "max_scroll_steps": 40,
+    "asb_origins": ["https://flow.google.com"]}
+# error banners on Flow (pipe-separated, case-insensitive substring match)
+api["flow"]["configs"]["error_patterns"] = {
+    "policy_text": "vi phạm chính sách|không thể tạo|policy|violat|couldn't generate|could not generate",
+    "quota_text": "hết lượt|hết tín dụng|không đủ tín dụng|quota|out of credits|not enough credits",
+    "rate_limit_text": "quá nhiều yêu cầu|thử lại sau|too many requests|try again later|rate limit",
+    "captcha_text": "captcha|xác minh rằng bạn không phải|verify you are human",
+    "upload_blocked_text": "không thể tải lên|tải lên thất bại|upload failed|couldn't upload|can't upload",
+    "image_load_failed_text": "failed to load|không tải được",
+}
 json.dump(api, open(root/"config/api.json", "w"), indent=2, ensure_ascii=False)
 
 check = """// Paste into DevTools console on https://flow.google.com (project page).

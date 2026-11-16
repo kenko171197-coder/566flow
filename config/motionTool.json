@@ -1,1 +1,42 @@
-{}
+{
+  "tool_key": "motion_studio",
+  "profile_key": "motion_local",
+  "revision": 1,
+  "prompt_variant": "timeline",
+  "settings": {
+    "flow_model": "veo-3.1-fast",
+    "flow_duration": "8s",
+    "flow_resolution": "720p",
+    "execution_mode": "sequential",
+    "show_background_refs": true,
+    "show_two_characters": true,
+    "full_audio_transcription": false,
+    "transcription_provider": "gemini",
+    "transcription_model": null,
+    "max_split_clip_seconds": 8
+  },
+  "prompts": {
+    "motion_character": "Animate the character shown in {character_1_ref} so that it reproduces the motion of the source clip. Keep the character's identity, face, outfit and art style exactly as in the reference. Aspect ratio {ratio}, clip length {clip_duration} seconds (part {frame_index} of {frame_count}).\nSpeech timeline:\n{speech_timeline}",
+    "motion_character_background": "Animate the character shown in {character_1_ref} inside the scene shown in {background_refs}, reproducing the motion of the source clip. Keep the character's identity, outfit and art style and keep the background consistent with the reference. Aspect ratio {ratio}, clip length {clip_duration} seconds (part {frame_index} of {frame_count}).\nSpeech timeline:\n{speech_timeline}",
+    "motion_two_characters": "Animate two characters: character 1 is {character_1_ref}, character 2 is {character_2_ref}. Reproduce the motion of the source clip and keep both identities, outfits and art style exactly as in the references. Aspect ratio {ratio}, clip length {clip_duration} seconds (part {frame_index} of {frame_count}).\nSpeech timeline:\n{speech_timeline}",
+    "motion_two_characters_background": "Animate two characters: character 1 is {character_1_ref}, character 2 is {character_2_ref}, placed in the scene shown in {background_refs}. Reproduce the motion of the source clip and keep identities, outfits, art style and background consistent with the references. Aspect ratio {ratio}, clip length {clip_duration} seconds (part {frame_index} of {frame_count}).\nSpeech timeline:\n{speech_timeline}",
+    "continuity_addon": "Continue seamlessly from the last frame shown in {continuity_ref}: same pose, lighting and camera position at the start of this clip.",
+    "subtitle_addon": "Show burned-in subtitles of the spoken line: {translated_text}",
+    "voice_addon": "The character speaks this line with natural lip sync: {translated_text}",
+    "voice_narration_addon": "A narrator voice-over says: {translated_text}"
+  },
+  "delivery_prompts": {
+    "character": {
+      "voice": "The character speaks this line with natural lip sync: {translated_text}",
+      "subtitle": "Show burned-in subtitles of the spoken line: {translated_text}"
+    },
+    "lip_sync": {
+      "voice": "The character lip-syncs exactly to this line, matching the speech timeline: {translated_text}",
+      "subtitle": "Show burned-in subtitles of the spoken line: {translated_text}"
+    },
+    "narration": {
+      "voice": "A narrator voice-over says: {translated_text}",
+      "subtitle": "Show burned-in subtitles of the narration: {translated_text}"
+    }
+  }
+}

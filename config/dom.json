@@ -39,8 +39,8 @@
           },
           "add_component_root": {
             "selectors": [
-              "flow-add-menu",
-              ".cdk-overlay-pane"
+              "flow-add-menu-popover-content",
+              "flow-add-menu"
             ]
           },
           "tile_container": {
@@ -136,33 +136,29 @@
           },
           "ingredient_bar": {
             "selectors": [
-              "flow-add-menu",
-              "flow-base-prompt-box [class*=\"ingredient\"]"
+              "flow-ingredient-bar"
             ]
           },
           "ingredient_remove_button": {
             "selectors": [
-              "button[aria-label*=\"emove\"]",
-              "button[aria-label*=\"Xóa\"]",
-              "flow-add-menu button[aria-label*=\"close\"]"
+              ".hover-icon-overlay",
+              "button.chip-container"
             ],
-            "icon_text": "close"
+            "icon_text": "cancel"
           },
           "ingredient_image_chip": {
             "selectors": [
-              "flow-add-menu [class*=\"image\"]",
-              "[data-ingredient-kind=\"image\"]"
+              "flow-image-ingredient-chip"
             ]
           },
           "ingredient_video_chip": {
             "selectors": [
-              "flow-add-menu [class*=\"video\"]",
-              "[data-ingredient-kind=\"video\"]"
+              "flow-video-ingredient-chip"
             ]
           },
           "ingredient_chip_thumbnail": {
             "selectors": [
-              "flow-add-menu img"
+              "img.chip-image"
             ]
           },
           "add_menu_upload_media_button": {
@@ -186,20 +182,20 @@
           },
           "add_component_listbox": {
             "selectors": [
-              ".cdk-overlay-pane [role=\"listbox\"]",
-              ".cdk-overlay-pane mat-list"
+              "flow-add-menu-asset-list cdk-virtual-scroll-viewport",
+              "flow-add-menu-asset-list"
             ]
           },
           "add_component_option": {
             "selectors": [
-              ".cdk-overlay-pane [role=\"option\"]",
-              ".cdk-overlay-pane [mat-list-item]"
+              "button.asset-item[role=\"option\"]",
+              "flow-add-menu-asset-list [role=\"option\"]"
             ]
           },
           "reference_picker_search": {
             "selectors": [
-              ".cdk-overlay-pane input[type=\"text\"]",
-              ".cdk-overlay-pane input"
+              "input.search-input",
+              "flow-add-menu-popover-content input"
             ]
           },
           "settings_panel_candidates": {
@@ -288,6 +284,132 @@
           "project_title": {
             "selectors": [
               "flow-editable-text"
+            ]
+          },
+          "new_project_button": {
+            "selectors": [
+              "button.mat-mdc-fab",
+              "button.mdc-fab"
+            ],
+            "icon_text": [
+              "add"
+            ],
+            "text_match": [
+              "Dự án mới",
+              "New project"
+            ]
+          },
+          "composer_advanced_menu_button": {
+            "selectors": [
+              "flow-base-prompt-box button"
+            ],
+            "icon_text": "add"
+          },
+          "add_component_image_tab": {
+            "selectors": [
+              "flow-add-menu-side-nav [role=\"tab\"]"
+            ],
+            "icon_text": "image",
+            "attribute_selected": "aria-selected"
+          },
+          "add_component_video_tab": {
+            "selectors": [
+              "flow-add-menu-side-nav [role=\"tab\"]"
+            ],
+            "icon_text": "videocam",
+            "attribute_selected": "aria-selected"
+          },
+          "add_component_voice_tab": {
+            "selectors": [
+              "flow-add-menu-side-nav [role=\"tab\"]"
+            ],
+            "icon_text": "voice_selection",
+            "attribute_selected": "aria-selected"
+          },
+          "add_component_character_tab": {
+            "selectors": [
+              "flow-add-menu-side-nav [role=\"tab\"]"
+            ],
+            "icon_text": "accessibility_new",
+            "attribute_selected": "aria-selected"
+          },
+          "reference_picker_thumbnail": {
+            "selectors": [
+              "img.asset-thumbnail-image"
+            ]
+          },
+          "reference_picker_project": {
+            "selectors": [
+              ".sidebar-project-selector .mat-mdc-select-value-text"
+            ]
+          },
+          "reference_picker_mobile_root": {
+            "selectors": [
+              "flow-add-menu-popover-content.mobile-layout"
+            ]
+          },
+          "prompt_clear_button": {
+            "selectors": [
+              "button[aria-label=\"Xoá câu lệnh\"]",
+              "button[aria-label=\"Xóa câu lệnh\"]",
+              "button[aria-label=\"Clear prompt\"]"
+            ],
+            "icon_text": "close"
+          },
+          "page_settings_trigger": {
+            "selectors": [
+              "button.mat-mdc-icon-button"
+            ],
+            "icon_text": "settings_2"
+          },
+          "page_settings_root": {
+            "selectors": [
+              "flow-tile-view-settings"
+            ]
+          },
+          "page_settings_grid_view": {
+            "selectors": [
+              "mat-button-toggle button[role=\"radio\"]"
+            ],
+            "icon_text": "dashboard",
+            "attribute_selected": "aria-checked"
+          },
+          "page_settings_grid_size": {
+            "selectors": [
+              "mat-button-toggle button[role=\"radio\"]"
+            ],
+            "attribute_selected": "aria-checked",
+            "values": {
+              "small": [
+                "N",
+                "S",
+                "Nhỏ",
+                "Small"
+              ],
+              "medium": [
+                "TB",
+                "M",
+                "Medium"
+              ],
+              "large": [
+                "L",
+                "Lớn",
+                "Large"
+              ]
+            },
+            "first_item_fallback": {
+              "enabled": true,
+              "value": "small",
+              "group_selectors": [
+                "flow-toggles[aria-label*=\"kích thước\"]",
+                "flow-toggles[aria-label*=\"size\" i]"
+              ]
+            }
+          },
+          "show_tile_details_setting": {
+            "selectors": [
+              "mat-slide-toggle button[aria-label*=\"chi tiết về ô\"]",
+              "mat-slide-toggle button[aria-label*=\"tile details\" i]"
             ]
           },
           "add_component_detail": {
@@ -380,41 +502,6 @@
               "[data-566flow-unmapped]"
             ]
           },
-          "page_settings_grid_size": {
-            "selectors": [
-              "[data-566flow-unmapped]"
-            ]
-          },
-          "page_settings_grid_view": {
-            "selectors": [
-              "[data-566flow-unmapped]"
-            ]
-          },
-          "page_settings_root": {
-            "selectors": [
-              "[data-566flow-unmapped]"
-            ]
-          },
-          "page_settings_trigger": {
-            "selectors": [
-              "[data-566flow-unmapped]"
-            ]
-          },
-          "reference_picker_project": {
-            "selectors": [
-              "[data-566flow-unmapped]"
-            ]
-          },
-          "reference_picker_thumbnail": {
-            "selectors": [
-              "[data-566flow-unmapped]"
-            ]
-          },
-          "show_tile_details_setting": {
-            "selectors": [
-              "[data-566flow-unmapped]"
-            ]
-          },
           "tile_error_owner": {
             "selectors": [
               "[data-566flow-unmapped]"
@@ -455,16 +542,6 @@
               "[data-566flow-unmapped]"
             ]
           },
-          "prompt_clear_button": {
-            "selectors": [
-              "[data-566flow-unmapped]"
-            ]
-          },
-          "composer_advanced_menu_button": {
-            "selectors": [
-              "[data-566flow-unmapped]"
-            ]
-          },
           "tile_retry_button": {
             "selectors": [
               "[data-566flow-unmapped]"
@@ -486,11 +563,6 @@
             ]
           },
           "flow_credit_limit_alert": {
-            "selectors": [
-              "[data-566flow-unmapped]"
-            ]
-          },
-          "new_project_button": {
             "selectors": [
               "[data-566flow-unmapped]"
             ]

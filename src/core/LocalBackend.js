@@ -241,10 +241,11 @@
     if (
       path === "location/me" ||
       path === "validation-rules" ||
-      path === "announcement" ||
-      path === "provider-models/presentation"
+      path === "announcement"
     )
       return ok({});
+    // UI expects an array here; models themselves come from config/models.json
+    if (path === "provider-models/presentation") return ok([]);
     if (path.startsWith("i18n/")) {
       try {
         const dict = await fetch(chrome.runtime.getURL("config/i18n.json")).then(
@@ -358,14 +359,36 @@
       row.revision = 1;
       row.deleted_at = null;
       row.data_json = {
-        frames: [],
+        frames: {},
         preferences: {},
-        references: [],
+        references: emptyReferences(),
         source_revision: 0,
         paused: false,
         ...(data.data_json || {}),
       };
+      normalizeMotion(row);
     }
+    return row;
+  }
+  // Motion editor expects `frames` as an id->frame map and `references` as
+  // { mode, character[], background[] }. Older local rows were saved with
+  // arrays, which crashed the editor ("reading 'length'").
+  function emptyReferences() {
+    return { mode: "character_only", character: [], character2: [], background: [] };
+  }
+  function normalizeMotion(row) {
+    if (!row || typeof row !== "object") return row;
+    const dj = (row.data_json ||= {});
+    if (!dj.frames || typeof dj.frames !== "object" || Array.isArray(dj.frames))
+      dj.frames = {};
+    const refs = dj.references;
+    if (!refs || typeof refs !== "object" || Array.isArray(refs))
+      dj.references = emptyReferences();
+    else
+      for (const k of ["character", "character2", "background"])
+        if (!Array.isArray(refs[k])) refs[k] = [];
+    if (!dj.references.mode) dj.references.mode = "character_only";
+    if (!dj.preferences || typeof dj.preferences !== "object") dj.preferences = {};
     return row;
   }
   function recordKey(row) {
@@ -394,6 +417,7 @@
     db.store ||= {};
     const rows = (db.store[collection] ||= []);
     const isMotion = collection === MOTION;
+    if (isMotion) rows.forEach(normalizeMotion);
 
     if (id === null) {
       if (method === "GET") {
@@ -458,6 +482,7 @@
       patch = { data_json: { frames: [], frames_cleared: true, paused: false } };
     else if (action) patch = {};
     rows[idx] = mergeRecord(rows[idx], patch);
+    if (isMotion) normalizeMotion(rows[idx]);
     await writeDb(db);
     return ok(rows[idx]);
   }

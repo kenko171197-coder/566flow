@@ -1099,7 +1099,7 @@ document.addEventListener("DOMContentLoaded", async () => {
       planSlug === "autoflow-pro" ||
       planSlug === "autogrok-pro" ||
       planSlug === "autoflow-ultra";
-    if (!isLoggedIn) {
+    if (!isLoggedIn || planSlug === "local") {
       planBadge.classList.add("hidden");
     } else {
       planBadge.classList.remove("hidden");
