@@ -459,7 +459,10 @@ const _StorageManager = class _StorageManager {
   async saveTask(task) {
     await this._ensureInit();
     if (this.mode === "local") {
-      throw new Error("REQUIRES_LOGIN");
+      // 566Flow: no login, save on this device.
+      const saved = await this.storage.saveTask(task);
+      this.notify("task_saved", saved);
+      return saved;
     }
     let result;
     try {
@@ -589,7 +592,10 @@ const _StorageManager = class _StorageManager {
   async saveWorkflow(workflow) {
     await this._ensureInit();
     if (this.mode === "local") {
-      throw new Error("REQUIRES_LOGIN");
+      // 566Flow: no login, save on this device.
+      const saved = await this.storage.saveWorkflow(workflow);
+      this.notify("workflow_saved", saved);
+      return saved;
     }
     let result;
     try {
@@ -767,7 +773,10 @@ const _StorageManager = class _StorageManager {
   async saveWorkflowFull(workflow, nodes, edges) {
     await this._ensureInit();
     if (this.mode === "local") {
-      throw new Error("REQUIRES_LOGIN");
+      // 566Flow: no login, save on this device.
+      const saved = await this.storage.saveWorkflowFull(workflow, nodes || [], edges || []);
+      this.notify("workflow_full_saved", saved);
+      return saved;
     }
     const sanitizedNodes = (nodes || []).map((n) => ({
       ...n,
