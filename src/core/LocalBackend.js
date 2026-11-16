@@ -158,7 +158,29 @@
         { features: buildFeatures(), plan: { slug: "local", name: "566Flow Local" } },
         { version: 1 },
       );
-    if (path === "system-settings/public") return ok({});
+    if (path === "system-settings/public")
+      return ok(
+        {
+          google_enabled: true,
+          show_upgrade_ui: false,
+          show_tip_coffee: false,
+          maintenance_mode: false,
+          email_verification_required: false,
+          app_name: "566Flow",
+          api_timeout_ms: 30000,
+          image_timeout_ms: 180000,
+          video_timeout_ms: 600000,
+          chatgpt_timeout_ms: 180000,
+          sse_heartbeat_timeout_ms: 60000,
+          sse_max_delay_ms: 30000,
+          sse_max_retries: 5,
+          sse_stable_threshold_ms: 10000,
+          broadcast_election_delay_ms: 1500,
+          broadcast_heartbeat_ms: 2000,
+          broadcast_leader_timeout_ms: 6000,
+        },
+        { version: 1 },
+      );
 
     // ---- execution tokens (issued locally)
     if (path === "execution/request")
