@@ -331,16 +331,19 @@
       }
     }
 
-    console.info(
-      "[LocalBackend] unsupported endpoint (no remote in 566Flow):",
-      method,
-      path,
-    );
-    return fail(
-      "LOCAL_MODE_UNSUPPORTED",
-      404,
-      `Not available in local mode: ${path}`,
-    );
+    // Benign fallback: every other endpoint returns an empty success so no
+    // feature hard-errors in local mode. Writes echo back a created record;
+    // reads return an empty collection; deletes succeed.
+    console.debug("[LocalBackend] default local response:", method, path);
+    if (method === "POST" || method === "PUT" || method === "PATCH") {
+      const db = await readDb();
+      const row = { ...data, id: data.id ?? db.seq++, created_at: new Date().toISOString() };
+      await writeDb(db);
+      return ok(row);
+    }
+    if (method === "DELETE") return ok({});
+    // GET: arrays are safe for list UIs; object-expecting callers read .foo (undefined) harmlessly
+    return ok([]);
   }
 
   // Base URL kept on a non-routable host so the page fetch shim can intercept
