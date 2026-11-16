@@ -224,7 +224,11 @@
       path === "workflow-node-types" ||
       path === "providers" ||
       path === "provider-voices" ||
-      path === "workflows/shared-with-me"
+      path === "workflows/shared-with-me" ||
+      path === "workflows" ||
+      path === "tasks" ||
+      path === "albums" ||
+      path === "snippets"
     )
       return ok([]);
     // deep tools fall back to their built-in presets/effects/node types
@@ -240,10 +244,19 @@
       path === "location/me" ||
       path === "validation-rules" ||
       path === "announcement" ||
-      path === "provider-models/presentation" ||
-      path.startsWith("i18n/")
+      path === "provider-models/presentation"
     )
       return ok({});
+    if (path.startsWith("i18n/")) {
+      try {
+        const dict = await fetch(chrome.runtime.getURL("config/i18n.json")).then(
+          (r) => (r.ok ? r.json() : {}),
+        );
+        return ok(dict);
+      } catch (_) {
+        return ok({});
+      }
+    }
 
     // ---- user settings
     if (path === "settings") {
