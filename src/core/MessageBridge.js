@@ -1666,7 +1666,16 @@ const _MessageBridge = class _MessageBridge {
         });
     } else this._warningShown = false;
   }
+  static async _ensureModelRegistry(modelName) {
+    // 566Flow: aliases (menu labels) come from the registry; load it first so
+    // a fresh page never sends only the internal value ("omni-1.2-flash").
+    if (!modelName || window.ModelRegistry?.findModel?.("flow", modelName)) return;
+    try {
+      await window.ModelRegistry?.fetch?.();
+    } catch (_) {}
+  }
   static async runAutoPrompt(payload) {
+    await this._ensureModelRegistry(payload?.modelName);
     const enrichedPayload = { ...payload };
     if (payload?.modelName && payload?.genType === "Video") {
       enrichedPayload.skipFlowDurationControl =
@@ -1817,6 +1826,7 @@ const _MessageBridge = class _MessageBridge {
       if (prepared?.success === false)
         throw new Error(prepared.error || "FLOW_PREPARE_FAILED");
     }
+    await this._ensureModelRegistry(model);
     const modelAliases = model
       ? window.ModelRegistry?.getDomNames?.("flow", model) || []
       : [];

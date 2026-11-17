@@ -13902,13 +13902,17 @@ if (location.origin !== "https://flow.google.com") {
         );
         throw new Error(`MODEL_OPTION_NOT_FOUND: ${modelName}`);
       } else {
+        // 566Flow: "omni-1.2-flash", "Omni 1.2 Flash", "Veo 3.1 - Fast" and
+        // "veo-3.1-fast" must all compare equal (internal value vs menu label),
+        // so the match never depends on the model registry being loaded.
         const normalizeModelLabel = (value) =>
           String(value || "")
             .normalize("NFKC")
             .trim()
             .toLowerCase()
             .replace(/^[^\p{L}\p{N}]+/u, "")
-            .replace(/\s+/g, " ");
+            .replace(/[\s_\-–—]+/g, " ")
+            .trim();
         const modelItemConfig = _getDynamicSelector2("model_picker_item");
         const readModelLabel = (element) => {
           if (!element) return "";
@@ -13999,6 +14003,18 @@ if (location.origin !== "https://flow.google.com") {
                 modelApplied = names.includes(triggerText);
               }
               if (!modelApplied) {
+                console.warn(
+                  "[FlowWebModelSelection]",
+                  JSON.stringify({
+                    stage: "not_applied",
+                    requestedModel: modelName,
+                    requestedNames: names,
+                    triggerText: readModelLabel(
+                      _q2("model_picker_button", _getActiveSettingsPanel2()) ||
+                        button,
+                    ),
+                  }),
+                );
                 throw new Error(`MODEL_OPTION_NOT_APPLIED:${modelName}`);
               }
             }

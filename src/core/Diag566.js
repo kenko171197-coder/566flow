@@ -44,6 +44,9 @@
     queue = queue.then(async () => {
       try {
         const cur = (await chrome.storage.local.get([KEY]))[KEY] || [];
+        // monotonically increasing id so readers can print only new entries
+        // even after the list is capped
+        entry.id = (Number(cur.at(-1)?.id) || 0) + 1;
         cur.push(entry);
         await chrome.storage.local.set({ [KEY]: cur.slice(-200) });
       } catch (_) {}
